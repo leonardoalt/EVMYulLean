@@ -1356,16 +1356,6 @@ theorem Λ_balanceOf_ge
     | none =>
       -- The body's `do let lₐ ← liftM none; ...` reduces to .error.
       simp only [hLA]
-      -- `liftM none = Option.option (.error .StackUnderflow) .ok none =
-      --  .error .StackUnderflow`. Reduce explicitly.
-      show (match (Option.option
-            (α := ByteArray)
-            (β := Except EVM.ExecutionException ByteArray)
-            (.error .StackUnderflow)
-            .ok
-            none).bind _ with
-          | .ok _ => _
-          | .error _ => True) from ?_
       trivial
     | some lₐ =>
       -- Substitute L_A.
@@ -1373,8 +1363,8 @@ theorem Λ_balanceOf_ge
       set a : AccountAddress :=
         Fin.ofNat AccountAddress.size
           (fromByteArrayBigEndian ((ffi.KEC lₐ).extract 12 32))
-      have ha_ne_C' : a ≠ C := ha_ne_C lₐ hLA
-      have ha_ne_s' : a ≠ s := ha_ne_s lₐ hLA
+      have ha_ne_C' : a ≠ C := ha_ne_C _ lₐ hLA
+      have ha_ne_s' : a ≠ s := ha_ne_s _ lₐ hLA
       -- At this point the goal should be over the remainder of the
       -- body with `lₐ` substituted.
       -- Define the existentAccount and EIP-7610 if.

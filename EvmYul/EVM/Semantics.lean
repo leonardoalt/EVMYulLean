@@ -136,6 +136,36 @@ def swap (n : ℕ) : Transformer :=
 local instance : MonadLift Option (Except EVM.ExecutionException) :=
   ⟨Option.option (.error .StackUnderflow) .ok⟩
 
+/-- Precompile dispatcher for `EVM.Θ`. Routes to the appropriate
+precompile implementation based on the precompile index `p`. Returns
+the precompile's output tuple in the shape `Θ` consumes, or `default`
+for unknown indices.
+
+Factored out of `Θ`'s body as a linear `if-then-else` cascade so that
+downstream proofs which `split` on the precompile index do not trip the
+Lean kernel's "deep recursion" check (the 10-way `match p with ...`
+that used to live inline inside `Θ` tipped the definitional-equality
+stack on case 8, `Ξ_SNARKV`). Each branch is kept definitionally equal
+to its former form, so `Θ`'s observable behaviour is unchanged. -/
+@[inline] def applyPrecompile
+    (p : AccountAddress)
+    (σ₁ : AccountMap .EVM) (g : UInt256)
+    (A : Substate) (I : ExecutionEnv .EVM) :
+    Except EVM.ExecutionException
+      (Batteries.RBSet AccountAddress compare ×
+       Bool × AccountMap .EVM × UInt256 × Substate × ByteArray) :=
+  if p = 1  then .ok <| (∅, Ξ_ECREC    σ₁ g A I)
+  else if p = 2  then .ok <| (∅, Ξ_SHA256   σ₁ g A I)
+  else if p = 3  then .ok <| (∅, Ξ_RIP160   σ₁ g A I)
+  else if p = 4  then .ok <| (∅, Ξ_ID       σ₁ g A I)
+  else if p = 5  then .ok <| (∅, Ξ_EXPMOD   σ₁ g A I)
+  else if p = 6  then .ok <| (∅, Ξ_BN_ADD   σ₁ g A I)
+  else if p = 7  then .ok <| (∅, Ξ_BN_MUL   σ₁ g A I)
+  else if p = 8  then .ok <| (∅, Ξ_SNARKV   σ₁ g A I)
+  else if p = 9  then .ok <| (∅, Ξ_BLAKE2_F σ₁ g A I)
+  else if p = 10 then .ok <| (∅, Ξ_PointEval σ₁ g A I)
+  else default
+
 mutual
 
 def call (fuel : Nat)
@@ -783,18 +813,12 @@ def Θ (fuel : Nat)
   let (createdAccounts, z, σ'', g', A'', out) ←
     match c with
       | ToExecute.Precompiled p =>
-        match p with
-          | 1  => .ok <| (∅, Ξ_ECREC σ₁ g A I)
-          | 2  => .ok <| (∅, Ξ_SHA256 σ₁ g A I)
-          | 3  => .ok <| (∅, Ξ_RIP160 σ₁ g A I)
-          | 4  => .ok <| (∅, Ξ_ID σ₁ g A I)
-          | 5  => .ok <| (∅, Ξ_EXPMOD σ₁ g A I)
-          | 6  => .ok <| (∅, Ξ_BN_ADD σ₁ g A I)
-          | 7  => .ok <| (∅, Ξ_BN_MUL σ₁ g A I)
-          | 8  => .ok <| (∅, Ξ_SNARKV σ₁ g A I)
-          | 9  => .ok <| (∅, Ξ_BLAKE2_F σ₁ g A I)
-          | 10 => .ok <| (∅, Ξ_PointEval σ₁ g A I)
-          | _ => default
+        -- The 10-way precompile dispatch now lives in `EVM.applyPrecompile`
+        -- (see its docstring for the kernel-recursion motivation). Semantics
+        -- are unchanged: each `if p = N then ... else ...` arm is the exact
+        -- former `| N => ... ` match arm, and the final `else default` is
+        -- the former `| _ => default`.
+        applyPrecompile p σ₁ g A I
       | ToExecute.Code _ =>
         match Ξ fuel createdAccounts genesisBlockHeader blocks σ₁ σ₀ g A I with
           | .error e =>
