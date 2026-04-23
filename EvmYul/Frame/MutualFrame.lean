@@ -1098,6 +1098,222 @@ theorem Ξ_balanceOf_ge
   | _ + 1 =>
     sorry
 
+/-- **applyPrecompile output invariant** — for any precompile index `pc`,
+`applyPrecompile pc σ₁ g A I` returns `.ok tup` where `tup.2.1 ∈ {σ₁, ∅}`.
+
+This is a bundled consequence of `precompile_preserves_accountMap` (T2)
+applied to each of the 10 inline `Ξ_*` functions, plus the observation
+that the default branch returns `default : Except _ _ = .ok default`
+with `default.2.1 = ∅`. -/
+private theorem applyPrecompile_accountMap
+    (pc : AccountAddress) (σ₁ : AccountMap .EVM) (g : UInt256)
+    (A : Substate) (I : ExecutionEnv .EVM) :
+    ∃ tup : Batteries.RBSet AccountAddress compare × Bool
+              × AccountMap .EVM × UInt256 × Substate × ByteArray,
+      EVM.applyPrecompile pc σ₁ g A I = .ok tup
+        ∧ (tup.2.2.1 = σ₁ ∨ tup.2.2.1 = ∅) := by
+  unfold EVM.applyPrecompile
+  by_cases hp1 : pc = 1
+  · rw [if_pos hp1]
+    refine ⟨_, rfl, ?_⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_ECREC
+  rw [if_neg hp1]
+  by_cases hp2 : pc = 2
+  · rw [if_pos hp2]
+    refine ⟨_, rfl, ?_⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_SHA256
+  rw [if_neg hp2]
+  by_cases hp3 : pc = 3
+  · rw [if_pos hp3]
+    refine ⟨_, rfl, ?_⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_RIP160
+  rw [if_neg hp3]
+  by_cases hp4 : pc = 4
+  · rw [if_pos hp4]
+    refine ⟨_, rfl, ?_⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_ID
+  rw [if_neg hp4]
+  by_cases hp5 : pc = 5
+  · rw [if_pos hp5]
+    refine ⟨_, rfl, ?_⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_EXPMOD
+  rw [if_neg hp5]
+  by_cases hp6 : pc = 6
+  · rw [if_pos hp6]
+    refine ⟨_, rfl, ?_⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_BN_ADD
+  rw [if_neg hp6]
+  by_cases hp7 : pc = 7
+  · rw [if_pos hp7]
+    refine ⟨_, rfl, ?_⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_BN_MUL
+  rw [if_neg hp7]
+  by_cases hp8 : pc = 8
+  · rw [if_pos hp8]
+    refine ⟨_, rfl, ?_⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_SNARKV
+  rw [if_neg hp8]
+  by_cases hp9 : pc = 9
+  · rw [if_pos hp9]
+    refine ⟨_, rfl, ?_⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_BLAKE2_F
+  rw [if_neg hp9]
+  by_cases hp10 : pc = 10
+  · rw [if_pos hp10]
+    refine ⟨_, rfl, ?_⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_PointEval
+  rw [if_neg hp10]
+  -- default branch.
+  refine ⟨default, rfl, Or.inr ?_⟩
+  rfl
+
+/-- **Θ-body helper (precompile branch)** — closes the precompile
+dispatch arm of Θ under the monotonicity hypothesis
+`balanceOf σ₁ C ≥ balanceOf σ C`. Uses `applyPrecompile_accountMap`
+to avoid pattern-matching on the 10-way if-cascade. -/
+private theorem Θ_body_precompile
+    (σ σ₁ : AccountMap .EVM) (A : Substate) (I : ExecutionEnv .EVM)
+    (C : AccountAddress) (fuel' : Nat)
+    (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ₀ : AccountMap .EVM) (s o r : AccountAddress) (pc : AccountAddress)
+    (g p v v' : UInt256) (d : ByteArray) (e : Nat)
+    (H : BlockHeader) (w : Bool)
+    (h_σ₁_ge : balanceOf σ₁ C ≥ balanceOf σ C)
+    (hΘeq : EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                genesisBlockHeader blocks σ σ₀ A s o r
+                (ToExecute.Precompiled pc) g p v v' d e H w
+          = (do
+              let y ← EVM.applyPrecompile pc σ₁ g A I
+              match y with
+              | (cA'', z, σ'', g', A'', out) =>
+                let σ' := if (σ'' == ∅) then σ else σ''
+                let A' := if (σ'' == ∅) then A else A''
+                pure (cA'', σ', g', A', z, out))) :
+    match EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o r
+                  (ToExecute.Precompiled pc) g p v v' d e H w with
+    | .ok (_, σ', _, _, _, _) => balanceOf σ' C ≥ balanceOf σ C
+    | .error _ => True := by
+  rw [hΘeq]
+  -- Extract the applyPrecompile result via the bundled invariant.
+  obtain ⟨tup, hTup, hCases⟩ := applyPrecompile_accountMap pc σ₁ g A I
+  rw [hTup]
+  -- Now the bind reduces to a match on the tuple.
+  obtain ⟨cA'', z, σ'', g', A'', out⟩ := tup
+  -- The goal becomes `balanceOf (if σ''==∅ then σ else σ'') C ≥ balanceOf σ C`.
+  exact theta_σ'_clamp_ge_of_σ₁_or_empty σ σ₁ σ'' C h_σ₁_ge hCases
+
+/-- **Θ-body helper (code branch)** — closes the `ToExecute.Code`
+dispatch arm of Θ, invoking `Ξ_balanceOf_ge` (`r ≠ C`) or `hWitness`
+(`r = C`) in the Ξ-success subcase. -/
+private theorem Θ_body_code
+    (σ σ₁ : AccountMap .EVM) (A : Substate) (I : ExecutionEnv .EVM)
+    (C : AccountAddress) (fuel' : Nat)
+    (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ₀ : AccountMap .EVM) (s o r : AccountAddress) (c_code : ByteArray)
+    (g p v v' : UInt256) (d : ByteArray) (e : Nat)
+    (H : BlockHeader) (w : Bool)
+    (h_σ₁_ge : balanceOf σ₁ C ≥ balanceOf σ C)
+    (h_WFσ₁ : StateWF σ₁)
+    (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
+    (hWitness : ΞPreservesAtC C)
+    (hI_codeOwner : I.codeOwner = r)
+    (hΘeq : EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                genesisBlockHeader blocks σ σ₀ A s o r
+                (ToExecute.Code c_code) g p v v' d e H w
+          = (do
+              let y ←
+                match EVM.Ξ fuel' createdAccounts genesisBlockHeader blocks
+                        σ₁ σ₀ g A I with
+                | .error e =>
+                  if e == .OutOfFuel then throw .OutOfFuel
+                  else pure (createdAccounts, false, σ, ⟨0⟩, A, .empty)
+                | .ok (.revert g' o) =>
+                  pure (createdAccounts, false, σ, g', A, o)
+                | .ok (.success (a, b, c', d) o) =>
+                  pure (a, true, b, c', d, o)
+              match y with
+              | (cA'', z, σ'', g', A'', out) =>
+                let σ' := if (σ'' == ∅) then σ else σ''
+                let A' := if (σ'' == ∅) then A else A''
+                pure (cA'', σ', g', A', z, out))) :
+    match EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o r
+                  (ToExecute.Code c_code) g p v v' d e H w with
+    | .ok (_, σ', _, _, _, _) => balanceOf σ' C ≥ balanceOf σ C
+    | .error _ => True := by
+  rw [hΘeq]
+  cases hΞ : EVM.Ξ fuel' createdAccounts genesisBlockHeader blocks σ₁ σ₀ g A I
+  case error err =>
+    split
+    case h_1 =>
+      rename_i cA'' σ'' g' A'' z out heq
+      -- `heq` has outer `match .error err with` which reduces to the .error arm.
+      by_cases hErr : err = EVM.ExecutionException.OutOfFuel
+      · -- Then branch: heq reduces to .error OutOfFuel = .ok (...) → contradiction.
+        subst hErr
+        simp only [bind, Except.bind, pure, Except.pure, throw, throwThe,
+                   MonadExceptOf.throw, beq_self_eq_true, if_true] at heq
+        exact Except.noConfusion heq
+      · -- Else branch: heq reduces to .ok (cA, false, σ, 0, A, .empty) = .ok (...).
+        have hBEq : (err == EVM.ExecutionException.OutOfFuel) = false := by
+          cases err
+          all_goals first
+            | (exfalso; exact hErr rfl)
+            | rfl
+        simp only [bind, Except.bind, pure, Except.pure, hBEq,
+                   Bool.false_eq_true, if_false] at heq
+        injection heq with h1
+        injection h1 with h1a h1b
+        injection h1b with h1ba h1bb
+        subst h1ba
+        split_ifs <;> exact Nat.le_refl _
+    case h_2 => trivial
+  case ok res =>
+    cases res
+    case revert g' o_out =>
+      split
+      case h_1 =>
+        rename_i cA'' σ'' g' A'' z out heq
+        simp only [bind, Except.bind, pure, Except.pure] at heq
+        injection heq with h1
+        injection h1 with h1a h1b
+        injection h1b with h1ba h1bb
+        subst h1ba
+        split_ifs <;> exact Nat.le_refl _
+      case h_2 => trivial
+    case success details out =>
+      obtain ⟨cA', σ_Ξ, g', A_Ξ⟩ := details
+      split
+      case h_1 =>
+        rename_i cA'' σ'' g' A'' z out' heq
+        simp only [bind, Except.bind, pure, Except.pure] at heq
+        injection heq with h1
+        injection h1 with h1a h1b
+        injection h1b with h1ba h1bb
+        subst h1ba
+        by_cases hrC : r = C
+        · have hIowner : I.codeOwner = C := by rw [hI_codeOwner]; exact hrC
+          have hW := hWitness fuel' createdAccounts genesisBlockHeader blocks
+              σ₁ σ₀ g A I h_WFσ₁ hIowner h_newC
+          rw [hΞ] at hW
+          have : balanceOf σ_Ξ C ≥ balanceOf σ C := Nat.le_trans h_σ₁_ge hW
+          apply theta_σ'_clamp_ge
+          intro _; exact this
+        · have hIowner_ne : C ≠ I.codeOwner := by
+            rw [hI_codeOwner]; intro h; exact hrC h.symm
+          have hΞge := Ξ_balanceOf_ge fuel' createdAccounts genesisBlockHeader blocks
+              σ₁ σ₀ g A I C h_WFσ₁ hIowner_ne h_newC hWitness
+          rw [hΞ] at hΞge
+          have : balanceOf σ_Ξ C ≥ balanceOf σ C := Nat.le_trans h_σ₁_ge hΞge
+          apply theta_σ'_clamp_ge
+          intro _; exact this
+      case h_2 => trivial
+
 /-- **A3** — Θ (message call) preserves `balanceOf C` given a
 bytecode-specific witness for the `r = C` corner.
 
@@ -1256,7 +1472,56 @@ theorem Θ_balanceOf_ge
     -- The single `sorry` here is the top-level invocation — it
     -- condenses the remaining obligation (code branch + kernel-blocked
     -- SNARKV arm) to one unit rather than three separate sub-sorrys.
-    sorry
+    -- Dispatch on `c`. Each branch reduces Θ to the post-prefix body
+    -- (by `rfl`/`hσ'₁_def`/`hσ₁_def`/`hI_def`) and invokes the
+    -- corresponding external helper.
+    cases c with
+    | Precompiled pc =>
+      -- `σ'₁`, `σ₁`, `I` were introduced by `set`, so they're definitionally equal
+      -- to Θ's internal bindings. Unfold Θ then fold back using the def-equalities.
+      have hΘeq :
+          EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                genesisBlockHeader blocks σ σ₀ A s o r
+                (ToExecute.Precompiled pc) g p v v' d e H w
+            = (do
+                let y ← EVM.applyPrecompile pc σ₁ g A I
+                match y with
+                | (cA'', z, σ'', g', A'', out) =>
+                  let σ' := if (σ'' == ∅) then σ else σ''
+                  let A' := if (σ'' == ∅) then A else A''
+                  pure (cA'', σ', g', A', z, out)) := by
+        show _ = _
+        rfl
+      exact Θ_body_precompile σ σ₁ A I C fuel' blobVersionedHashes
+        createdAccounts genesisBlockHeader blocks σ₀ s o r pc g p v v' d e H w
+        h_σ₁_ge hΘeq
+    | Code c_code =>
+      have hΘeq :
+          EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                genesisBlockHeader blocks σ σ₀ A s o r
+                (ToExecute.Code c_code) g p v v' d e H w
+            = (do
+                let y ←
+                  match EVM.Ξ fuel' createdAccounts genesisBlockHeader blocks
+                          σ₁ σ₀ g A I with
+                  | .error e =>
+                    if e == .OutOfFuel then throw .OutOfFuel
+                    else pure (createdAccounts, false, σ, ⟨0⟩, A, .empty)
+                  | .ok (.revert g' o) =>
+                    pure (createdAccounts, false, σ, g', A, o)
+                  | .ok (.success (a, b, c', d) o) =>
+                    pure (a, true, b, c', d, o)
+                match y with
+                | (cA'', z, σ'', g', A'', out) =>
+                  let σ' := if (σ'' == ∅) then σ else σ''
+                  let A' := if (σ'' == ∅) then A else A''
+                  pure (cA'', σ', g', A', z, out)) := by
+        show _ = _
+        rfl
+      have hI_co : I.codeOwner = r := by rw [hI_def]
+      exact Θ_body_code σ σ₁ A I C fuel' blobVersionedHashes
+        createdAccounts genesisBlockHeader blocks σ₀ s o r c_code g p v v' d e H w
+        h_σ₁_ge h_WFσ₁ h_newC hWitness hI_co hΘeq
 
 /-- **A4** — Λ (contract creation) returns a derived address `a ≠ C`
 (by Keccak collision-resistance) and preserves `balanceOf C`.
