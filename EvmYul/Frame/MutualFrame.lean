@@ -755,8 +755,274 @@ theorem Λ_balanceOf_ge
     rw [show EVM.Lambda 0 blobVersionedHashes createdAccounts genesisBlockHeader
                   blocks σ σ₀ A s o g p v i e ζ H w = .error .OutOfFuel from rfl]
     trivial
-  | _ + 1 =>
-    sorry
+  | f + 1 =>
+    -- Derive the Keccak-axiom facts for the Lambda-derived address.
+    have ha_ne_C : ∀ (n' : UInt256) lₐ, EVM.Lambda.L_A s n' ζ i = some lₐ →
+        (Fin.ofNat AccountAddress.size
+           (fromByteArrayBigEndian ((ffi.KEC lₐ).extract 12 32))
+          : AccountAddress) ≠ C := by
+      intro n' lₐ hLA
+      have h := lambda_derived_address_ne_C s n' ζ i C
+      have hGet : ((EVM.Lambda.L_A s n' ζ i).getD default) = lₐ := by
+        rw [hLA]; rfl
+      rw [← hGet]; exact h
+    have ha_ne_s : ∀ (n' : UInt256) lₐ, EVM.Lambda.L_A s n' ζ i = some lₐ →
+        (Fin.ofNat AccountAddress.size
+           (fromByteArrayBigEndian ((ffi.KEC lₐ).extract 12 32))
+          : AccountAddress) ≠ s := by
+      intro n' lₐ hLA
+      have h := lambda_derived_address_ne_C s n' ζ i s
+      have hGet : ((EVM.Lambda.L_A s n' ζ i).getD default) = lₐ := by
+        rw [hLA]; rfl
+      rw [← hGet]; exact h
+    -- Unfold Lambda.
+    unfold EVM.Lambda
+    -- The nonce `n` inside the body is a let-expression. We don't
+    -- introduce it as a separate variable but work with the match
+    -- directly.
+    -- Case split on L_A at the computed nonce value.
+    cases hLA : EVM.Lambda.L_A s
+        ((σ.find? s |>.option ⟨0⟩ (·.nonce)) - ⟨1⟩) ζ i with
+    | none =>
+      -- The body's `do let lₐ ← liftM none; ...` reduces to .error.
+      simp only [hLA]
+      -- `liftM none = Option.option (.error .StackUnderflow) .ok none =
+      --  .error .StackUnderflow`. Reduce explicitly.
+      show (match (Option.option
+            (α := ByteArray)
+            (β := Except EVM.ExecutionException ByteArray)
+            (.error .StackUnderflow)
+            .ok
+            none).bind _ with
+          | .ok _ => _
+          | .error _ => True) from ?_
+      trivial
+    | some lₐ =>
+      -- Substitute L_A.
+      simp only [hLA]
+      set a : AccountAddress :=
+        Fin.ofNat AccountAddress.size
+          (fromByteArrayBigEndian ((ffi.KEC lₐ).extract 12 32))
+      have ha_ne_C' : a ≠ C := ha_ne_C lₐ hLA
+      have ha_ne_s' : a ≠ s := ha_ne_s lₐ hLA
+      -- At this point the goal should be over the remainder of the
+      -- body with `lₐ` substituted.
+      -- Define the existentAccount and EIP-7610 if.
+      set existentAccount : Account .EVM := σ.findD a default
+      -- EIP-7610 pair: (i', cA'). Generalize over the if-expression.
+      set iPair :
+        ByteArray × Batteries.RBSet AccountAddress compare :=
+        if (decide (existentAccount.nonce ≠ ⟨0⟩)
+            || decide (existentAccount.code.size ≠ 0)
+            || existentAccount.storage != default) = true
+        then ((⟨#[0xfe]⟩ : ByteArray), createdAccounts)
+        else (i, createdAccounts.insert a) with hiPair_def
+      -- Extract (i', cA') from iPair. Note that iPair is a pair.
+      -- We need: all elements of iPair.2 are ≠ C.
+      have h_newC_iPair : ∀ a' ∈ iPair.2, a' ≠ C := by
+        by_cases hIf :
+            (decide (existentAccount.nonce ≠ ⟨0⟩)
+              || decide (existentAccount.code.size ≠ 0)
+              || existentAccount.storage != default) = true
+        · -- iPair = ({ init-inv }, createdAccounts)
+          have : iPair.2 = createdAccounts := by
+            show (if
+              (decide (existentAccount.nonce ≠ ⟨0⟩)
+                || decide (existentAccount.code.size ≠ 0)
+                || existentAccount.storage != default) = true
+              then ((⟨#[0xfe]⟩ : ByteArray), createdAccounts)
+              else (i, createdAccounts.insert a)).2 = createdAccounts
+            rw [if_pos hIf]
+          rw [this]
+          exact h_newC
+        · have : iPair.2 = createdAccounts.insert a := by
+            show (if
+              (decide (existentAccount.nonce ≠ ⟨0⟩)
+                || decide (existentAccount.code.size ≠ 0)
+                || existentAccount.storage != default) = true
+              then ((⟨#[0xfe]⟩ : ByteArray), createdAccounts)
+              else (i, createdAccounts.insert a)).2 = createdAccounts.insert a
+            rw [if_neg hIf]
+          rw [this]
+          intro a' ha'_mem
+          rw [Batteries.RBSet.mem_insert] at ha'_mem
+          rcases ha'_mem with h_orig | h_eq
+          · exact h_newC a' h_orig
+          · -- compare a a' = .eq → a = a' via LawfulEqCmp.
+            have : a = a' := Std.LawfulEqCmp.compare_eq_iff_eq.mp h_eq
+            rw [← this]; exact ha_ne_C'
+      -- Now split the outer match on iPair.
+      -- `match iPair with | (i', cA') => body`
+      -- We don't need to explicitly split — we proceed inside.
+      -- Define newAccount and σStar.
+      -- We rely on the fact that each branch of the outer `match iPair`
+      -- uses `iPair.1` as code and `iPair.2` as the set. We continue.
+      -- σStar depends on `σ.find? s`.
+      -- balanceOf σStar C = balanceOf σ C.
+      have hσStar_eq :
+          ∀ (σ' : AccountMap .EVM),
+            (σ' = (match σ.find? s with
+                   | none => σ
+                   | some ac =>
+                     (σ.insert s
+                       { nonce := ac.nonce, balance := ac.balance - v
+                         storage := ac.storage, code := ac.code
+                         tstorage := ac.tstorage })
+                      |>.insert a
+                       { nonce := existentAccount.nonce + ⟨1⟩
+                         balance := v + existentAccount.balance
+                         storage := existentAccount.storage
+                         code := existentAccount.code
+                         tstorage := existentAccount.tstorage })) →
+            balanceOf σ' C = balanceOf σ C := by
+        intro σ' hσ'
+        rw [hσ']
+        cases hFs : σ.find? s with
+        | none => rfl
+        | some ac =>
+          have hsC : s ≠ C := fun h => h_s h.symm
+          rw [balanceOf_of_find?_eq
+              (find?_insert_ne _ a C _ ha_ne_C')]
+          rw [balanceOf_of_find?_eq
+              (find?_insert_ne _ s C _ hsC)]
+      -- StateWF σStar.
+      have hWFσStar :
+          StateWF (match σ.find? s with
+                   | none => σ
+                   | some ac =>
+                     (σ.insert s
+                       { nonce := ac.nonce, balance := ac.balance - v
+                         storage := ac.storage, code := ac.code
+                         tstorage := ac.tstorage })
+                      |>.insert a
+                       { nonce := existentAccount.nonce + ⟨1⟩
+                         balance := v + existentAccount.balance
+                         storage := existentAccount.storage
+                         code := existentAccount.code
+                         tstorage := existentAccount.tstorage }) := by
+        cases hFs : σ.find? s with
+        | none => exact hWF
+        | some ac =>
+          have h_bound := h_funds ac hFs
+          have := stateWF_lambda_σStar_some σ hWF s a ac v ha_ne_s' hFs h_bound
+          -- This gives StateWF of the double-insert via existentAccount = findD.
+          -- Our goal matches exactly.
+          exact this
+      -- Now split the outer match on the Lambda result. The Except.ok
+      -- case gives us `iPair_match_eq : <body> = .ok (a✝, ...)`. We use
+      -- this to invert σ' structurally.
+      split
+      · -- Except.error: trivially True.
+        trivial
+      · -- Except.ok: we extract from iPair_match_eq the concrete form.
+        rename_i tup iPair_match_eq
+        -- tup : AccountAddress × _ × AccountMap × _ × _ × _ × _
+        -- iPair_match_eq : body = .ok tup
+        -- Now we case-analyse iPair_match_eq by inverting the body.
+        -- The body after `simp [hLA]` is:
+        --   (do
+        --     let lₐ ← liftM (some lₐ)
+        --     match iPair with | (i', cA') =>
+        --       match Ξ f ... σStar ... with
+        --       | .error e => if e==OutOfFuel then throw else pure; Except.ok (a, cA, σ, ...)
+        --       | .ok .revert => Except.ok (a, cA, σ, g', ...)
+        --       | .ok .success (cA'', σ'', g'', A'') rd =>
+        --           Except.ok (a, cA'', σ', UInt256.ofNat g', A', z, empty))
+        -- We need: tup.1 = a, tup.2.2.1 = σ where σ is one of the 3 forms.
+        -- Perform a `split` inside iPair_match_eq to invert the inner matches.
+        -- split at iPair_match_eq
+        -- This is challenging; instead, destructure tup and case-split.
+        obtain ⟨a_out, cA_out, σ'_out, g'_out, A'_out, z_out, rd_out⟩ := tup
+        -- Goal: a_out ≠ C ∧ balanceOf σ'_out C ≥ balanceOf σ C.
+        -- We will read the structure from iPair_match_eq via split.
+        -- `split at iPair_match_eq` splits on the outer `match Ξ`.
+        split at iPair_match_eq
+        · -- Ξ = .error e case.
+          split at iPair_match_eq
+          · -- e = OutOfFuel → throw OutOfFuel → .error — contradiction with .ok
+            simp only [bind, Except.bind, throw, Except.throw] at iPair_match_eq
+            cases iPair_match_eq
+          · -- e ≠ OutOfFuel → pure.bind = .ok (a, cA, σ, ⟨0⟩, AStar, false, empty)
+            simp only [bind, Except.bind, pure, Except.pure] at iPair_match_eq
+            -- iPair_match_eq : Except.ok (a, ...) = Except.ok (a_out, ..., σ, ...)
+            -- Destructure.
+            injection iPair_match_eq with hEq
+            -- hEq : (a, ...) = (a_out, ..., σ, ...)
+            obtain ⟨ha, _, hσ, _⟩ := Prod.mk.injEq _ _ _ _ |>.mp hEq
+            -- Actually the product has depth 7; let's just rcases.
+            subst ha
+            -- The matched σ'_out should equal σ.
+            -- Without fully unpacking, exit via manual tactic.
+            rcases hEq with ⟨rfl, _, rfl, _⟩
+            exact ⟨ha_ne_C', Nat.le_refl _⟩
+        · -- Ξ = .ok (.revert g' o)
+          simp only at iPair_match_eq
+          rcases iPair_match_eq with ⟨rfl, _, rfl, _⟩
+          exact ⟨ha_ne_C', Nat.le_refl _⟩
+        · -- Ξ = .ok (.success (cA'', σ'', g'', A'') rd)
+          rename_i cA'' σ'' g'' A'' rd hΞeq
+          simp only at iPair_match_eq
+          -- iPair_match_eq : Except.ok (a, cA'', σ', ...) = Except.ok (a_out, ..., σ'_out, ...)
+          rcases iPair_match_eq with ⟨rfl, _, hσ'_eq, _⟩
+          -- hσ'_eq : σ' (the if F branch) = σ'_out
+          -- Apply Ξ_balanceOf_ge to get the bound on σ''.
+          have hΞgoal := Ξ_balanceOf_ge f iPair.2 genesisBlockHeader blocks
+            (match σ.find? s with
+             | none => σ
+             | some ac =>
+               (σ.insert s
+                 { nonce := ac.nonce, balance := ac.balance - v
+                   storage := ac.storage, code := ac.code
+                   tstorage := ac.tstorage })
+                |>.insert a
+                 { nonce := existentAccount.nonce + ⟨1⟩
+                   balance := v + existentAccount.balance
+                   storage := existentAccount.storage
+                   code := existentAccount.code
+                   tstorage := existentAccount.tstorage })
+            σ₀ g (A.addAccessedAccount a)
+            { codeOwner := a, sender := o, source := s, weiValue := v
+              calldata := default, code := iPair.1, gasPrice := p.toNat
+              header := H, depth := e.toNat, perm := w
+              blobVersionedHashes := blobVersionedHashes }
+            C hWFσStar (ha_ne_C'.symm) h_newC_iPair hWitness
+          rw [hΞeq] at hΞgoal
+          simp only at hΞgoal
+          -- hΞgoal : balanceOf σ'' C ≥ balanceOf σStar C
+          have hσStar_balance :=
+            hσStar_eq _ (rfl :
+              (match σ.find? s with
+               | none => σ
+               | some ac =>
+                 (σ.insert s
+                   { nonce := ac.nonce, balance := ac.balance - v
+                     storage := ac.storage, code := ac.code
+                     tstorage := ac.tstorage })
+                  |>.insert a
+                   { nonce := existentAccount.nonce + ⟨1⟩
+                     balance := v + existentAccount.balance
+                     storage := existentAccount.storage
+                     code := existentAccount.code
+                     tstorage := existentAccount.tstorage }) = _)
+          rw [hσStar_balance] at hΞgoal
+          -- Now show balanceOf σ'_out C ≥ balanceOf σ C.
+          refine ⟨ha_ne_C', ?_⟩
+          -- σ'_out is derived from the if F branch in the body.
+          rw [← hσ'_eq]
+          -- Now the goal is `balanceOf (if F then σ else σ''.insert a ...) C ≥ balanceOf σ C`.
+          split
+          · -- F true: σ' = σ.
+            exact Nat.le_refl _
+          · -- F false: σ' = σ''.insert a {newAccount' with code := rd}
+            have hsF :
+                balanceOf
+                  (σ''.insert a
+                    { (σ''.findD a default) with code := rd }) C
+                  = balanceOf σ'' C :=
+              balanceOf_of_find?_eq
+                (find?_insert_ne _ a C _ ha_ne_C')
+            rw [hsF]
+            exact hΞgoal
 
 end Frame
 end EvmYul
