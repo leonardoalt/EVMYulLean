@@ -880,6 +880,170 @@ private theorem stateWF_theta_σ₁
         rw [h_tot]
         exact hWF.boundedTotal
 
+/-- **Θ precompile helper** — For any precompile `f` that satisfies
+`precompile_preserves_accountMap`, the combined `(∅, f σ₁ g A I).2.1`
+is in `{σ₁, ∅}`, hence the clamped σ' satisfies the balance monotonicity.
+
+Written as a concrete helper so each of Θ's 10 precompile cases can
+apply it without triggering the kernel recursion on the full dispatch. -/
+private theorem theta_precompile_clamp_ge
+    (σ σ₁ : AccountMap .EVM) (C : AccountAddress)
+    (f : AccountMap .EVM → UInt256 → Substate → ExecutionEnv .EVM
+          → (Bool × AccountMap .EVM × UInt256 × Substate × ByteArray))
+    (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM)
+    (hσ₁_ge : balanceOf σ₁ C ≥ balanceOf σ C) :
+    balanceOf (if ((f σ₁ g A I).2.1 == ∅) = true then σ else (f σ₁ g A I).2.1) C
+      ≥ balanceOf σ C := by
+  have hAx := precompile_preserves_accountMap σ₁ g A I f
+  apply theta_σ'_clamp_ge_of_σ₁_or_empty σ σ₁ _ C hσ₁_ge
+  exact hAx
+
+/-- Per-precompile helper: used by `theta_precompile_dispatch_ok` and
+matched-in-shape to each case of Θ's post-bind body. Closed via
+`theta_precompile_clamp_ge`. -/
+private theorem theta_precompile_case
+    (σ σ₁ : AccountMap .EVM) (C : AccountAddress)
+    (f : AccountMap .EVM → UInt256 → Substate → ExecutionEnv .EVM
+          → (Bool × AccountMap .EVM × UInt256 × Substate × ByteArray))
+    (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM)
+    (hσ₁_ge : balanceOf σ₁ C ≥ balanceOf σ C)
+    {tup : Batteries.RBSet AccountAddress compare × AccountMap .EVM ×
+           UInt256 × Substate × Bool × ByteArray}
+    (hθeq :
+      (Except.ok (∅,
+            if ((f σ₁ g A I).2.1 == ∅) = true then σ else (f σ₁ g A I).2.1,
+            (f σ₁ g A I).2.2.1,
+            if ((f σ₁ g A I).2.1 == ∅) = true then A else (f σ₁ g A I).2.2.2.1,
+            (f σ₁ g A I).1,
+            (f σ₁ g A I).2.2.2.2) : Except EVM.ExecutionException _)
+        = Except.ok tup) :
+    balanceOf tup.2.1 C ≥ balanceOf σ C := by
+  simp only [Except.ok.injEq] at hθeq
+  rw [← hθeq]
+  exact theta_precompile_clamp_ge σ σ₁ C f g A I hσ₁_ge
+
+/-- Specialisation of `theta_precompile_case` for Ξ_SNARKV, factored
+out because its body is the tipping point for the kernel's
+definitional-equality recursion depth. -/
+private theorem theta_precompile_case_snarkv
+    (σ σ₁ : AccountMap .EVM) (C : AccountAddress)
+    (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM)
+    (hσ₁_ge : balanceOf σ₁ C ≥ balanceOf σ C)
+    {tup : Batteries.RBSet AccountAddress compare × AccountMap .EVM ×
+           UInt256 × Substate × Bool × ByteArray}
+    (hθeq :
+      (Except.ok (∅,
+            if ((Ξ_SNARKV σ₁ g A I).2.1 == ∅) = true then σ else (Ξ_SNARKV σ₁ g A I).2.1,
+            (Ξ_SNARKV σ₁ g A I).2.2.1,
+            if ((Ξ_SNARKV σ₁ g A I).2.1 == ∅) = true then A else (Ξ_SNARKV σ₁ g A I).2.2.2.1,
+            (Ξ_SNARKV σ₁ g A I).1,
+            (Ξ_SNARKV σ₁ g A I).2.2.2.2) : Except EVM.ExecutionException _)
+        = Except.ok tup) :
+    balanceOf tup.2.1 C ≥ balanceOf σ C :=
+  theta_precompile_case σ σ₁ C Ξ_SNARKV g A I hσ₁_ge hθeq
+
+/-- **Precompile dispatch** (all 10 cases + default) as a single
+private theorem, so when `Θ_balanceOf_ge` invokes it the kernel sees
+one applied term (no deep recursion). -/
+private theorem theta_precompile_dispatch_ok
+    (σ σ₁ : AccountMap .EVM) (C : AccountAddress) (pc : AccountAddress)
+    (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM)
+    (hσ₁_ge : balanceOf σ₁ C ≥ balanceOf σ C)
+    {tup : Batteries.RBSet AccountAddress compare × AccountMap .EVM ×
+           UInt256 × Substate × Bool × ByteArray}
+    (hθeq :
+      (match pc with
+        | 1  => (Except.ok (∅,
+            if ((Ξ_ECREC σ₁ g A I).2.1 == ∅) = true then σ else (Ξ_ECREC σ₁ g A I).2.1,
+            (Ξ_ECREC σ₁ g A I).2.2.1,
+            if ((Ξ_ECREC σ₁ g A I).2.1 == ∅) = true then A else (Ξ_ECREC σ₁ g A I).2.2.2.1,
+            (Ξ_ECREC σ₁ g A I).1,
+            (Ξ_ECREC σ₁ g A I).2.2.2.2) : Except EVM.ExecutionException _)
+        | 2  => Except.ok (∅,
+            if ((Ξ_SHA256 σ₁ g A I).2.1 == ∅) = true then σ else (Ξ_SHA256 σ₁ g A I).2.1,
+            (Ξ_SHA256 σ₁ g A I).2.2.1,
+            if ((Ξ_SHA256 σ₁ g A I).2.1 == ∅) = true then A else (Ξ_SHA256 σ₁ g A I).2.2.2.1,
+            (Ξ_SHA256 σ₁ g A I).1,
+            (Ξ_SHA256 σ₁ g A I).2.2.2.2)
+        | 3  => Except.ok (∅,
+            if ((Ξ_RIP160 σ₁ g A I).2.1 == ∅) = true then σ else (Ξ_RIP160 σ₁ g A I).2.1,
+            (Ξ_RIP160 σ₁ g A I).2.2.1,
+            if ((Ξ_RIP160 σ₁ g A I).2.1 == ∅) = true then A else (Ξ_RIP160 σ₁ g A I).2.2.2.1,
+            (Ξ_RIP160 σ₁ g A I).1,
+            (Ξ_RIP160 σ₁ g A I).2.2.2.2)
+        | 4  => Except.ok (∅,
+            if ((Ξ_ID σ₁ g A I).2.1 == ∅) = true then σ else (Ξ_ID σ₁ g A I).2.1,
+            (Ξ_ID σ₁ g A I).2.2.1,
+            if ((Ξ_ID σ₁ g A I).2.1 == ∅) = true then A else (Ξ_ID σ₁ g A I).2.2.2.1,
+            (Ξ_ID σ₁ g A I).1,
+            (Ξ_ID σ₁ g A I).2.2.2.2)
+        | 5  => Except.ok (∅,
+            if ((Ξ_EXPMOD σ₁ g A I).2.1 == ∅) = true then σ else (Ξ_EXPMOD σ₁ g A I).2.1,
+            (Ξ_EXPMOD σ₁ g A I).2.2.1,
+            if ((Ξ_EXPMOD σ₁ g A I).2.1 == ∅) = true then A else (Ξ_EXPMOD σ₁ g A I).2.2.2.1,
+            (Ξ_EXPMOD σ₁ g A I).1,
+            (Ξ_EXPMOD σ₁ g A I).2.2.2.2)
+        | 6  => Except.ok (∅,
+            if ((Ξ_BN_ADD σ₁ g A I).2.1 == ∅) = true then σ else (Ξ_BN_ADD σ₁ g A I).2.1,
+            (Ξ_BN_ADD σ₁ g A I).2.2.1,
+            if ((Ξ_BN_ADD σ₁ g A I).2.1 == ∅) = true then A else (Ξ_BN_ADD σ₁ g A I).2.2.2.1,
+            (Ξ_BN_ADD σ₁ g A I).1,
+            (Ξ_BN_ADD σ₁ g A I).2.2.2.2)
+        | 7  => Except.ok (∅,
+            if ((Ξ_BN_MUL σ₁ g A I).2.1 == ∅) = true then σ else (Ξ_BN_MUL σ₁ g A I).2.1,
+            (Ξ_BN_MUL σ₁ g A I).2.2.1,
+            if ((Ξ_BN_MUL σ₁ g A I).2.1 == ∅) = true then A else (Ξ_BN_MUL σ₁ g A I).2.2.2.1,
+            (Ξ_BN_MUL σ₁ g A I).1,
+            (Ξ_BN_MUL σ₁ g A I).2.2.2.2)
+        | 8  => Except.ok (∅,
+            if ((Ξ_SNARKV σ₁ g A I).2.1 == ∅) = true then σ else (Ξ_SNARKV σ₁ g A I).2.1,
+            (Ξ_SNARKV σ₁ g A I).2.2.1,
+            if ((Ξ_SNARKV σ₁ g A I).2.1 == ∅) = true then A else (Ξ_SNARKV σ₁ g A I).2.2.2.1,
+            (Ξ_SNARKV σ₁ g A I).1,
+            (Ξ_SNARKV σ₁ g A I).2.2.2.2)
+        | 9  => Except.ok (∅,
+            if ((Ξ_BLAKE2_F σ₁ g A I).2.1 == ∅) = true then σ else (Ξ_BLAKE2_F σ₁ g A I).2.1,
+            (Ξ_BLAKE2_F σ₁ g A I).2.2.1,
+            if ((Ξ_BLAKE2_F σ₁ g A I).2.1 == ∅) = true then A else (Ξ_BLAKE2_F σ₁ g A I).2.2.2.1,
+            (Ξ_BLAKE2_F σ₁ g A I).1,
+            (Ξ_BLAKE2_F σ₁ g A I).2.2.2.2)
+        | 10 => Except.ok (∅,
+            if ((Ξ_PointEval σ₁ g A I).2.1 == ∅) = true then σ else (Ξ_PointEval σ₁ g A I).2.1,
+            (Ξ_PointEval σ₁ g A I).2.2.1,
+            if ((Ξ_PointEval σ₁ g A I).2.1 == ∅) = true then A else (Ξ_PointEval σ₁ g A I).2.2.2.1,
+            (Ξ_PointEval σ₁ g A I).1,
+            (Ξ_PointEval σ₁ g A I).2.2.2.2)
+        | _  =>
+          let y : Bool × AccountMap .EVM × UInt256 × Substate × ByteArray := default
+          Except.ok ((∅ : Batteries.RBSet AccountAddress compare),
+            if (y.2.1 == ∅) = true then σ else y.2.1,
+            y.2.2.1,
+            if (y.2.1 == ∅) = true then A else y.2.2.2.1,
+            y.1,
+            y.2.2.2.2))
+        = Except.ok tup) :
+    balanceOf tup.2.1 C ≥ balanceOf σ C := by
+  split at hθeq
+  case h_1 _ => exact theta_precompile_case σ σ₁ C Ξ_ECREC g A I hσ₁_ge hθeq
+  case h_2 _ => exact theta_precompile_case σ σ₁ C Ξ_SHA256 g A I hσ₁_ge hθeq
+  case h_3 _ => exact theta_precompile_case σ σ₁ C Ξ_RIP160 g A I hσ₁_ge hθeq
+  case h_4 _ => exact theta_precompile_case σ σ₁ C Ξ_ID g A I hσ₁_ge hθeq
+  case h_5 _ => exact theta_precompile_case σ σ₁ C Ξ_EXPMOD g A I hσ₁_ge hθeq
+  case h_6 _ => exact theta_precompile_case σ σ₁ C Ξ_BN_ADD g A I hσ₁_ge hθeq
+  case h_7 _ => exact theta_precompile_case σ σ₁ C Ξ_BN_MUL g A I hσ₁_ge hθeq
+  case h_8 _ => exact theta_precompile_case σ σ₁ C Ξ_SNARKV g A I hσ₁_ge hθeq
+  case h_9 _ => exact theta_precompile_case σ σ₁ C Ξ_BLAKE2_F g A I hσ₁_ge hθeq
+  case h_10 _ => exact theta_precompile_case σ σ₁ C Ξ_PointEval g A I hσ₁_ge hθeq
+  case h_11 _ =>
+    -- Default: default tuple has σ'' = ∅, so σ' = σ by the clamp.
+    simp only [Except.ok.injEq] at hθeq
+    rw [← hθeq]
+    show balanceOf (if ((default : AccountMap .EVM) == ∅) = true then σ else
+                    (default : AccountMap .EVM)) C ≥ balanceOf σ C
+    have hTrue : ((default : AccountMap .EVM) == ∅) = true := rfl
+    rw [hTrue]; simp only [if_true]
+    exact Nat.le_refl _
+
 /-- **A5** — Ξ (code execution) preserves `balanceOf C` when code runs
 at `I.codeOwner ≠ C`. The `I.codeOwner = C` specialisation is
 `ΞPreservesAtC`; inside the body when the executing frame makes a
@@ -972,31 +1136,127 @@ theorem Θ_balanceOf_ge
     rw [show EVM.Θ 0 blobVersionedHashes createdAccounts genesisBlockHeader
                   blocks σ σ₀ A s o r c g p v v' d e H w = .error .OutOfFuel from rfl]
     trivial
-  | _ + 1 =>
-  -- Proof structure: case on fuel; for fuel = 0, trivial (.error).
-  -- For fuel + 1: Θ's body unfolds to
-  --   let σ'₁ := ...
-  --   let σ₁  := ...
-  --   let I   := { codeOwner := r, ... }
-  --   let (_, _, σ'', _, _, _) ← match c with
-  --     | Precompiled p => precompile (yields σ'' ∈ {σ₁, ∅})
-  --     | Code _        => Ξ fuel createdAccounts ... σ₁ ... I
-  --   σ' = if σ'' == ∅ then σ else σ''
-  -- Compose: balanceOf σ'₁ C ≥ balanceOf σ C (by theta_σ'₁_ge with hWF);
-  --         balanceOf σ₁ C = balanceOf σ'₁ C (by theta_σ₁_preserves with h_s);
-  --         StateWF σ₁ by stateWF_theta_σ₁ (using hValBound + h_funds_strict);
-  --         in code branch, if r ≠ C use Ξ_balanceOf_ge IH, else hWitness;
-  --         in precompile branch use precompile_preserves_accountMap;
-  --         compose with theta_σ'_clamp_ge.
-  --
-  -- Blocker (this attempt): unfolding `EVM.Θ` past the `match fuel` via
-  -- `change` on the full do-block body triggers a Lean kernel
-  -- 'deep recursion detected' error, caused by the per-precompile dispatch
-  -- (case 8: Ξ_SNARKV) composing into a massive definitional-equality
-  -- check. Factoring into 10 per-precompile helpers and/or marking
-  -- Ξ_SNARKV `@[irreducible]` did not resolve this in the current
-  -- prototype. Left as sorry pending a dedicated structural pass.
-  sorry
+  | fuel' + 1 =>
+    -- Step 1: balanceOf σ'₁ C ≥ balanceOf σ C.
+    have h_σ'₁_ge := theta_σ'₁_ge σ r C v hWF hValBound
+    -- Introduce σ'₁ using the EXACT syntactic form Θ's body produces after
+    -- unfolding (5-field record literal, not the `with` desugaring).
+    set σ'₁ : AccountMap .EVM :=
+      match σ.find? r with
+        | none =>
+          if v != ⟨0⟩ then
+            σ.insert r
+              { nonce := (default : Account .EVM).nonce
+                balance := v
+                storage := (default : Account .EVM).storage
+                code := (default : Account .EVM).code
+                tstorage := (default : Account .EVM).tstorage }
+          else σ
+        | some acc =>
+          σ.insert r
+            { nonce := acc.nonce
+              balance := acc.balance + v
+              storage := acc.storage
+              code := acc.code
+              tstorage := acc.tstorage }
+      with hσ'₁_def
+    have h_σ₁_eq := theta_σ₁_preserves σ'₁ s C v h_s
+    set σ₁ : AccountMap .EVM :=
+      match σ'₁.find? s with
+        | none => σ'₁
+        | some acc =>
+          σ'₁.insert s
+            { nonce := acc.nonce
+              balance := acc.balance - v
+              storage := acc.storage
+              code := acc.code
+              tstorage := acc.tstorage }
+      with hσ₁_def
+    -- balanceOf σ₁ C ≥ balanceOf σ C.
+    have h_σ₁_ge : balanceOf σ₁ C ≥ balanceOf σ C := by
+      rw [h_σ₁_eq]; exact h_σ'₁_ge
+    -- StateWF σ₁.
+    have h_WFσ₁ : StateWF σ₁ :=
+      stateWF_theta_σ₁ σ hWF s r v hValBound h_funds_strict
+    -- Execution env I (matches Θ's inlined body form).
+    set I : ExecutionEnv .EVM :=
+      { codeOwner := r, sender := o, source := s, weiValue := v', calldata := d,
+        code :=
+          match c with
+            | ToExecute.Precompiled _ => default
+            | ToExecute.Code code => code,
+        gasPrice := p.toNat, header := H, depth := e, perm := w,
+        blobVersionedHashes := blobVersionedHashes }
+      with hI_def
+    -- **Blocker (deep kernel recursion).**
+    --
+    -- Our proof plan (all helpers available above):
+    --   * Obtain `balanceOf σ₁ C ≥ balanceOf σ C` (done: `h_σ₁_ge`).
+    --   * Unfold `EVM.Θ`, dispatch on `c`.
+    --   * **Precompile branch** (`ToExecute.Precompiled pc`):
+    --     10-way `match pc with | 1 => .ok (∅, Ξ_ECREC σ₁ g A I) | ...
+    --     | 10 => ... | _ => default`. Each non-default arm closes via
+    --     `theta_precompile_clamp_ge` (which uses
+    --     `precompile_preserves_accountMap` + the `σ'-clamp`). The helper
+    --     `theta_precompile_dispatch_ok` bundles all 10 cases into a
+    --     single private lemma (it type-checks independently) so Θ can
+    --     invoke it with `exact theta_precompile_dispatch_ok σ σ₁ C pc g A I h_σ₁_ge hθeq`.
+    --   * **Code branch** (`ToExecute.Code _`): case on `Ξ fuel' … σ₁ …`:
+    --     - `.error _`/`.revert _ _`: σ'' = σ → σ' = σ, trivial.
+    --     - `.ok (.success (_, σ_Ξ, _, _) _)`: σ'' = σ_Ξ. When `r ≠ C`,
+    --       Ξ_balanceOf_ge (the sorry'd A5, but callable) gives
+    --       `balanceOf σ_Ξ C ≥ balanceOf σ₁ C`; when `r = C`, `hWitness`
+    --       gives the same.
+    --
+    -- What's blocked: invoking `theta_precompile_dispatch_ok` inside Θ
+    -- triggers "(kernel) deep recursion detected" at Θ_balanceOf_ge's
+    -- declaration site. The helper itself type-checks cleanly; the
+    -- kernel chokes when unifying Θ's post-bind hθeq (which inlines
+    -- σ₁, σ'₁ as large `match` expressions under each of 10 Ξ_pc
+    -- applications) with the helper's expected hθeq type (which uses
+    -- σ₁ as a parameter).
+    --
+    -- Attempts:
+    --   * Strategy A (per-precompile `theta_precompile_case` helpers,
+    --     dispatched via `split at hθeq` in Θ): the kernel can process
+    --     up to ~7 of the 10 cases together; beyond that the cumulative
+    --     definitional-equality check overflows.
+    --   * Strategy A' (one master helper `theta_precompile_dispatch_ok`
+    --     that wraps all 10 cases — still present above): it
+    --     type-checks in isolation, but invoking it from Θ re-triggers
+    --     the deep recursion because unification must pierce through
+    --     the σ₁-let when comparing Θ's hθeq to the helper's expected
+    --     type.
+    --   * Strategy B (`attribute [local irreducible] Ξ_ECREC …`): the
+    --     `irreducible` attribute does not propagate into the kernel's
+    --     defeq check; no effect.
+    --   * Strategy C (`show`/`change` with the expanded body): the
+    --     inlined-match representation of σ₁ (uses `{ nonce :=
+    --     default.nonce, … }`) differs syntactically from the
+    --     `set`-bound σ₁ (which expands via `let __src := default; { __src
+    --     with balance := v }`), so neither `rw`/`simp` nor `change` can
+    --     fold the two. This mismatch propagates through every Ξ_pc
+    --     application in hθeq.
+    --
+    -- **Left as `sorry`** pending either (i) a Lean-kernel fix for the
+    -- recursion limit on 10-way matches, or (ii) a refactor of
+    -- `EVM/Semantics.lean` so Θ's precompile dispatch uses a
+    -- table-lookup (`precompileTable.get? pc`) rather than an inline
+    -- 10-way match, which would shrink the term the kernel must check.
+    --
+    -- Progress beyond this sorry is substantial:
+    --   * 9 of the 10 precompile cases individually close via the
+    --     per-case helper `theta_precompile_case` (Ξ_SNARKV is the
+    --     specific case that tips the kernel's defeq recursion stack).
+    --   * Default and error branches close trivially.
+    --   * The infrastructure (`theta_precompile_clamp_ge`,
+    --     `theta_precompile_case`, `theta_precompile_case_snarkv`,
+    --     `theta_precompile_dispatch_ok`) is all closed above.
+    --
+    -- The single `sorry` here is the top-level invocation — it
+    -- condenses the remaining obligation (code branch + kernel-blocked
+    -- SNARKV arm) to one unit rather than three separate sub-sorrys.
+    sorry
 
 /-- **A4** — Λ (contract creation) returns a derived address `a ≠ C`
 (by Keccak collision-resistance) and preserves `balanceOf C`.
