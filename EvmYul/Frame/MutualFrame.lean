@@ -571,6 +571,369 @@ private theorem stateWF_lambda_σStar_some
     rw [this]
     exact hWF.boundedTotal
 
+/-- `StateWF` for Θ's transfer state `σ₁`.
+
+Θ's sender/recipient update is `σ'₁ = credit r by v`, `σ₁ = debit s by v`.
+Under `StateWF σ`, `hValBound` (no-overflow at r) and the strong funds
+hypothesis `h_funds_strict` (either `v = 0`, or the sender exists and has
+balance ≥ v), the transfer is value-conserving (sender loses ≤ v,
+recipient gains ≤ v) so `totalETH σ₁ ≤ totalETH σ` and `StateWF σ₁`.
+
+If `r = s`, the credit and the subsequent debit cancel (modulo UInt256
+round-trip) so `totalETH σ₁ = totalETH σ` directly.  -/
+private theorem stateWF_theta_σ₁
+    (σ : AccountMap .EVM) (hWF : StateWF σ)
+    (s r : AccountAddress) (v : UInt256)
+    (hValBound : ∀ acc, σ.find? r = some acc →
+        acc.balance.toNat + v.toNat < UInt256.size)
+    (h_funds_strict :
+        v = ⟨0⟩ ∨ ∃ acc, σ.find? s = some acc ∧ v.toNat ≤ acc.balance.toNat) :
+    StateWF
+      (let σ'₁ :=
+        match σ.find? r with
+          | none =>
+            if v != ⟨0⟩ then
+              σ.insert r { (default : Account .EVM) with balance := v}
+            else σ
+          | some acc => σ.insert r { acc with balance := acc.balance + v}
+      match σ'₁.find? s with
+        | none => σ'₁
+        | some acc => σ'₁.insert s { acc with balance := acc.balance - v}) := by
+  refine ⟨?_⟩
+  simp only
+  -- Case on σ.find? r to determine σ'₁.
+  cases hFr : σ.find? r with
+  | none =>
+    by_cases hv_eq_0 : v = ⟨0⟩
+    · -- v = 0: σ'₁ = σ (since `if v != ⟨0⟩` is false).
+      have hbne : (v != ⟨0⟩) = false := by
+        rw [hv_eq_0]; rfl
+      rw [show (if (v != ⟨0⟩) = true then
+            σ.insert r { (default : Account .EVM) with balance := v} else σ) = σ from by
+        rw [hbne]; rfl]
+      -- σ'₁ = σ.
+      cases hFs : σ.find? s with
+      | none => exact hWF.boundedTotal
+      | some acc_s =>
+        -- σ₁ = σ.insert s {acc_s with balance := acc_s.balance - v}.
+        -- Compute: totalETH σ₁ = totalETH σ.
+        set newAcc : Account .EVM := { acc_s with balance := acc_s.balance - v}
+          with h_newAcc_def
+        have h_newAcc_bal : newAcc.balance.toNat = acc_s.balance.toNat := by
+          rw [h_newAcc_def]
+          show (acc_s.balance - v).toNat = acc_s.balance.toNat
+          rw [hv_eq_0]
+          have : acc_s.balance - (⟨0⟩ : UInt256) = acc_s.balance :=
+            UInt256_sub_zero acc_s.balance
+          rw [this]
+        have hEq :=
+          totalETH_insert_of_mem σ s newAcc acc_s hFs
+        rw [h_newAcc_bal] at hEq
+        have h_tot : totalETH (σ.insert s newAcc) = totalETH σ := by omega
+        rw [h_tot]
+        exact hWF.boundedTotal
+    · -- v ≠ 0: σ'₁ = σ.insert r {default with balance := v}.
+      -- We rely on a small helper: `v != ⟨0⟩` is `!(v == ⟨0⟩)` which is
+      -- `true` iff `v ≠ ⟨0⟩`. For UInt256 (derived BEq) this follows by
+      -- Bool case analysis and structural equality on `Fin`.
+      have hbne : (v != ⟨0⟩) = true := by
+        -- Use BEq.beq_iff_ne-style reasoning via decide-on-cases.
+        by_contra hc
+        -- hc : ¬ (v != ⟨0⟩ = true)
+        have hbF : (v != ⟨0⟩) = false := by
+          cases hh : (v != ⟨0⟩) with
+          | true => exact absurd hh hc
+          | false => rfl
+        -- hbF : (v != ⟨0⟩) = false.
+        -- Extract v = ⟨0⟩ via structural equality.
+        have h_eq : v = (⟨0⟩ : UInt256) := by
+          -- `v != ⟨0⟩` unfolds to `!(v == ⟨0⟩)`. `hbF : !(v == ⟨0⟩) = false`.
+          -- So `v == ⟨0⟩ = true`. For UInt256 (Fin-based BEq), that means
+          -- `v.val.val = (⟨0⟩ : UInt256).val.val = 0`, hence `v = ⟨0⟩`.
+          have h_beq : (v == (⟨0⟩ : UInt256)) = true := by
+            cases hh : (v == (⟨0⟩ : UInt256)) with
+            | true => rfl
+            | false =>
+              have : (v != ⟨0⟩) = true := by
+                show (!(v == (⟨0⟩ : UInt256))) = true
+                rw [hh]; rfl
+              rw [this] at hbF; cases hbF
+          -- h_beq : (v == ⟨0⟩) = true.
+          -- For `UInt256` structure with Fin, derive v.val.val = 0.
+          cases v with
+          | mk vv =>
+            cases vv with
+            | mk m lt =>
+              -- h_beq : ((⟨⟨m, lt⟩⟩ : UInt256) == ⟨0⟩) = true.
+              -- The derived BEq on UInt256 reduces through Fin's BEq (on .val)
+              -- to Nat's BEq (on .val). So h_beq ≡ (Nat.beq m 0) = true (by rfl
+              -- up to unfoldings). Match on m to extract m = 0.
+              have h_m0 : m = 0 := by
+                cases m with
+                | zero => rfl
+                | succ k =>
+                  -- (⟨⟨k+1, lt⟩⟩ == ⟨0⟩) evaluates to .false; contradicts h_beq.
+                  exfalso
+                  -- Unfolding UInt256.BEq and Fin.BEq, the comparison reduces
+                  -- to `Nat.beq (k + 1) 0 = true`, which is definitionally false.
+                  have : (Nat.beq (k + 1) 0) = true := h_beq
+                  exact Bool.noConfusion this
+              subst h_m0; rfl
+        exact hv_eq_0 h_eq
+      rw [show (if (v != ⟨0⟩) = true then
+            σ.insert r { (default : Account .EVM) with balance := v} else σ)
+          = σ.insert r { (default : Account .EVM) with balance := v} from by
+        rw [hbne]; rfl]
+      set σ'₁ : AccountMap .EVM :=
+        σ.insert r { (default : Account .EVM) with balance := v} with hσ'₁_def
+      have h_σ'₁_total :
+          totalETH σ'₁ = totalETH σ + v.toNat := by
+        rw [hσ'₁_def]
+        have hEq := totalETH_insert_of_not_mem σ r
+          { (default : Account .EVM) with balance := v} hFr
+        rw [hEq]
+      -- σ'₁.find? s: if r = s, it's some {default with balance := v}; else σ.find? s.
+      by_cases hrs : r = s
+      · -- r = s. Then σ'₁.find? s = some {default with balance := v}.
+        rw [hrs] at hσ'₁_def hFr
+        have hFs_σ'₁ : σ'₁.find? s = some { (default : Account .EVM) with balance := v} := by
+          rw [hσ'₁_def]; exact find?_insert_self _ _ _
+        simp only [hFs_σ'₁]
+        -- σ₁ = σ'₁.insert s {{default with balance := v} with balance := v - v}.
+        -- v - v = 0 in UInt256.
+        set newAcc : Account .EVM :=
+          { (default : Account .EVM) with balance := v - v}
+        have hEq :=
+          totalETH_insert_of_mem σ'₁ s newAcc
+            { (default : Account .EVM) with balance := v} hFs_σ'₁
+        -- hEq : totalETH (σ'₁.insert s newAcc) + v.toNat
+        --     = totalETH σ'₁ + newAcc.balance.toNat
+        -- newAcc.balance = v - v.
+        have h_vv : (v - v).toNat = 0 := by
+          -- UInt256 subtraction self-cancellation via Fin.sub_self.
+          show (v - v).toNat = 0
+          have : (v - v).val = (0 : Fin UInt256.size) := Fin.sub_self
+          show (v - v).val.val = 0
+          rw [this]; rfl
+        have h_newAcc_bal : newAcc.balance.toNat = 0 := by
+          show (v - v).toNat = 0
+          exact h_vv
+        have h_default_bal :
+            ({ (default : Account .EVM) with balance := v} : Account .EVM).balance.toNat
+              = v.toNat := rfl
+        rw [h_newAcc_bal, h_default_bal, Nat.add_zero] at hEq
+        -- hEq : totalETH (σ'₁.insert s newAcc) + v.toNat = totalETH σ'₁.
+        rw [h_σ'₁_total] at hEq
+        -- hEq : totalETH (σ'₁.insert s newAcc) + v.toNat = totalETH σ + v.toNat.
+        have h_tot : totalETH (σ'₁.insert s newAcc) = totalETH σ := by omega
+        rw [h_tot]
+        exact hWF.boundedTotal
+      · -- r ≠ s. Then σ'₁.find? s = σ.find? s.
+        have hFs_σ'₁ : σ'₁.find? s = σ.find? s := by
+          rw [hσ'₁_def]
+          exact find?_insert_ne _ _ _ _ hrs
+        cases hFs : σ.find? s with
+        | none =>
+          have : σ'₁.find? s = none := by rw [hFs_σ'₁, hFs]
+          simp only [this]
+          -- σ₁ = σ'₁. v ≠ 0 by hv0, so h_funds_strict must give us a sender —
+          -- but σ.find? s = none contradicts that.
+          exfalso
+          rcases h_funds_strict with h_v_eq0 | ⟨acc_s, h_acc_s, _⟩
+          · -- v = 0 contradicts hv_eq_0 : v ≠ ⟨0⟩.
+            exact hv_eq_0 h_v_eq0
+          · -- acc_s : σ.find? s = some _, but hFs says none.
+            rw [h_acc_s] at hFs; cases hFs
+        | some acc_s =>
+          have hFs_σ'₁' : σ'₁.find? s = some acc_s := by rw [hFs_σ'₁, hFs]
+          simp only [hFs_σ'₁']
+          -- σ₁ = σ'₁.insert s {acc_s with balance := acc_s.balance - v}.
+          have h_vle : v.toNat ≤ acc_s.balance.toNat := by
+            rcases h_funds_strict with h_v_eq0 | ⟨acc_s', h_acc_s', h_bnd'⟩
+            · rw [h_v_eq0]; exact Nat.zero_le _
+            · rw [h_acc_s'] at hFs
+              cases hFs
+              exact h_bnd'
+          -- Since r was absent, credit σ'₁ adds v.  The debit subtracts v
+          -- without underflow (h_vle).
+          have hEq :=
+            totalETH_insert_of_mem σ'₁ s
+              { acc_s with balance := acc_s.balance - v} acc_s hFs_σ'₁'
+          have h_sub_eq : (acc_s.balance - v).toNat = acc_s.balance.toNat - v.toNat :=
+            UInt256_sub_toNat_of_le _ _ h_vle
+          rw [h_sub_eq] at hEq
+          rw [h_σ'₁_total] at hEq
+          have hBound : acc_s.balance.toNat ≤ totalETH σ :=
+            balance_toNat_le_totalETH σ s acc_s hFs
+          -- hEq : totalETH (σ'₁.insert s {...}) + acc_s.balance.toNat
+          --     = totalETH σ + v.toNat + (acc_s.balance.toNat - v.toNat)
+          --     = totalETH σ + acc_s.balance.toNat  (since v ≤ acc_s.bal)
+          have h_tot : totalETH (σ'₁.insert s { acc_s with balance := acc_s.balance - v}) = totalETH σ := by
+            omega
+          rw [h_tot]
+          exact hWF.boundedTotal
+  | some acc =>
+    simp only [hFr]
+    -- σ'₁ = σ.insert r {acc with balance := acc.balance + v}.
+    set σ'₁ : AccountMap .EVM :=
+      σ.insert r { acc with balance := acc.balance + v} with hσ'₁_def
+    have hWrap := hValBound acc hFr
+    have h_add_toNat : (acc.balance + v).toNat = acc.balance.toNat + v.toNat :=
+      UInt256_add_toNat_of_no_wrap _ _ hWrap
+    have h_σ'₁_total :
+        totalETH σ'₁ + acc.balance.toNat = totalETH σ + acc.balance.toNat + v.toNat := by
+      rw [hσ'₁_def]
+      have hEq := totalETH_insert_of_mem σ r
+          { acc with balance := acc.balance + v} acc hFr
+      rw [h_add_toNat] at hEq
+      omega
+    -- σ'₁.find? s depends on r = s or not.
+    by_cases hrs : r = s
+    · -- r = s: σ'₁.find? s = some {acc with balance := acc.balance + v}.
+      subst hrs
+      have hFs_σ'₁ :
+          σ'₁.find? r = some { acc with balance := acc.balance + v} := by
+        rw [hσ'₁_def]; exact find?_insert_self _ _ _
+      simp only [hFs_σ'₁]
+      -- σ₁ = σ'₁.insert r {acc with balance := acc.balance + v - v}.
+      -- = σ.insert r {acc with balance := acc.balance} (= σ up to an insert of equal).
+      set newAcc : Account .EVM :=
+        { acc with balance := acc.balance + v - v}
+      have h_avv : (acc.balance + v - v).toNat = acc.balance.toNat := by
+        -- Since acc.balance + v doesn't wrap (hWrap), we can apply
+        -- UInt256_sub_toNat_of_le with v.toNat ≤ (acc.balance + v).toNat
+        -- and then simplify: (acc.balance + v).toNat - v.toNat = acc.balance.toNat.
+        have h_plus_toNat : (acc.balance + v).toNat = acc.balance.toNat + v.toNat :=
+          h_add_toNat
+        have h_v_le : v.toNat ≤ (acc.balance + v).toNat := by
+          rw [h_plus_toNat]; exact Nat.le_add_left _ _
+        rw [UInt256_sub_toNat_of_le _ _ h_v_le, h_plus_toNat]
+        omega
+      have h_newAcc_bal : newAcc.balance.toNat = acc.balance.toNat := h_avv
+      have hEq :=
+        totalETH_insert_of_mem σ'₁ r newAcc
+          { acc with balance := acc.balance + v} hFs_σ'₁
+      -- hEq : totalETH (σ'₁.insert r newAcc) + (acc.balance + v).toNat
+      --     = totalETH σ'₁ + newAcc.balance.toNat
+      rw [h_add_toNat, h_newAcc_bal] at hEq
+      -- hEq : totalETH (σ'₁.insert r newAcc) + (acc.balance.toNat + v.toNat)
+      --     = totalETH σ'₁ + acc.balance.toNat
+      -- Combined with h_σ'₁_total:
+      --   totalETH σ'₁ + acc.balance.toNat = totalETH σ + acc.balance.toNat + v.toNat
+      -- So: totalETH (σ'₁.insert r newAcc) + acc.balance.toNat + v.toNat
+      --   = totalETH σ + acc.balance.toNat + v.toNat
+      -- Therefore totalETH (σ'₁.insert r newAcc) = totalETH σ.
+      have h_tot : totalETH (σ'₁.insert r newAcc) = totalETH σ := by omega
+      rw [h_tot]
+      exact hWF.boundedTotal
+    · -- r ≠ s.
+      have hFs_σ'₁ : σ'₁.find? s = σ.find? s := by
+        rw [hσ'₁_def]
+        exact find?_insert_ne _ _ _ _ hrs
+      cases hFs : σ.find? s with
+      | none =>
+        have : σ'₁.find? s = none := by rw [hFs_σ'₁, hFs]
+        simp only [this]
+        -- σ₁ = σ'₁. Use h_funds_strict: if v = 0, σ'₁ conserves totalETH;
+        -- else we have a sender, contradicting hFs.
+        rcases h_funds_strict with h_v_eq0 | ⟨acc_s', h_acc_s', _⟩
+        · -- v = 0. σ'₁ = σ.insert r {acc with balance := acc + 0} = σ (up to acc).
+          -- totalETH σ'₁ = totalETH σ.
+          have h_vnat0 : v.toNat = 0 := by rw [h_v_eq0]; rfl
+          -- From h_σ'₁_total: totalETH σ'₁ + acc.balance.toNat = totalETH σ + acc.balance.toNat + 0
+          -- So totalETH σ'₁ = totalETH σ.
+          have h_tot : totalETH σ'₁ = totalETH σ := by
+            rw [h_vnat0] at h_σ'₁_total
+            omega
+          rw [h_tot]
+          exact hWF.boundedTotal
+        · -- Contradicts hFs.
+          exfalso; rw [h_acc_s'] at hFs; cases hFs
+      | some acc_s =>
+        have hFs_σ'₁' : σ'₁.find? s = some acc_s := by rw [hFs_σ'₁, hFs]
+        simp only [hFs_σ'₁']
+        -- σ₁ = σ'₁.insert s {acc_s with balance := acc_s.balance - v}.
+        have h_vle : v.toNat ≤ acc_s.balance.toNat := by
+          rcases h_funds_strict with h_v_eq0 | ⟨acc_s', h_acc_s', h_bnd'⟩
+          · rw [h_v_eq0]; exact Nat.zero_le _
+          · rw [h_acc_s'] at hFs; cases hFs; exact h_bnd'
+        have h_sub_eq : (acc_s.balance - v).toNat = acc_s.balance.toNat - v.toNat :=
+          UInt256_sub_toNat_of_le _ _ h_vle
+        have hEq :=
+          totalETH_insert_of_mem σ'₁ s
+            { acc_s with balance := acc_s.balance - v} acc_s hFs_σ'₁'
+        rw [h_sub_eq] at hEq
+        -- hEq : totalETH (σ'₁.insert s {...}) + acc_s.balance.toNat
+        --     = totalETH σ'₁ + (acc_s.balance.toNat - v.toNat)
+        -- From h_σ'₁_total: totalETH σ'₁ = totalETH σ + v.toNat (after subtracting acc.balance.toNat from both sides).
+        have h_σ'₁_tot_clean : totalETH σ'₁ = totalETH σ + v.toNat := by
+          -- Use h_σ'₁_total: totalETH σ'₁ + acc.balance.toNat = totalETH σ + acc.balance.toNat + v.toNat
+          omega
+        rw [h_σ'₁_tot_clean] at hEq
+        -- hEq : totalETH (σ'₁.insert s {...}) + acc_s.balance.toNat
+        --     = totalETH σ + v.toNat + (acc_s.balance.toNat - v.toNat)
+        --     = totalETH σ + acc_s.balance.toNat  (since v ≤ acc_s.bal)
+        have hBound : acc_s.balance.toNat ≤ totalETH σ :=
+          balance_toNat_le_totalETH σ s acc_s hFs
+        have h_tot : totalETH (σ'₁.insert s { acc_s with balance := acc_s.balance - v})
+            = totalETH σ := by omega
+        rw [h_tot]
+        exact hWF.boundedTotal
+
+/-- **A5** — Ξ (code execution) preserves `balanceOf C` when code runs
+at `I.codeOwner ≠ C`. The `I.codeOwner = C` specialisation is
+`ΞPreservesAtC`; inside the body when the executing frame makes a
+call to C, we use the `hWitness`.
+
+**Proof status:** Ξ unfolds to `X` on a freshly-minted `EVM.State`.
+`X` is a fuel-bounded iteration of `step`. The proof is induction on
+fuel with these cases per step:
+  - Non-CALL, non-CREATE, non-SELFDESTRUCT: use
+    `EvmYul.step_preserves_balanceOf` (closed in `StepFrame.lean`).
+  - SELFDESTRUCT: use `selfdestruct_balanceOf_ne_Iₐ_ge` (closed in
+    `SelfdestructFrame.lean`), with `C ≠ Iₐ = I.codeOwner` from
+    `h_codeOwner`.
+  - CALL/CALLCODE/DELEGATECALL/STATICCALL: dispatches to `call f ...`
+    which in turn calls `Θ f ...` — need Θ_balanceOf_ge IH.
+  - CREATE/CREATE2: dispatches to `Lambda f ...` — need Λ_balanceOf_ge
+    IH.
+
+The IHs are cross-referential, requiring joint mutual induction.
+
+**Note:** This theorem is declared here (ahead of `Θ_balanceOf_ge` and
+`Λ_balanceOf_ge`) so that both can invoke it as a black box without a
+joint induction. Its own `sorry` remains. -/
+theorem Ξ_balanceOf_ge
+    (fuel : Nat) (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+    (I : ExecutionEnv .EVM) (C : AccountAddress)
+    (hWF : StateWF σ)
+    (h_codeOwner : C ≠ I.codeOwner)
+    (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
+    (hWitness : ΞPreservesAtC C) :
+    match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+    | .ok (.success (_, σ', _, _) _) => balanceOf σ' C ≥ balanceOf σ C
+    | .ok (.revert _ _) => True
+    | .error _ => True := by
+  -- Structural blocker: Ξ (n+1) unfolds to `X n (D_J I.code 0) freshEvmState`,
+  -- where `X` is a fuel-bounded loop over `step`. Each `step` dispatches to
+  -- CALL/CALLCODE/DELEGATECALL/STATICCALL (→ call f → Θ f at decreasing
+  -- fuel), CREATE/CREATE2 (→ Lambda f at decreasing fuel), SELFDESTRUCT
+  -- (→ `selfdestruct_balanceOf_ne_Iₐ_ge`), or default (→
+  -- `EvmYul.step_preserves_balanceOf`). For the recursive call to X at
+  -- lower fuel we need an inner induction on X's fuel, using the outer
+  -- Θ/Λ IHs. Mechanising this joint induction requires unfolding a
+  -- ~300-line `mutual def` body and case-splitting through ~25 match arms.
+  -- Left as `sorry` pending a dedicated proof pass.
+  match fuel with
+  | 0 =>
+    rw [show EVM.Ξ 0 createdAccounts genesisBlockHeader blocks σ σ₀ g A I
+             = .error .OutOfFuel from rfl]
+    trivial
+  | _ + 1 =>
+    sorry
+
 /-- **A3** — Θ (message call) preserves `balanceOf C` given a
 bytecode-specific witness for the `r = C` corner.
 
@@ -594,6 +957,10 @@ theorem Θ_balanceOf_ge
     (hWF : StateWF σ)
     (h_s : C ≠ s ∨ v = ⟨0⟩)
     (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
+    (hValBound : ∀ acc, σ.find? r = some acc →
+        acc.balance.toNat + v.toNat < UInt256.size)
+    (h_funds_strict :
+        v = ⟨0⟩ ∨ ∃ acc, σ.find? s = some acc ∧ v.toNat ≤ acc.balance.toNat)
     (hWitness : ΞPreservesAtC C) :
     match EVM.Θ fuel blobVersionedHashes createdAccounts
                   genesisBlockHeader blocks σ σ₀ A s o r c g p v v' d e H w with
@@ -617,76 +984,19 @@ theorem Θ_balanceOf_ge
   --   σ' = if σ'' == ∅ then σ else σ''
   -- Compose: balanceOf σ'₁ C ≥ balanceOf σ C (by theta_σ'₁_ge with hWF);
   --         balanceOf σ₁ C = balanceOf σ'₁ C (by theta_σ₁_preserves with h_s);
+  --         StateWF σ₁ by stateWF_theta_σ₁ (using hValBound + h_funds_strict);
   --         in code branch, if r ≠ C use Ξ_balanceOf_ge IH, else hWitness;
   --         in precompile branch use precompile_preserves_accountMap;
   --         compose with theta_σ'_clamp_ge.
   --
-  -- Blocker: unfolding `EVM.Θ` past the `match fuel` requires simp only
-  -- [EVM.Θ] which triggers whnf on a `mutual def` body — elaboration is
-  -- very slow and `split` on each nested `match` yields a tree of ~20
-  -- cases. The direct mechanisation needs a joint mutual theorem with
-  -- Ξ_balanceOf_ge to discharge the Ξ-dispatch case.
+  -- Blocker (this attempt): unfolding `EVM.Θ` past the `match fuel` via
+  -- `change` on the full do-block body triggers a Lean kernel
+  -- 'deep recursion detected' error, caused by the per-precompile dispatch
+  -- (case 8: Ξ_SNARKV) composing into a massive definitional-equality
+  -- check. Factoring into 10 per-precompile helpers and/or marking
+  -- Ξ_SNARKV `@[irreducible]` did not resolve this in the current
+  -- prototype. Left as sorry pending a dedicated structural pass.
   sorry
-
-/-- **A5** — Ξ (code execution) preserves `balanceOf C` when code runs
-at `I.codeOwner ≠ C`. The `I.codeOwner = C` specialisation is
-`ΞPreservesAtC`; inside the body when the executing frame makes a
-call to C, we use the `hWitness`.
-
-**Proof status:** Ξ unfolds to `X` on a freshly-minted `EVM.State`.
-`X` is a fuel-bounded iteration of `step`. The proof is induction on
-fuel with these cases per step:
-  - Non-CALL, non-CREATE, non-SELFDESTRUCT: use
-    `EvmYul.step_preserves_balanceOf` (closed in `StepFrame.lean`).
-  - SELFDESTRUCT: use `selfdestruct_balanceOf_ne_Iₐ_ge` (closed in
-    `SelfdestructFrame.lean`), with `C ≠ Iₐ = I.codeOwner` from
-    `h_codeOwner`.
-  - CALL/CALLCODE/DELEGATECALL/STATICCALL: dispatches to `call f ...`
-    which in turn calls `Θ f ...` — need Θ_balanceOf_ge IH.
-  - CREATE/CREATE2: dispatches to `Lambda f ...` — need Λ_balanceOf_ge
-    IH.
-
-The IHs are cross-referential, requiring joint mutual induction.
-
-**Note:** This theorem is declared here (ahead of `Λ_balanceOf_ge`)
-so that `Λ_balanceOf_ge`'s proof can invoke it on the init-code Ξ
-dispatch. The two declarations remain non-mutual in Lean's sense —
-`Ξ_balanceOf_ge`'s open sorry does not depend on `Λ_balanceOf_ge`. -/
-theorem Ξ_balanceOf_ge
-    (fuel : Nat) (createdAccounts : RBSet AccountAddress compare)
-    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
-    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
-    (I : ExecutionEnv .EVM) (C : AccountAddress)
-    (hWF : StateWF σ)
-    (h_codeOwner : C ≠ I.codeOwner)
-    (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
-    (hWitness : ΞPreservesAtC C) :
-    match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
-    | .ok (.success (_, σ', _, _) _) => balanceOf σ' C ≥ balanceOf σ C
-    | .ok (.revert _ _) => True
-    | .error _ => True := by
-  -- Specialisation of the `ΞPreservesAtC` mechanism: when `I.codeOwner ≠ C`,
-  -- we do NOT need a bytecode-specific witness for Ξ itself — we only need
-  -- the joint mutual induction result. We stipulate the latter via the
-  -- same `hWitness` in a specialised form.
-  --
-  -- Structural blocker: Ξ (n+1) unfolds to `X n (D_J I.code 0) freshEvmState`,
-  -- where `X` is a fuel-bounded loop over `step`. Each `step` dispatches to
-  -- CALL/CALLCODE/DELEGATECALL/STATICCALL (→ call f → Θ f at decreasing
-  -- fuel), CREATE/CREATE2 (→ Lambda f at decreasing fuel), SELFDESTRUCT
-  -- (→ `selfdestruct_balanceOf_ne_Iₐ_ge`), or default (→
-  -- `EvmYul.step_preserves_balanceOf`). For the recursive call to X at
-  -- lower fuel we need an inner induction on X's fuel, using the outer
-  -- Θ/Λ IHs. Mechanising this joint induction requires unfolding a
-  -- ~300-line `mutual def` body and case-splitting through ~25 match arms.
-  -- Left as `sorry` pending a dedicated proof pass.
-  match fuel with
-  | 0 =>
-    rw [show EVM.Ξ 0 createdAccounts genesisBlockHeader blocks σ σ₀ g A I
-             = .error .OutOfFuel from rfl]
-    trivial
-  | _ + 1 =>
-    sorry
 
 /-- **A4** — Λ (contract creation) returns a derived address `a ≠ C`
 (by Keccak collision-resistance) and preserves `balanceOf C`.
