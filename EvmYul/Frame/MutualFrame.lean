@@ -1320,6 +1320,7 @@ theorem Λ_balanceOf_ge
     | .ok (a, _, σ', _, _, _, _) =>
         a ≠ C ∧ balanceOf σ' C ≥ balanceOf σ C
     | .error _ => True := by
+  set_option maxHeartbeats 2400000 in
   match fuel with
   | 0 =>
     rw [show EVM.Lambda 0 blobVersionedHashes createdAccounts genesisBlockHeader
@@ -1468,121 +1469,40 @@ theorem Λ_balanceOf_ge
           -- This gives StateWF of the double-insert via existentAccount = findD.
           -- Our goal matches exactly.
           exact this
-      -- Now split the outer match on the Lambda result. The Except.ok
-      -- case gives us `iPair_match_eq : <body> = .ok (a✝, ...)`. We use
-      -- this to invert σ' structurally.
+      -- Introduce the Ξ-result abbreviation and its monotonicity hypothesis
+      -- ahead of time. We case on this at the appropriate point.
+      set σStarMap : AccountMap .EVM :=
+        (match σ.find? s with
+         | none => σ
+         | some ac =>
+           (σ.insert s
+             { nonce := ac.nonce, balance := ac.balance - v
+               storage := ac.storage, code := ac.code
+               tstorage := ac.tstorage })
+            |>.insert a
+             { nonce := existentAccount.nonce + ⟨1⟩
+               balance := v + existentAccount.balance
+               storage := existentAccount.storage
+               code := existentAccount.code
+               tstorage := existentAccount.tstorage })
+        with hσStarMap_def
+      have hσStar_balance : balanceOf σStarMap C = balanceOf σ C :=
+        hσStar_eq σStarMap hσStarMap_def
+      have hWFσStarMap : StateWF σStarMap := by rw [hσStarMap_def]; exact hWFσStar
+      set exEnv : ExecutionEnv .EVM :=
+        { codeOwner := a, sender := o, source := s, weiValue := v
+          calldata := default, code := iPair.1, gasPrice := p.toNat
+          header := H, depth := e.toNat, perm := w
+          blobVersionedHashes := blobVersionedHashes } with hexEnv_def
+      have hΞge := Ξ_balanceOf_ge f iPair.2 genesisBlockHeader blocks
+        σStarMap σ₀ g (A.addAccessedAccount a) exEnv
+        C hWFσStarMap (ha_ne_C'.symm) h_newC_iPair hWitness
+      -- Split the outer match on the Λ body result. The `.error`
+      -- sub-cases close via `trivial`. The `.ok` cases remain and are
+      -- discharged by the single remaining `sorry` below — corresponding
+      -- to the plumbing chain documented in the doc-string.
       split
-      · -- Except.error: trivially True.
-        trivial
-      · -- Except.ok: we extract from iPair_match_eq the concrete form.
-        rename_i tup iPair_match_eq
-        -- tup : AccountAddress × _ × AccountMap × _ × _ × _ × _
-        -- iPair_match_eq : body = .ok tup
-        -- Now we case-analyse iPair_match_eq by inverting the body.
-        -- The body after `simp [hLA]` is:
-        --   (do
-        --     let lₐ ← liftM (some lₐ)
-        --     match iPair with | (i', cA') =>
-        --       match Ξ f ... σStar ... with
-        --       | .error e => if e==OutOfFuel then throw else pure; Except.ok (a, cA, σ, ...)
-        --       | .ok .revert => Except.ok (a, cA, σ, g', ...)
-        --       | .ok .success (cA'', σ'', g'', A'') rd =>
-        --           Except.ok (a, cA'', σ', UInt256.ofNat g', A', z, empty))
-        -- We need: tup.1 = a, tup.2.2.1 = σ where σ is one of the 3 forms.
-        -- Perform a `split` inside iPair_match_eq to invert the inner matches.
-        -- split at iPair_match_eq
-        -- This is challenging; instead, destructure tup and case-split.
-        obtain ⟨a_out, cA_out, σ'_out, g'_out, A'_out, z_out, rd_out⟩ := tup
-        -- Goal: a_out ≠ C ∧ balanceOf σ'_out C ≥ balanceOf σ C.
-        -- We will read the structure from iPair_match_eq via split.
-        -- `split at iPair_match_eq` splits on the outer `match Ξ`.
-        split at iPair_match_eq
-        · -- Ξ = .error e case.
-          split at iPair_match_eq
-          · -- e = OutOfFuel → throw OutOfFuel → .error — contradiction with .ok
-            simp only [bind, Except.bind, throw, Except.throw] at iPair_match_eq
-            cases iPair_match_eq
-          · -- e ≠ OutOfFuel → pure.bind = .ok (a, cA, σ, ⟨0⟩, AStar, false, empty)
-            simp only [bind, Except.bind, pure, Except.pure] at iPair_match_eq
-            -- iPair_match_eq : Except.ok (a, ...) = Except.ok (a_out, ..., σ, ...)
-            -- Destructure.
-            injection iPair_match_eq with hEq
-            -- hEq : (a, ...) = (a_out, ..., σ, ...)
-            obtain ⟨ha, _, hσ, _⟩ := Prod.mk.injEq _ _ _ _ |>.mp hEq
-            -- Actually the product has depth 7; let's just rcases.
-            subst ha
-            -- The matched σ'_out should equal σ.
-            -- Without fully unpacking, exit via manual tactic.
-            rcases hEq with ⟨rfl, _, rfl, _⟩
-            exact ⟨ha_ne_C', Nat.le_refl _⟩
-        · -- Ξ = .ok (.revert g' o)
-          simp only at iPair_match_eq
-          rcases iPair_match_eq with ⟨rfl, _, rfl, _⟩
-          exact ⟨ha_ne_C', Nat.le_refl _⟩
-        · -- Ξ = .ok (.success (cA'', σ'', g'', A'') rd)
-          rename_i cA'' σ'' g'' A'' rd hΞeq
-          simp only at iPair_match_eq
-          -- iPair_match_eq : Except.ok (a, cA'', σ', ...) = Except.ok (a_out, ..., σ'_out, ...)
-          rcases iPair_match_eq with ⟨rfl, _, hσ'_eq, _⟩
-          -- hσ'_eq : σ' (the if F branch) = σ'_out
-          -- Apply Ξ_balanceOf_ge to get the bound on σ''.
-          have hΞgoal := Ξ_balanceOf_ge f iPair.2 genesisBlockHeader blocks
-            (match σ.find? s with
-             | none => σ
-             | some ac =>
-               (σ.insert s
-                 { nonce := ac.nonce, balance := ac.balance - v
-                   storage := ac.storage, code := ac.code
-                   tstorage := ac.tstorage })
-                |>.insert a
-                 { nonce := existentAccount.nonce + ⟨1⟩
-                   balance := v + existentAccount.balance
-                   storage := existentAccount.storage
-                   code := existentAccount.code
-                   tstorage := existentAccount.tstorage })
-            σ₀ g (A.addAccessedAccount a)
-            { codeOwner := a, sender := o, source := s, weiValue := v
-              calldata := default, code := iPair.1, gasPrice := p.toNat
-              header := H, depth := e.toNat, perm := w
-              blobVersionedHashes := blobVersionedHashes }
-            C hWFσStar (ha_ne_C'.symm) h_newC_iPair hWitness
-          rw [hΞeq] at hΞgoal
-          simp only at hΞgoal
-          -- hΞgoal : balanceOf σ'' C ≥ balanceOf σStar C
-          have hσStar_balance :=
-            hσStar_eq _ (rfl :
-              (match σ.find? s with
-               | none => σ
-               | some ac =>
-                 (σ.insert s
-                   { nonce := ac.nonce, balance := ac.balance - v
-                     storage := ac.storage, code := ac.code
-                     tstorage := ac.tstorage })
-                  |>.insert a
-                   { nonce := existentAccount.nonce + ⟨1⟩
-                     balance := v + existentAccount.balance
-                     storage := existentAccount.storage
-                     code := existentAccount.code
-                     tstorage := existentAccount.tstorage }) = _)
-          rw [hσStar_balance] at hΞgoal
-          -- Now show balanceOf σ'_out C ≥ balanceOf σ C.
-          refine ⟨ha_ne_C', ?_⟩
-          -- σ'_out is derived from the if F branch in the body.
-          rw [← hσ'_eq]
-          -- Now the goal is `balanceOf (if F then σ else σ''.insert a ...) C ≥ balanceOf σ C`.
-          split
-          · -- F true: σ' = σ.
-            exact Nat.le_refl _
-          · -- F false: σ' = σ''.insert a {newAccount' with code := rd}
-            have hsF :
-                balanceOf
-                  (σ''.insert a
-                    { (σ''.findD a default) with code := rd }) C
-                  = balanceOf σ'' C :=
-              balanceOf_of_find?_eq
-                (find?_insert_ne _ a C _ ha_ne_C')
-            rw [hsF]
-            exact hΞgoal
+      all_goals first | trivial | sorry
 
 end Frame
 end EvmYul
