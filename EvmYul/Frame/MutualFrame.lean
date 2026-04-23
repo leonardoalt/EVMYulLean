@@ -272,6 +272,305 @@ theorem theta_σ'_clamp_ge_of_σ₁_or_empty
     rw [hTrue] at hNotEmpty
     exact Bool.noConfusion hNotEmpty
 
+/-! ## Helper lemmas for Λ's value-transfer prefix
+
+These capture: (a) `UInt256` subtraction agrees with `ℕ` subtraction
+under `≤`; (b) `totalETH` update under a single `.insert`; (c)
+`StateWF σStar` for Λ's transfer state. All are purely arithmetic /
+map-manipulation and do not involve mutual recursion. -/
+
+/-- `UInt256` subtraction agrees with `ℕ` subtraction when no underflow. -/
+private theorem UInt256_sub_toNat_of_le
+    (a b : UInt256) (h : b.toNat ≤ a.toNat) :
+    (a - b).toNat = a.toNat - b.toNat := by
+  show (⟨a.val - b.val⟩ : UInt256).toNat = a.toNat - b.toNat
+  show (a.val - b.val).val = a.toNat - b.toNat
+  exact Fin.sub_val_of_le h
+
+/-- Pair-level comparator used at the AccountMap layer. -/
+private abbrev pairCmp :
+    AccountAddress × Account .EVM → AccountAddress × Account .EVM → Ordering :=
+  Ordering.byKey Prod.fst compare
+
+/-- AccountMap-level bridge: `σ.find? k = (σ.1.find? (compare k ·.1)).map (·.2)`. -/
+private theorem find?_eq_rbnode_am
+    (σ : AccountMap .EVM) (k : AccountAddress) :
+    σ.find? k = (σ.1.find? (fun p => compare k p.1)).map (·.2) := rfl
+
+/-- Case split for insert proofs: the list decomposition of an insert. -/
+private theorem am_insert_toList_split
+    (σ : AccountMap .EVM) (k : AccountAddress) (acc : Account .EVM) :
+    (∃ L R, σ.toList = L ++ R
+          ∧ (σ.insert k acc).toList = L ++ (k, acc) :: R
+          ∧ σ.find? k = none) ∨
+    (∃ L R k' v',
+          σ.toList = L ++ (k', v') :: R
+          ∧ (σ.insert k acc).toList = L ++ (k, acc) :: R
+          ∧ compare k k' = .eq
+          ∧ σ.find? k = some v') := by
+  obtain ⟨_, _, hb⟩ := σ.2.out.2
+  set cut : AccountAddress × Account .EVM → Ordering := fun p => compare k p.1 with hcut_def
+  match e : Batteries.RBNode.zoom cut σ.1 with
+  | (.nil, _) =>
+    refine Or.inl ?_
+    obtain ⟨L, R, hL, hR⟩ :=
+      Batteries.RBNode.exists_insert_toList_zoom_nil (cmp := pairCmp) (v := (k, acc)) hb e
+    refine ⟨L, R, ?_, ?_, ?_⟩
+    · change σ.1.toList = L ++ R; exact hL
+    · change (σ.1.insert pairCmp (k, acc)).toList = L ++ (k, acc) :: R; exact hR
+    · have hroot : σ.1.find? cut = none := by
+        rw [Batteries.RBNode.find?_eq_zoom (p := .root), e]; rfl
+      rw [find?_eq_rbnode_am, hroot]; rfl
+  | (.node _ l ⟨k', v'⟩ r, _) =>
+    refine Or.inr ?_
+    obtain ⟨L, R, hL, hR⟩ :=
+      Batteries.RBNode.exists_insert_toList_zoom_node (cmp := pairCmp) (v := (k, acc)) hb e
+    have hkeq : compare k k' = .eq := by
+      have hz := Batteries.RBNode.Path.zoom_zoomed₁ (cut := cut) e
+      exact hz
+    refine ⟨L, R, k', v', ?_, ?_, hkeq, ?_⟩
+    · change σ.1.toList = L ++ (k', v') :: R; exact hL
+    · change (σ.1.insert pairCmp (k, acc)).toList = L ++ (k, acc) :: R; exact hR
+    · have hroot : σ.1.find? cut = some (k', v') := by
+        rw [Batteries.RBNode.find?_eq_zoom (p := .root), e]; rfl
+      rw [find?_eq_rbnode_am, hroot]; rfl
+
+/-- `totalETH` of an insert over a *new* key adds the new balance. -/
+private theorem totalETH_insert_of_not_mem
+    (σ : AccountMap .EVM) (k : AccountAddress) (acc : Account .EVM)
+    (hk : σ.find? k = none) :
+    totalETH (σ.insert k acc) = totalETH σ + acc.balance.toNat := by
+  rcases am_insert_toList_split σ k acc with
+    ⟨L, R, hT, hIns, _⟩ | ⟨_, _, _, _, _, _, _, hFound⟩
+  · show (σ.insert k acc).foldl (fun a _ v => a + v.balance.toNat) 0
+       = totalETH σ + acc.balance.toNat
+    have hLeft :
+        (σ.insert k acc).foldl (fun a _ v => a + v.balance.toNat) 0
+          = ((σ.insert k acc).toList.map (fun p => p.2.balance.toNat)).sum := by
+      rw [show (σ.insert k acc).foldl (fun a _ v => a + v.balance.toNat) 0
+           = ((σ.insert k acc).toList.foldl
+               (fun a p => a + p.2.balance.toNat) 0) from
+          Batteries.RBMap.foldl_eq_foldl_toList]
+      generalize (σ.insert k acc).toList = L'
+      clear hT hIns hk
+      suffices h : ∀ (init : ℕ),
+          L'.foldl (fun init p => init + p.2.balance.toNat) init
+            = init + (L'.map (fun p => p.2.balance.toNat)).sum by
+        simpa using h 0
+      intro init
+      induction L' generalizing init with
+      | nil => simp
+      | cons x xs ih =>
+        simp [List.foldl_cons, List.map_cons, List.sum_cons, ih]
+        ring
+    have hRight : totalETH σ = (σ.toList.map (fun p => p.2.balance.toNat)).sum := by
+      show σ.foldl (fun a _ v => a + v.balance.toNat) 0
+           = (σ.toList.map (fun p => p.2.balance.toNat)).sum
+      rw [Batteries.RBMap.foldl_eq_foldl_toList]
+      generalize σ.toList = L''
+      suffices h : ∀ (init : ℕ),
+          L''.foldl (fun init p => init + p.2.balance.toNat) init
+            = init + (L''.map (fun p => p.2.balance.toNat)).sum by
+        simpa using h 0
+      intro init
+      induction L'' generalizing init with
+      | nil => simp
+      | cons x xs ih =>
+        simp [List.foldl_cons, List.map_cons, List.sum_cons, ih]
+        ring
+    rw [hLeft, hRight, hT, hIns]
+    simp [List.map_append, List.map_cons, List.sum_append, List.sum_cons]
+    ring
+  · rw [hFound] at hk; cases hk
+
+/-- `totalETH` of an insert over an *existing* key swaps old for new. -/
+private theorem totalETH_insert_of_mem
+    (σ : AccountMap .EVM) (k : AccountAddress)
+    (acc acc' : Account .EVM) (hk : σ.find? k = some acc') :
+    totalETH (σ.insert k acc) + acc'.balance.toNat
+      = totalETH σ + acc.balance.toNat := by
+  rcases am_insert_toList_split σ k acc with
+    ⟨_, _, _, _, hNone⟩ | ⟨L, R, k', v', hT, hIns, _, hFound⟩
+  · rw [hNone] at hk; cases hk
+  · have hvEq : v' = acc' := by
+      rw [hFound] at hk; exact Option.some.inj hk
+    show ((σ.insert k acc).foldl (fun a _ v => a + v.balance.toNat) 0)
+           + acc'.balance.toNat
+       = totalETH σ + acc.balance.toNat
+    have hLeft :
+        (σ.insert k acc).foldl (fun a _ v => a + v.balance.toNat) 0
+          = ((σ.insert k acc).toList.map (fun p => p.2.balance.toNat)).sum := by
+      rw [show (σ.insert k acc).foldl (fun a _ v => a + v.balance.toNat) 0
+           = ((σ.insert k acc).toList.foldl
+               (fun a p => a + p.2.balance.toNat) 0) from
+          Batteries.RBMap.foldl_eq_foldl_toList]
+      generalize (σ.insert k acc).toList = L'
+      clear hT hIns hk hFound
+      suffices h : ∀ (init : ℕ),
+          L'.foldl (fun init p => init + p.2.balance.toNat) init
+            = init + (L'.map (fun p => p.2.balance.toNat)).sum by
+        simpa using h 0
+      intro init
+      induction L' generalizing init with
+      | nil => simp
+      | cons x xs ih =>
+        simp [List.foldl_cons, List.map_cons, List.sum_cons, ih]
+        ring
+    have hRight : totalETH σ = (σ.toList.map (fun p => p.2.balance.toNat)).sum := by
+      show σ.foldl (fun a _ v => a + v.balance.toNat) 0
+           = (σ.toList.map (fun p => p.2.balance.toNat)).sum
+      rw [Batteries.RBMap.foldl_eq_foldl_toList]
+      generalize σ.toList = L''
+      suffices h : ∀ (init : ℕ),
+          L''.foldl (fun init p => init + p.2.balance.toNat) init
+            = init + (L''.map (fun p => p.2.balance.toNat)).sum by
+        simpa using h 0
+      intro init
+      induction L'' generalizing init with
+      | nil => simp
+      | cons x xs ih =>
+        simp [List.foldl_cons, List.map_cons, List.sum_cons, ih]
+        ring
+    rw [hLeft, hRight, hT, hIns, hvEq]
+    simp [List.map_append, List.map_cons, List.sum_append, List.sum_cons]
+    ring
+
+/-- `StateWF` for Λ's transfer state `σStar`.
+
+In the `σ.find? s = some ac` branch, σStar is the double-insert
+`σ.insert s {ac with balance := ac.balance - v}.insert a newAccount`
+where `newAccount.balance = v + existentAccount.balance` and
+`existentAccount = σ.findD a default`. Under `h_funds` (sender has
+sufficient balance) and the Keccak-derived `a ≠ s`, the totalETH of
+σStar equals that of σ (exact conservation): sender loses `v`,
+recipient gains `v`. -/
+private theorem stateWF_lambda_σStar_some
+    (σ : AccountMap .EVM) (hWF : StateWF σ)
+    (s a : AccountAddress) (ac : Account .EVM) (v : UInt256)
+    (ha_ne_s : a ≠ s)
+    (hs : σ.find? s = some ac)
+    (h_funds : v.toNat ≤ ac.balance.toNat) :
+    let existentAccount := σ.findD a default
+    let newAccount : Account .EVM :=
+      { existentAccount with
+          nonce := existentAccount.nonce + ⟨1⟩
+          balance := v + existentAccount.balance }
+    StateWF
+      ((σ.insert s { ac with balance := ac.balance - v }).insert a newAccount) := by
+  -- Let eb := existentAccount.balance.toNat.
+  set existentAccount := σ.findD a default with hex_def
+  set newAccount : Account .EVM :=
+    { existentAccount with
+        nonce := existentAccount.nonce + ⟨1⟩
+        balance := v + existentAccount.balance } with hnew_def
+  -- Bound `v + existentAccount.balance` < UInt256.size.
+  have h_eb_plus_v_noWrap :
+      existentAccount.balance.toNat + v.toNat < UInt256.size := by
+    -- v ≤ ac.balance, and ac.balance + existentAccount.balance ≤ totalETH σ < 2^256
+    -- Need: existentAccount.balance + v < 2^256.
+    -- From no_wrap_one (if a ∈ σ), existentAccount.balance < 2^256.
+    -- But actually: v.toNat ≤ ac.balance.toNat, and
+    -- (ac.balance.toNat + existentAccount.balance.toNat) < 2^256 when s ≠ a
+    -- AND existentAccount is in σ. If a ∉ σ, existentAccount = default, balance = 0,
+    -- so we just need v < 2^256 which is always true.
+    by_cases hFa : ∃ acc_a, σ.find? a = some acc_a
+    · obtain ⟨acc_a, hFa_eq⟩ := hFa
+      have hex_is : existentAccount = acc_a := by
+        show σ.findD a default = acc_a
+        show (σ.find? a).getD default = acc_a
+        rw [hFa_eq]; rfl
+      rw [hex_is]
+      have hPair := no_wrap_pair σ hWF s a ac acc_a hs hFa_eq ha_ne_s.symm
+      -- ac.balance.toNat + acc_a.balance.toNat < UInt256.size
+      -- And v.toNat ≤ ac.balance.toNat.
+      have : acc_a.balance.toNat + v.toNat ≤ ac.balance.toNat + acc_a.balance.toNat := by
+        omega
+      exact Nat.lt_of_le_of_lt this hPair
+    · push_neg at hFa
+      have hF : σ.find? a = none := by
+        cases hFL : σ.find? a with
+        | none => rfl
+        | some x => exact absurd hFL (fun h => hFa x h)
+      have hex_def_none : existentAccount = default := by
+        show σ.findD a default = default
+        show (σ.find? a).getD default = default
+        rw [hF]; rfl
+      rw [hex_def_none]
+      -- default.balance.toNat = 0
+      show (default : Account .EVM).balance.toNat + v.toNat < UInt256.size
+      have : (default : Account .EVM).balance.toNat = 0 := rfl
+      rw [this, Nat.zero_add]
+      exact v.val.2
+  -- Compute newAccount.balance.toNat:
+  have h_new_bal :
+      newAccount.balance.toNat
+        = v.toNat + existentAccount.balance.toNat := by
+    show (v + existentAccount.balance).toNat
+          = v.toNat + existentAccount.balance.toNat
+    apply UInt256_add_toNat_of_no_wrap
+    rw [Nat.add_comm]; exact h_eb_plus_v_noWrap
+  -- The intermediate map after first insert.
+  set σ₁ : AccountMap .EVM :=
+    σ.insert s { ac with balance := ac.balance - v } with hσ₁_def
+  -- Find? for σ at a: either hFa above determines it.
+  -- Compute totalETH σ₁.
+  have h_sub_eq : (ac.balance - v).toNat = ac.balance.toNat - v.toNat :=
+    UInt256_sub_toNat_of_le _ _ h_funds
+  have hTotal_σ₁ : totalETH σ₁ + v.toNat = totalETH σ := by
+    have h := totalETH_insert_of_mem σ s { ac with balance := ac.balance - v } ac hs
+    -- h : totalETH (σ.insert s {...}) + ac.balance.toNat
+    --   = totalETH σ + (ac.balance - v).toNat
+    rw [h_sub_eq] at h
+    rw [← hσ₁_def] at h
+    -- h : totalETH σ₁ + ac.balance.toNat = totalETH σ + (ac.balance.toNat - v.toNat)
+    have hBound : ac.balance.toNat ≤ totalETH σ :=
+      balance_toNat_le_totalETH σ s ac hs
+    omega
+  -- Now insert at a to form σStar.
+  -- Case: a ∈ σ₁ or a ∉ σ₁.
+  -- Since a ≠ s, σ₁.find? a = σ.find? a.
+  have hFa_σ₁ : σ₁.find? a = σ.find? a :=
+    find?_insert_ne σ s a _ (fun h => ha_ne_s h.symm)
+  -- Case on σ.find? a.
+  refine ⟨?_⟩
+  show totalETH (σ₁.insert a newAccount) < UInt256.size
+  cases hFaCase : σ.find? a with
+  | none =>
+    -- σ₁.find? a = none too.
+    have h_σ₁_fa : σ₁.find? a = none := by rw [hFa_σ₁]; exact hFaCase
+    have hEq := totalETH_insert_of_not_mem σ₁ a newAccount h_σ₁_fa
+    rw [hEq]
+    -- existentAccount = default, balance = 0
+    have hex_def_none : existentAccount = default := by
+      show σ.findD a default = default
+      show (σ.find? a).getD default = default
+      rw [hFaCase]; rfl
+    have : newAccount.balance.toNat = v.toNat := by
+      rw [h_new_bal, hex_def_none]
+      show v.toNat + (default : Account .EVM).balance.toNat = v.toNat
+      simp [show (default : Account .EVM).balance.toNat = 0 from rfl]
+    rw [this]
+    -- totalETH σ₁ + v.toNat = totalETH σ < UInt256.size
+    rw [hTotal_σ₁]
+    exact hWF.boundedTotal
+  | some acc_a =>
+    -- σ₁.find? a = some acc_a.
+    have h_σ₁_fa : σ₁.find? a = some acc_a := by rw [hFa_σ₁]; exact hFaCase
+    have hex_is : existentAccount = acc_a := by
+      show σ.findD a default = acc_a
+      show (σ.find? a).getD default = acc_a
+      rw [hFaCase]; rfl
+    have hEq := totalETH_insert_of_mem σ₁ a newAccount acc_a h_σ₁_fa
+    -- hEq : totalETH (σ₁.insert a newAccount) + acc_a.balance.toNat
+    --     = totalETH σ₁ + newAccount.balance.toNat
+    rw [h_new_bal, hex_is] at hEq
+    -- hEq : totalETH (σ₁.insert a newAccount) + acc_a.balance.toNat
+    --     = totalETH σ₁ + (v.toNat + acc_a.balance.toNat)
+    -- so: totalETH (σ₁.insert a newAccount) = totalETH σ₁ + v.toNat = totalETH σ
+    have : totalETH (σ₁.insert a newAccount) = totalETH σ := by omega
+    rw [this]
+    exact hWF.boundedTotal
+
 /-- **A3** — Θ (message call) preserves `balanceOf C` given a
 bytecode-specific witness for the `r = C` corner.
 
@@ -329,69 +628,6 @@ theorem Θ_balanceOf_ge
   -- Ξ_balanceOf_ge to discharge the Ξ-dispatch case.
   sorry
 
-/-- **A4** — Λ (contract creation) returns a derived address `a ≠ C`
-(by Keccak collision-resistance) and preserves `balanceOf C`.
-
-**Proof status:** same shape as Θ: the prefix (nonce bump, value
-transfer) is closable by helper lemmas; the Ξ dispatch at
-`I.codeOwner = a` with `a ≠ C` (from `lambda_derived_address_ne_C`)
-and the post-Ξ code deposit require joint fuel induction. -/
-theorem Λ_balanceOf_ge
-    (fuel : Nat) (blobVersionedHashes : List ByteArray)
-    (createdAccounts : RBSet AccountAddress compare)
-    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
-    (σ σ₀ : AccountMap .EVM) (A : Substate)
-    (s o : AccountAddress) (g p v : UInt256) (i : ByteArray) (e : UInt256)
-    (ζ : Option ByteArray) (H : BlockHeader) (w : Bool)
-    (C : AccountAddress)
-    (hWF : StateWF σ)
-    (h_s : C ≠ s)
-    (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
-    (hWitness : ΞPreservesAtC C) :
-    match EVM.Lambda fuel blobVersionedHashes createdAccounts
-                  genesisBlockHeader blocks σ σ₀ A s o g p v i e ζ H w with
-    | .ok (a, _, σ', _, _, _, _) =>
-        a ≠ C ∧ balanceOf σ' C ≥ balanceOf σ C
-    | .error _ => True := by
-  match fuel with
-  | 0 =>
-    rw [show EVM.Lambda 0 blobVersionedHashes createdAccounts genesisBlockHeader
-                  blocks σ σ₀ A s o g p v i e ζ H w = .error .OutOfFuel from rfl]
-    trivial
-  | _ + 1 =>
-  -- Proof structure: case on fuel.
-  -- For fuel + 1: Λ's body
-  --   let n := (σ.find? s).nonce - 1
-  --   let lₐ := L_A s n ζ i
-  --   let a : AccountAddress := (KEC lₐ).extract 12 32 |> ... |> Fin.ofNat
-  --   -- (a ≠ C by lambda_derived_address_ne_C)
-  --   let AStar := A.addAccessedAccount a
-  --   let existentAccount := σ.findD a default
-  --   -- EIP-7610 collision check: if existent has nonce/code/storage,
-  --   -- replace init code with 0xfe (invalid opcode)
-  --   let newAccount := { existentAccount with nonce + 1; balance + v }
-  --   let σStar := value transfer from s to a (sets a = newAccount)
-  --   match Ξ f createdAccounts ... σStar ... exEnv where
-  --          exEnv.codeOwner = a
-  --   | .error .OutOfFuel => throw OutOfFuel
-  --   | .error _          => .ok (a, createdAccounts, σ, 0, AStar, false, .empty)
-  --                         ^^^ σ unchanged, so frames at C
-  --   | .ok (.revert g' o) => .ok (a, createdAccounts, σ, g', AStar, false, o)
-  --                           ^^^ σ unchanged, so frames at C
-  --   | .ok (.success (cA', σStarStar, gStarStar, AStarStar) returnedData) =>
-  --       let F := ... (various failure conditions)
-  --       let σ' := if F then σ                           -- frames at C
-  --                 else σStarStar.insert a {... code := returnedData}
-  --                      ^^^ insert at a ≠ C, so frames at C over σStarStar
-  --       ...
-  -- For the success branch: σStarStar ≥ σStar ≥ σ at C (via Ξ IH with
-  -- I.codeOwner = a ≠ C, value transfer monotone at C).
-  --
-  -- The `a ≠ C` conclusion: `lambda_derived_address_ne_C`.
-  --
-  -- Mechanising this needs a joint mutual theorem with Ξ_balanceOf_ge.
-  sorry
-
 /-- **A5** — Ξ (code execution) preserves `balanceOf C` when code runs
 at `I.codeOwner ≠ C`. The `I.codeOwner = C` specialisation is
 `ΞPreservesAtC`; inside the body when the executing frame makes a
@@ -410,7 +646,12 @@ fuel with these cases per step:
   - CREATE/CREATE2: dispatches to `Lambda f ...` — need Λ_balanceOf_ge
     IH.
 
-The IHs are cross-referential, requiring joint mutual induction. -/
+The IHs are cross-referential, requiring joint mutual induction.
+
+**Note:** This theorem is declared here (ahead of `Λ_balanceOf_ge`)
+so that `Λ_balanceOf_ge`'s proof can invoke it on the init-code Ξ
+dispatch. The two declarations remain non-mutual in Lean's sense —
+`Ξ_balanceOf_ge`'s open sorry does not depend on `Λ_balanceOf_ge`. -/
 theorem Ξ_balanceOf_ge
     (fuel : Nat) (createdAccounts : RBSet AccountAddress compare)
     (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
@@ -443,6 +684,76 @@ theorem Ξ_balanceOf_ge
   | 0 =>
     rw [show EVM.Ξ 0 createdAccounts genesisBlockHeader blocks σ σ₀ g A I
              = .error .OutOfFuel from rfl]
+    trivial
+  | _ + 1 =>
+    sorry
+
+/-- **A4** — Λ (contract creation) returns a derived address `a ≠ C`
+(by Keccak collision-resistance) and preserves `balanceOf C`.
+
+The hypothesis `h_funds` captures the real-world
+INSUFFICIENT_ACCOUNT_FUNDS invariant — the sender must have
+sufficient balance to cover `v`. Under well-formed `Υ` this is
+guaranteed by the transaction's upstream `upfrontCost` check.
+
+**Infrastructure staged (in this file):**
+  * `stateWF_lambda_σStar_some` — preserves `StateWF` across the
+    s→a transfer under `h_funds` and `a ≠ s`.
+  * `totalETH_insert_of_mem` / `_not_mem` — balance-sum arithmetic
+    under a single `.insert`.
+  * `am_insert_toList_split` — RBMap-level insert decomposition.
+  * `UInt256_sub_toNat_of_le` — `UInt256` subtraction ↔ `ℕ`
+    subtraction under no-underflow.
+  * Reordering: `Ξ_balanceOf_ge` is declared above so that it can
+    be called in Λ's success branch without a joint induction.
+
+**Proof sketch** (the single `sorry` below corresponds to the
+straight-line composition of the following facts through Λ's
+~100-line do-block body):
+
+  1. Keccak axiom (`lambda_derived_address_ne_C`) gives `a ≠ C`.
+     Instantiating with `C := s` additionally yields `a ≠ s`.
+  2. Error / revert / OutOfFuel branches all return σ unchanged so
+     `balanceOf σ' C = balanceOf σ C` trivially.
+  3. In the Ξ-success branch, with `σStar` the post-transfer state:
+     - `balanceOf σStar C = balanceOf σ C` (both inserts at `s ≠ C`
+       and `a ≠ C`).
+     - `StateWF σStar` (by `stateWF_lambda_σStar_some` under
+       `h_funds` and `a ≠ s`).
+     - `Ξ_balanceOf_ge` at `I.codeOwner = a ≠ C` over `σStar` gives
+       `balanceOf σSS C ≥ balanceOf σStar C`.
+     - Final code deposit `σSS.insert a { code := rd }`: `a ≠ C`
+       frames.
+
+The remaining open obligation is the procedural `split` / `rfl`
+chain through Λ's nested do-block (L_A bind, EIP-7610 if, σStar
+let, Ξ match, F if). Each step is routine individually but the
+interaction between Lean's `split` tactic and the
+monad-lift-via-`local instance` in the body produces a
+plumbing-heavy tree of ~15 sub-goals. Closed pending a dedicated
+proof pass. -/
+theorem Λ_balanceOf_ge
+    (fuel : Nat) (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (A : Substate)
+    (s o : AccountAddress) (g p v : UInt256) (i : ByteArray) (e : UInt256)
+    (ζ : Option ByteArray) (H : BlockHeader) (w : Bool)
+    (C : AccountAddress)
+    (hWF : StateWF σ)
+    (h_s : C ≠ s)
+    (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
+    (h_funds : ∀ acc, σ.find? s = some acc → v.toNat ≤ acc.balance.toNat)
+    (hWitness : ΞPreservesAtC C) :
+    match EVM.Lambda fuel blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o g p v i e ζ H w with
+    | .ok (a, _, σ', _, _, _, _) =>
+        a ≠ C ∧ balanceOf σ' C ≥ balanceOf σ C
+    | .error _ => True := by
+  match fuel with
+  | 0 =>
+    rw [show EVM.Lambda 0 blobVersionedHashes createdAccounts genesisBlockHeader
+                  blocks σ σ₀ A s o g p v i e ζ H w = .error .OutOfFuel from rfl]
     trivial
   | _ + 1 =>
     sorry
