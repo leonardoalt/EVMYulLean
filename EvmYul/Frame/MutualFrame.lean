@@ -1494,15 +1494,87 @@ theorem Λ_balanceOf_ge
           calldata := default, code := iPair.1, gasPrice := p.toNat
           header := H, depth := e.toNat, perm := w
           blobVersionedHashes := blobVersionedHashes } with hexEnv_def
-      have hΞge := Ξ_balanceOf_ge f iPair.2 genesisBlockHeader blocks
-        σStarMap σ₀ g (A.addAccessedAccount a) exEnv
-        C hWFσStarMap (ha_ne_C'.symm) h_newC_iPair hWitness
-      -- Split the outer match on the Λ body result. The `.error`
-      -- sub-cases close via `trivial`. The `.ok` cases remain and are
-      -- discharged by the single remaining `sorry` below — corresponding
-      -- to the plumbing chain documented in the doc-string.
+      -- We will invoke `Ξ_balanceOf_ge` directly inside the success case to
+      -- avoid motive-abstraction issues when splitting the Lambda body's
+      -- outer Except match.
+      -- Split on the Lambda body's outer Except match. `h_2` (error) is trivial.
       split
-      all_goals first | trivial | sorry
+      case h_2 => trivial
+      case h_1 heq =>
+        -- Now split on the inner Ξ match (inside heq). The outer `do` bind
+        -- in heq's LHS must be simplified first.
+        simp only [bind, Except.bind, pure, Except.pure] at heq
+        -- Now split the inner match on `liftM (some lₐ)`.
+        split at heq
+        · -- liftM returned error: heq becomes `Except.error _ = Except.ok _`, contradiction.
+          exact absurd heq (by simp)
+        · -- liftM returned ok. The motive-bound variable equals lₐ.
+          rename_i lin hvok
+          -- Extract lin = lₐ from the liftM equation.
+          have hv_eq : lin = lₐ := by
+            injection hvok with h1
+            exact h1.symm
+          rw [hv_eq] at heq
+          clear hvok hv_eq lin
+          -- Now split the Ξ match in heq.
+          split at heq
+          · -- Ξ returned error. heq: (if e==OutOfFuel then .error OutOfFuel else .ok(...)) = .ok(...)
+            -- The then-branch gives contradiction; we must be in else-branch.
+            split at heq
+            · -- then-branch: .error = .ok → contradiction
+              exact absurd heq (by simp)
+            · -- else-branch: .ok (a, _, σ, 0, _, false, .empty) = .ok(a✝, _, σ'✝, _, _, _, _)
+              -- Extract a✝ = a and σ'✝ = σ.
+              injection heq with h1
+              injection h1 with h1a h1b
+              injection h1b with h1ba h1bb
+              injection h1bb with h1bba h1bbb
+              subst h1a
+              subst h1bba
+              refine ⟨ha_ne_C', ?_⟩
+              exact Nat.le_refl _
+          · -- Ξ returned revert. heq: .ok(a, _, σ, g', _, false, o) = .ok(a✝, _, σ'✝, _, _, _, _)
+            injection heq with h1
+            injection h1 with h1a h1b
+            injection h1b with h1ba h1bb
+            injection h1bb with h1bba h1bbb
+            subst h1a
+            subst h1bba
+            refine ⟨ha_ne_C', ?_⟩
+            exact Nat.le_refl _
+          · -- Ξ returned success. Main case.
+            rename_i cA_out σ_Ξ gSS AStarStar returnedData hΞeq
+            -- hΞeq : Ξ f ... = .ok (.success (cA_out, σ_Ξ, gSS, AStarStar) returnedData)
+            -- heq : .ok (a, cA_out, σ_final, ...) = .ok (a✝, fst✝³, σ'✝, ...)
+            -- where σ_final = if F then σ else σ_Ξ.insert a {... with code := returnedData}
+            injection heq with h1
+            injection h1 with h1a h1b
+            injection h1b with h1ba h1bb
+            injection h1bb with h1bba h1bbb
+            subst h1a
+            subst h1bba
+            refine ⟨ha_ne_C', ?_⟩
+            -- Build Ξ monotonicity fact from scratch using the folded forms.
+            -- `hΞeq_folded` will be derived from `hΞeq` by using the fact that
+            -- the inlined Ξ call is defeq to the folded one.
+            have hΞeq_folded :
+                EVM.Ξ f iPair.2 genesisBlockHeader blocks σStarMap σ₀ g
+                      (A.addAccessedAccount a) exEnv
+                    = .ok (.success (cA_out, σ_Ξ, gSS, AStarStar) returnedData) := hΞeq
+            have hΞge_raw := Ξ_balanceOf_ge f iPair.2 genesisBlockHeader blocks
+              σStarMap σ₀ g (A.addAccessedAccount a) exEnv
+              C hWFσStarMap (ha_ne_C'.symm) h_newC_iPair hWitness
+            rw [hΞeq_folded] at hΞge_raw
+            -- hΞge_raw : balanceOf σ_Ξ C ≥ balanceOf σStarMap C
+            have hσ_Ξ_ge : balanceOf σ_Ξ C ≥ balanceOf σ C := by
+              rw [← hσStar_balance]; exact hΞge_raw
+            -- Split on the outer `if` (the F condition) in the goal.
+            split_ifs with hF
+            · -- F=true: σ_final = σ, so balanceOf σ C ≥ balanceOf σ C.
+              exact Nat.le_refl (balanceOf σ C)
+            · -- F=false: σ_final = σ_Ξ.insert a {... with code := returnedData}.
+              rw [balanceOf_of_find?_eq (find?_insert_ne _ a C _ ha_ne_C')]
+              exact hσ_Ξ_ge
 
 end Frame
 end EvmYul
