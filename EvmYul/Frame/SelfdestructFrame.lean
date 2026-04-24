@@ -216,5 +216,77 @@ theorem selfdestruct_balanceOf_ne_Iₐ_ge
   case _ hPop =>
     simp at h
 
+-- `selfdestruct_preserves_StateWF` is proved in MutualFrame.lean (it
+-- needs `totalETH_insert_of_mem` / `_not_mem` which live there).
+
+/-- SELFDESTRUCT preserves executionEnv. -/
+theorem selfdestruct_preserves_executionEnv
+    (s s' : EVM.State)
+    (h : EvmYul.step (.SELFDESTRUCT : Operation .EVM) .none s = .ok s') :
+    s'.executionEnv = s.executionEnv := by
+  unfold EvmYul.step at h
+  simp only [Id.run] at h
+  split at h
+  case _ _ _ _ =>
+    split at h
+    case _ _ =>
+      split at h
+      case _ _ => simp only [Except.ok.injEq] at h; subst h; rfl
+      case _ σ_Iₐ _ =>
+        split at h
+        case _ _ =>
+          split at h
+          all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+        case _ σ_r _ =>
+          split at h
+          all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+    case _ _ =>
+      split at h
+      case _ _ => simp only [Except.ok.injEq] at h; subst h; rfl
+      case _ σ_Iₐ _ =>
+        split at h
+        case _ _ =>
+          split at h
+          all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+        case _ σ_r _ =>
+          split at h
+          all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+  case _ _ => simp at h
+
+/-- SELFDESTRUCT preserves createdAccounts (it only modifies
+`substate.selfDestructSet`, not `createdAccounts`). -/
+theorem selfdestruct_preserves_createdAccounts
+    (s s' : EVM.State)
+    (h : EvmYul.step (.SELFDESTRUCT : Operation .EVM) .none s = .ok s') :
+    s'.createdAccounts = s.createdAccounts := by
+  unfold EvmYul.step at h
+  simp only [Id.run] at h
+  split at h
+  case _ _ _ _ =>
+    split at h
+    case _ _ =>
+      split at h
+      case _ _ => simp only [Except.ok.injEq] at h; subst h; rfl
+      case _ σ_Iₐ _ =>
+        split at h
+        case _ _ =>
+          split at h
+          all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+        case _ σ_r _ =>
+          split at h
+          all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+    case _ _ =>
+      split at h
+      case _ _ => simp only [Except.ok.injEq] at h; subst h; rfl
+      case _ σ_Iₐ _ =>
+        split at h
+        case _ _ =>
+          split at h
+          all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+        case _ σ_r _ =>
+          split at h
+          all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+  case _ _ => simp at h
+
 end Frame
 end EvmYul

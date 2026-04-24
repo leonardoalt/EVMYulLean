@@ -40,9 +40,26 @@ touch the `toState.toSharedState.toState.accountMap` field. -/
     (s : EVM.State) (stack : Stack UInt256) (pcΔ : ℕ) :
     (s.replaceStackAndIncrPC stack pcΔ).accountMap = s.accountMap := rfl
 
+/-- `replaceStackAndIncrPC` only touches `pc` and `stack`. -/
+@[simp] theorem executionEnv_replaceStackAndIncrPC
+    (s : EVM.State) (stack : Stack UInt256) (pcΔ : ℕ) :
+    (s.replaceStackAndIncrPC stack pcΔ).executionEnv = s.executionEnv := rfl
+
+/-- `replaceStackAndIncrPC` only touches `pc` and `stack`. -/
+@[simp] theorem createdAccounts_replaceStackAndIncrPC
+    (s : EVM.State) (stack : Stack UInt256) (pcΔ : ℕ) :
+    (s.replaceStackAndIncrPC stack pcΔ).createdAccounts = s.createdAccounts := rfl
+
 /-- `incrPC` only touches `pc`. -/
 @[simp] theorem accountMap_incrPC (s : EVM.State) (pcΔ : ℕ) :
     (s.incrPC pcΔ).accountMap = s.accountMap := rfl
+
+@[simp] theorem executionEnv_incrPC (s : EVM.State) (pcΔ : ℕ) :
+    (s.incrPC pcΔ).executionEnv = s.executionEnv := rfl
+
+@[simp] theorem createdAccounts_incrPC (s : EVM.State) (pcΔ : ℕ) :
+    (s.incrPC pcΔ).createdAccounts = s.createdAccounts := rfl
+
 
 theorem execUnOp_preserves_accountMap
     {f : Primop.Unary} {s s' : EVM.State}
@@ -857,6 +874,660 @@ theorem EvmYul.step_preserves_balanceOf
     | Log o          => exact EvmYul.step_opRow_Log o arg s s' h
     | System o       => exact EvmYul.step_opRow_System o arg s s' h_handled h_ne h
   exact h' a
+
+/-! ## executionEnv / createdAccounts preservation
+
+Every handled EVM op leaves these two fields untouched. We prove this in
+one pair of uniform theorems. The key observation: for each helper `H`
+in PrimOps.lean (and each inline `.ok` in Semantics.lean), the result
+state is of the form `evmState'.replaceStackAndIncrPC stk` where
+`evmState'` is obtained from `evmState` by a record update that touches
+neither `executionEnv` nor `createdAccounts` (only `toMachineState`,
+`accountMap`, `substate`, or `toState` are modified — and `toState`
+itself, when modified via `sstore`/`tstore`/`balance`/`sload`/`tload`,
+leaves `executionEnv` and `createdAccounts` alone). -/
+
+-- ExecutionEnv preservation helpers (each mirrors a `_preserves_accountMap` helper).
+
+theorem execUnOp_preserves_eEnv_cA
+    {f : Primop.Unary} {s s' : EVM.State}
+    (h : EVM.execUnOp f s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.execUnOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+  · exact absurd h (by simp)
+
+theorem execBinOp_preserves_eEnv_cA
+    {f : Primop.Binary} {s s' : EVM.State}
+    (h : EVM.execBinOp f s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.execBinOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+  · exact absurd h (by simp)
+
+theorem execTriOp_preserves_eEnv_cA
+    {f : Primop.Ternary} {s s' : EVM.State}
+    (h : EVM.execTriOp f s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.execTriOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+  · exact absurd h (by simp)
+
+theorem execQuadOp_preserves_eEnv_cA
+    {f : Primop.Quaternary} {s s' : EVM.State}
+    (h : EVM.execQuadOp f s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.execQuadOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+  · exact absurd h (by simp)
+
+theorem executionEnvOp_preserves_eEnv_cA
+    {op : ExecutionEnv .EVM → UInt256} {s s' : EVM.State}
+    (h : EVM.executionEnvOp op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.executionEnvOp at h
+  simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+
+theorem unaryExecutionEnvOp_preserves_eEnv_cA
+    {op : ExecutionEnv .EVM → UInt256 → UInt256} {s s' : EVM.State}
+    (h : EVM.unaryExecutionEnvOp op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.unaryExecutionEnvOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+  · exact absurd h (by simp)
+
+theorem machineStateOp_preserves_eEnv_cA
+    {op : MachineState → UInt256} {s s' : EVM.State}
+    (h : EVM.machineStateOp op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.machineStateOp at h
+  simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+
+theorem stateOp_preserves_eEnv_cA
+    {op : EvmYul.State .EVM → UInt256} {s s' : EVM.State}
+    (h : EVM.stateOp op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.stateOp at h
+  simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+
+theorem binaryMachineStateOp_preserves_eEnv_cA
+    {op : MachineState → UInt256 → UInt256 → MachineState} {s s' : EVM.State}
+    (h : EVM.binaryMachineStateOp op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.binaryMachineStateOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+  · exact absurd h (by simp)
+
+theorem binaryMachineStateOp'_preserves_eEnv_cA
+    {op : MachineState → UInt256 → UInt256 → UInt256 × MachineState}
+    {s s' : EVM.State}
+    (h : EVM.binaryMachineStateOp' op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.binaryMachineStateOp' at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+  · exact absurd h (by simp)
+
+theorem ternaryMachineStateOp_preserves_eEnv_cA
+    {op : MachineState → UInt256 → UInt256 → UInt256 → MachineState}
+    {s s' : EVM.State}
+    (h : EVM.ternaryMachineStateOp op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.ternaryMachineStateOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+  · exact absurd h (by simp)
+
+theorem dup_preserves_eEnv_cA
+    {n : ℕ} {s s' : EVM.State}
+    (h : EvmYul.dup n s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EvmYul.dup at h
+  simp only [] at h
+  by_cases hlen : (s.stack.take n).length = n
+  · rw [if_pos hlen] at h
+    injection h with h; subst h; exact ⟨rfl, rfl⟩
+  · rw [if_neg hlen] at h
+    exact absurd h (by simp)
+
+theorem swap_preserves_eEnv_cA
+    {n : ℕ} {s s' : EVM.State}
+    (h : EvmYul.swap n s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EvmYul.swap at h
+  simp only [] at h
+  by_cases hlen : (s.stack.take (n + 1)).length = n + 1
+  · rw [if_pos hlen] at h
+    injection h with h; subst h; exact ⟨rfl, rfl⟩
+  · rw [if_neg hlen] at h
+    exact absurd h (by simp)
+
+theorem ternaryCopyOp_preserves_eEnv_cA
+    {op : SharedState .EVM → UInt256 → UInt256 → UInt256 → SharedState .EVM}
+    {s s' : EVM.State}
+    (hOpEnv : ∀ ss a b c,
+      (op ss a b c).toState.executionEnv = ss.toState.executionEnv)
+    (hOpCA : ∀ ss a b c,
+      (op ss a b c).toState.createdAccounts = ss.toState.createdAccounts)
+    (h : EVM.ternaryCopyOp op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.ternaryCopyOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h
+    refine ⟨?_, ?_⟩
+    · show (op s.toSharedState _ _ _).toState.executionEnv = s.executionEnv
+      exact hOpEnv _ _ _ _
+    · show (op s.toSharedState _ _ _).toState.createdAccounts = s.createdAccounts
+      exact hOpCA _ _ _ _
+  · exact absurd h (by simp)
+
+theorem quaternaryCopyOp_preserves_eEnv_cA
+    {op : SharedState .EVM → UInt256 → UInt256 → UInt256 → UInt256 → SharedState .EVM}
+    {s s' : EVM.State}
+    (hOpEnv : ∀ ss a b c d,
+      (op ss a b c d).toState.executionEnv = ss.toState.executionEnv)
+    (hOpCA : ∀ ss a b c d,
+      (op ss a b c d).toState.createdAccounts = ss.toState.createdAccounts)
+    (h : EVM.quaternaryCopyOp op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.quaternaryCopyOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h
+    refine ⟨?_, ?_⟩
+    · show (op s.toSharedState _ _ _ _).toState.executionEnv = s.executionEnv
+      exact hOpEnv _ _ _ _ _
+    · show (op s.toSharedState _ _ _ _).toState.createdAccounts = s.createdAccounts
+      exact hOpCA _ _ _ _ _
+  · exact absurd h (by simp)
+
+-- Per-op eEnv/cA preservation for shared-state helpers:
+
+theorem calldatacopy_preserves_eEnv
+    {τ} (self : SharedState τ) (a b c : UInt256) :
+    (SharedState.calldatacopy self a b c).toState.executionEnv
+      = self.toState.executionEnv := rfl
+
+theorem calldatacopy_preserves_cA
+    {τ} (self : SharedState τ) (a b c : UInt256) :
+    (SharedState.calldatacopy self a b c).toState.createdAccounts
+      = self.toState.createdAccounts := rfl
+
+theorem codeCopy_preserves_eEnv
+    (self : SharedState .EVM) (a b c : UInt256) :
+    (SharedState.codeCopy self a b c).toState.executionEnv
+      = self.toState.executionEnv := rfl
+
+theorem codeCopy_preserves_cA
+    (self : SharedState .EVM) (a b c : UInt256) :
+    (SharedState.codeCopy self a b c).toState.createdAccounts
+      = self.toState.createdAccounts := rfl
+
+theorem extCodeCopy'_preserves_eEnv
+    (self : SharedState .EVM) (acc a b c : UInt256) :
+    (SharedState.extCodeCopy' self acc a b c).toState.executionEnv
+      = self.toState.executionEnv := by
+  unfold SharedState.extCodeCopy'; rfl
+
+theorem extCodeCopy'_preserves_cA
+    (self : SharedState .EVM) (acc a b c : UInt256) :
+    (SharedState.extCodeCopy' self acc a b c).toState.createdAccounts
+      = self.toState.createdAccounts := by
+  unfold SharedState.extCodeCopy'; rfl
+
+theorem evmLogOp_preserves_eEnv
+    (s : EVM.State) (μ₀ μ₁ : UInt256) (t : Array UInt256) :
+    (EVM.evmLogOp s μ₀ μ₁ t).executionEnv = s.executionEnv := rfl
+
+theorem evmLogOp_preserves_cA
+    (s : EVM.State) (μ₀ μ₁ : UInt256) (t : Array UInt256) :
+    (EVM.evmLogOp s μ₀ μ₁ t).createdAccounts = s.createdAccounts := rfl
+
+theorem log0Op_preserves_eEnv_cA
+    {s s' : EVM.State} (h : EVM.log0Op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.log0Op at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h
+    refine ⟨?_, ?_⟩ <;> rfl
+  · exact absurd h (by simp)
+
+theorem log1Op_preserves_eEnv_cA
+    {s s' : EVM.State} (h : EVM.log1Op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.log1Op at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h
+    refine ⟨?_, ?_⟩ <;> rfl
+  · exact absurd h (by simp)
+
+theorem log2Op_preserves_eEnv_cA
+    {s s' : EVM.State} (h : EVM.log2Op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.log2Op at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h
+    refine ⟨?_, ?_⟩ <;> rfl
+  · exact absurd h (by simp)
+
+theorem log3Op_preserves_eEnv_cA
+    {s s' : EVM.State} (h : EVM.log3Op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.log3Op at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h
+    refine ⟨?_, ?_⟩ <;> rfl
+  · exact absurd h (by simp)
+
+theorem log4Op_preserves_eEnv_cA
+    {s s' : EVM.State} (h : EVM.log4Op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.log4Op at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h
+    refine ⟨?_, ?_⟩ <;> rfl
+  · exact absurd h (by simp)
+
+theorem unaryStateOp_preserves_eEnv_cA
+    {op : EvmYul.State .EVM → UInt256 → EvmYul.State .EVM × UInt256}
+    {s s' : EVM.State}
+    (hOp : ∀ st u, (op st u).1.executionEnv = st.executionEnv)
+    (hOpCA : ∀ st u, (op st u).1.createdAccounts = st.createdAccounts)
+    (h : EVM.unaryStateOp op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.unaryStateOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h
+    subst h
+    refine ⟨?_, ?_⟩
+    · show (op s.toState _).1.executionEnv = s.executionEnv
+      exact hOp _ _
+    · show (op s.toState _).1.createdAccounts = s.createdAccounts
+      exact hOpCA _ _
+  · exact absurd h (by simp)
+
+theorem binaryStateOp_preserves_eEnv_cA
+    {op : EvmYul.State .EVM → UInt256 → UInt256 → EvmYul.State .EVM}
+    {s s' : EVM.State}
+    (hOpEnv : ∀ st u v, (op st u v).executionEnv = st.executionEnv)
+    (hOpCA : ∀ st u v, (op st u v).createdAccounts = st.createdAccounts)
+    (h : EVM.binaryStateOp op s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  unfold EVM.binaryStateOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h
+    subst h
+    refine ⟨?_, ?_⟩
+    · show (op s.toState _ _).executionEnv = s.executionEnv
+      exact hOpEnv _ _ _
+    · show (op s.toState _ _).createdAccounts = s.createdAccounts
+      exact hOpCA _ _ _
+  · exact absurd h (by simp)
+
+-- Individual state-op executionEnv-preservations.
+
+theorem balance_preserves_executionEnv
+    (self : EvmYul.State .EVM) (v : UInt256) :
+    (EvmYul.State.balance self v).1.executionEnv = self.executionEnv := by
+  unfold EvmYul.State.balance EvmYul.State.addAccessedAccount
+  rfl
+
+theorem sload_preserves_executionEnv
+    (self : EvmYul.State .EVM) (v : UInt256) :
+    (EvmYul.State.sload self v).1.executionEnv = self.executionEnv := by
+  unfold EvmYul.State.sload EvmYul.State.addAccessedStorageKey
+  rfl
+
+theorem tload_preserves_executionEnv
+    (self : EvmYul.State .EVM) (v : UInt256) :
+    (EvmYul.State.tload self v).1.executionEnv = self.executionEnv := by
+  unfold EvmYul.State.tload; rfl
+
+theorem extCodeSize_preserves_executionEnv
+    (self : EvmYul.State .EVM) (v : UInt256) :
+    (EvmYul.State.extCodeSize self v).1.executionEnv = self.executionEnv := by
+  unfold EvmYul.State.extCodeSize EvmYul.State.addAccessedAccount; rfl
+
+theorem extCodeHash_preserves_executionEnv
+    (self : EvmYul.State .EVM) (v : UInt256) :
+    (EvmYul.State.extCodeHash self v).1.executionEnv = self.executionEnv := by
+  unfold EvmYul.State.extCodeHash
+  by_cases hDead :
+      EvmYul.State.dead self.accountMap (AccountAddress.ofUInt256 v) = true
+  · rw [if_pos hDead]; rfl
+  · rw [if_neg hDead]; rfl
+
+theorem extCodeHash_preserves_createdAccounts
+    (self : EvmYul.State .EVM) (v : UInt256) :
+    (EvmYul.State.extCodeHash self v).1.createdAccounts = self.createdAccounts := by
+  unfold EvmYul.State.extCodeHash
+  by_cases hDead :
+      EvmYul.State.dead self.accountMap (AccountAddress.ofUInt256 v) = true
+  · rw [if_pos hDead]; rfl
+  · rw [if_neg hDead]; rfl
+
+theorem balance_preserves_createdAccounts
+    (self : EvmYul.State .EVM) (v : UInt256) :
+    (EvmYul.State.balance self v).1.createdAccounts = self.createdAccounts := by
+  unfold EvmYul.State.balance EvmYul.State.addAccessedAccount; rfl
+
+theorem sload_preserves_createdAccounts
+    (self : EvmYul.State .EVM) (v : UInt256) :
+    (EvmYul.State.sload self v).1.createdAccounts = self.createdAccounts := by
+  unfold EvmYul.State.sload EvmYul.State.addAccessedStorageKey; rfl
+
+theorem tload_preserves_createdAccounts
+    (self : EvmYul.State .EVM) (v : UInt256) :
+    (EvmYul.State.tload self v).1.createdAccounts = self.createdAccounts := by
+  unfold EvmYul.State.tload; rfl
+
+theorem extCodeSize_preserves_createdAccounts
+    (self : EvmYul.State .EVM) (v : UInt256) :
+    (EvmYul.State.extCodeSize self v).1.createdAccounts = self.createdAccounts := by
+  unfold EvmYul.State.extCodeSize EvmYul.State.addAccessedAccount; rfl
+
+theorem sstore_preserves_createdAccounts
+    (self : EvmYul.State .EVM) (u v : UInt256) :
+    (EvmYul.State.sstore self u v).createdAccounts = self.createdAccounts := by
+  unfold EvmYul.State.sstore
+  simp only [EvmYul.State.lookupAccount]
+  match hFind : self.accountMap.find? self.executionEnv.codeOwner with
+  | none => simp [Option.option, hFind]
+  | some acc =>
+    simp only [Option.option, hFind]
+    show (_ : EvmYul.State .EVM).createdAccounts = self.createdAccounts
+    rfl
+
+theorem tstore_preserves_createdAccounts
+    (self : EvmYul.State .EVM) (u v : UInt256) :
+    (EvmYul.State.tstore self u v).createdAccounts = self.createdAccounts := by
+  unfold EvmYul.State.tstore
+  simp only [EvmYul.State.lookupAccount]
+  match hFind : self.accountMap.find? self.executionEnv.codeOwner with
+  | none => simp [Option.option, hFind]
+  | some acc =>
+    simp only [Option.option, hFind]
+    unfold EvmYul.State.updateAccount; rfl
+
+theorem sstore_preserves_executionEnv
+    (self : EvmYul.State .EVM) (u v : UInt256) :
+    (EvmYul.State.sstore self u v).executionEnv = self.executionEnv := by
+  unfold EvmYul.State.sstore
+  simp only [EvmYul.State.lookupAccount]
+  match hFind : self.accountMap.find? self.executionEnv.codeOwner with
+  | none => simp [Option.option, hFind]
+  | some acc =>
+    simp only [Option.option, hFind]
+    show (_ : EvmYul.State .EVM).executionEnv = self.executionEnv
+    rfl
+
+theorem tstore_preserves_executionEnv
+    (self : EvmYul.State .EVM) (u v : UInt256) :
+    (EvmYul.State.tstore self u v).executionEnv = self.executionEnv := by
+  unfold EvmYul.State.tstore
+  simp only [EvmYul.State.lookupAccount]
+  match hFind : self.accountMap.find? self.executionEnv.codeOwner with
+  | none => simp [Option.option, hFind]
+  | some acc =>
+    simp only [Option.option, hFind]
+    unfold EvmYul.State.updateAccount; rfl
+
+/-! ## opRow-analog for executionEnv/createdAccounts preservation -/
+
+/-- Row predicate for executionEnv/createdAccounts preservation. -/
+def eECARow (s s' : EVM.State) : Prop :=
+  s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts
+
+private theorem eECARow_of_pair {s s' : EVM.State}
+    (h : s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts) :
+    eECARow s s' := h
+
+/-- `eECARow` holds for StopArith opcodes. -/
+theorem EvmYul.step_eECARow_StopArith
+    (o : Operation.SAOp .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h : EvmYul.step (.StopArith o : Operation .EVM) arg s = .ok s') :
+    eECARow s s' := by
+  cases o
+  all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+  · injection h with h; subst h; exact ⟨rfl, rfl⟩
+  all_goals first
+    | exact execBinOp_preserves_eEnv_cA h
+    | exact execTriOp_preserves_eEnv_cA h
+
+theorem EvmYul.step_eECARow_CompBit
+    (o : Operation.CBLOp .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h : EvmYul.step (.CompBit o : Operation .EVM) arg s = .ok s') :
+    eECARow s s' := by
+  cases o
+  all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+  all_goals first
+    | exact execBinOp_preserves_eEnv_cA h
+    | exact execUnOp_preserves_eEnv_cA h
+
+theorem EvmYul.step_eECARow_Keccak
+    (o : Operation.KOp .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h : EvmYul.step (.Keccak o : Operation .EVM) arg s = .ok s') :
+    eECARow s s' := by
+  cases o
+  unfold EvmYul.step at h
+  simp only [Id.run] at h
+  exact binaryMachineStateOp'_preserves_eEnv_cA h
+
+theorem EvmYul.step_eECARow_Env
+    (o : Operation.EOp .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h : EvmYul.step (.Env o : Operation .EVM) arg s = .ok s') :
+    eECARow s s' := by
+  cases o
+  all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+  · exact executionEnvOp_preserves_eEnv_cA h       -- ADDRESS
+  · exact unaryStateOp_preserves_eEnv_cA
+      (fun st v => balance_preserves_executionEnv st v)
+      (fun st v => balance_preserves_createdAccounts st v) h
+  · exact executionEnvOp_preserves_eEnv_cA h       -- ORIGIN
+  · exact executionEnvOp_preserves_eEnv_cA h       -- CALLER
+  · exact executionEnvOp_preserves_eEnv_cA h       -- CALLVALUE
+  · exact unaryStateOp_preserves_eEnv_cA (fun _ _ => rfl) (fun _ _ => rfl) h  -- CALLDATALOAD
+  · exact executionEnvOp_preserves_eEnv_cA h       -- CALLDATASIZE
+  · exact ternaryCopyOp_preserves_eEnv_cA
+      (fun ss a b c => calldatacopy_preserves_eEnv ss a b c)
+      (fun ss a b c => calldatacopy_preserves_cA ss a b c) h -- CALLDATACOPY
+  · exact executionEnvOp_preserves_eEnv_cA h       -- GASPRICE
+  · exact executionEnvOp_preserves_eEnv_cA h       -- CODESIZE
+  · exact ternaryCopyOp_preserves_eEnv_cA
+      (fun ss a b c => codeCopy_preserves_eEnv ss a b c)
+      (fun ss a b c => codeCopy_preserves_cA ss a b c) h -- CODECOPY
+  · exact unaryStateOp_preserves_eEnv_cA
+      (fun st v => extCodeSize_preserves_executionEnv st v)
+      (fun st v => extCodeSize_preserves_createdAccounts st v) h
+  · exact quaternaryCopyOp_preserves_eEnv_cA
+      (fun ss a b c d => extCodeCopy'_preserves_eEnv ss a b c d)
+      (fun ss a b c d => extCodeCopy'_preserves_cA ss a b c d) h -- EXTCODECOPY
+  · exact machineStateOp_preserves_eEnv_cA h       -- RETURNDATASIZE
+  · -- RETURNDATACOPY
+    split at h
+    · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+    · exact absurd h (by simp)
+  · exact unaryStateOp_preserves_eEnv_cA
+      (fun st v => extCodeHash_preserves_executionEnv st v)
+      (fun st v => extCodeHash_preserves_createdAccounts st v) h
+
+theorem EvmYul.step_eECARow_Block
+    (o : Operation.BOp .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h : EvmYul.step (.Block o : Operation .EVM) arg s = .ok s') :
+    eECARow s s' := by
+  cases o
+  all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+  · exact unaryStateOp_preserves_eEnv_cA (fun _ _ => rfl) (fun _ _ => rfl) h  -- BLOCKHASH
+  · exact stateOp_preserves_eEnv_cA h               -- COINBASE
+  · exact stateOp_preserves_eEnv_cA h               -- TIMESTAMP
+  · exact stateOp_preserves_eEnv_cA h               -- NUMBER
+  · exact executionEnvOp_preserves_eEnv_cA h        -- PREVRANDAO
+  · exact stateOp_preserves_eEnv_cA h               -- GASLIMIT
+  · exact stateOp_preserves_eEnv_cA h               -- CHAINID
+  · exact stateOp_preserves_eEnv_cA h               -- SELFBALANCE
+  · exact executionEnvOp_preserves_eEnv_cA h        -- BASEFEE
+  · exact unaryExecutionEnvOp_preserves_eEnv_cA h   -- BLOBHASH
+  · exact executionEnvOp_preserves_eEnv_cA h        -- BLOBBASEFEE
+
+theorem EvmYul.step_eECARow_StackMemFlow
+    (o : Operation.SMSFOp .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h : EvmYul.step (.StackMemFlow o : Operation .EVM) arg s = .ok s') :
+    eECARow s s' := by
+  cases o
+  all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+  · -- POP inline
+    split at h
+    · injection h with h; subst h; exact ⟨rfl, rfl⟩
+    · exact absurd h (by simp)
+  · -- MLOAD inline
+    split at h
+    · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+    · exact absurd h (by simp)
+  · exact binaryMachineStateOp_preserves_eEnv_cA h    -- MSTORE
+  · exact unaryStateOp_preserves_eEnv_cA
+      (fun st v => sload_preserves_executionEnv st v)
+      (fun st v => sload_preserves_createdAccounts st v) h  -- SLOAD
+  · exact binaryStateOp_preserves_eEnv_cA
+      (fun st u v => sstore_preserves_executionEnv st u v)
+      (fun st u v => sstore_preserves_createdAccounts st u v) h  -- SSTORE
+  · exact binaryMachineStateOp_preserves_eEnv_cA h    -- MSTORE8
+  · -- JUMP inline
+    split at h
+    · injection h with h; subst h; exact ⟨rfl, rfl⟩
+    · exact absurd h (by simp)
+  · -- JUMPI inline
+    split at h
+    · injection h with h; subst h; exact ⟨rfl, rfl⟩
+    · exact absurd h (by simp)
+  · -- PC inline
+    injection h with h; subst h; exact ⟨rfl, rfl⟩
+  · exact machineStateOp_preserves_eEnv_cA h    -- MSIZE
+  · exact machineStateOp_preserves_eEnv_cA h    -- GAS
+  · -- JUMPDEST inline
+    injection h with h; subst h; exact ⟨rfl, rfl⟩
+  · exact unaryStateOp_preserves_eEnv_cA
+      (fun st v => tload_preserves_executionEnv st v)
+      (fun st v => tload_preserves_createdAccounts st v) h  -- TLOAD
+  · exact binaryStateOp_preserves_eEnv_cA
+      (fun st u v => tstore_preserves_executionEnv st u v)
+      (fun st u v => tstore_preserves_createdAccounts st u v) h  -- TSTORE
+  · exact ternaryMachineStateOp_preserves_eEnv_cA h   -- MCOPY
+
+theorem EvmYul.step_eECARow_Push
+    (o : Operation.POp) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h : EvmYul.step (.Push o : Operation .EVM) arg s = .ok s') :
+    eECARow s s' := by
+  cases o
+  all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+  · -- PUSH0
+    injection h with h; subst h; exact ⟨rfl, rfl⟩
+  all_goals (
+    cases harg : arg with
+    | none => simp [harg] at h
+    | some p =>
+      obtain ⟨a', w'⟩ := p
+      simp [harg] at h
+      subst h; exact ⟨rfl, rfl⟩)
+
+theorem EvmYul.step_eECARow_Dup
+    (o : Operation.DOp) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h : EvmYul.step (.Dup o : Operation .EVM) arg s = .ok s') :
+    eECARow s s' := by
+  cases o
+  all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+  all_goals exact dup_preserves_eEnv_cA h
+
+theorem EvmYul.step_eECARow_Exchange
+    (o : Operation.ExOp) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h : EvmYul.step (.Exchange o : Operation .EVM) arg s = .ok s') :
+    eECARow s s' := by
+  cases o
+  all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+  all_goals exact swap_preserves_eEnv_cA h
+
+theorem EvmYul.step_eECARow_Log
+    (o : Operation.LOp .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h : EvmYul.step (.Log o : Operation .EVM) arg s = .ok s') :
+    eECARow s s' := by
+  cases o
+  all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+  · exact log0Op_preserves_eEnv_cA h
+  · exact log1Op_preserves_eEnv_cA h
+  · exact log2Op_preserves_eEnv_cA h
+  · exact log3Op_preserves_eEnv_cA h
+  · exact log4Op_preserves_eEnv_cA h
+
+theorem EvmYul.step_eECARow_System
+    (o : Operation.SOp .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h_handled : handledByEvmYulStep (.System o : Operation .EVM))
+    (h : EvmYul.step (.System o : Operation .EVM) arg s = .ok s') :
+    eECARow s s' := by
+  obtain ⟨hne1, hne2, hne3, hne4, hne5, hne6⟩ := h_handled
+  cases o
+  all_goals (try unfold EvmYul.step at h; try simp only [Id.run] at h)
+  · exact absurd rfl hne1  -- CREATE
+  · exact absurd rfl hne3  -- CALL
+  · exact absurd rfl hne4  -- CALLCODE
+  · -- RETURN
+    exact binaryMachineStateOp_preserves_eEnv_cA h
+  · exact absurd rfl hne5  -- DELEGATECALL
+  · exact absurd rfl hne2  -- CREATE2
+  · exact absurd rfl hne6  -- STATICCALL
+  · -- REVERT
+    exact binaryMachineStateOp_preserves_eEnv_cA h
+  · -- INVALID → dispatchInvalid → .error
+    exact absurd h (by simp [dispatchInvalid])
+  · -- SELFDESTRUCT
+    split at h
+    · -- stack pop succeeded
+      rename_i stk μ₁ hPop
+      split at h
+      case isTrue _ =>
+        -- Branch A (created in same tx). evmState' := {evmState with accountMap := _, substate := _}.
+        -- Then .replaceStackAndIncrPC stk. So executionEnv & createdAccounts preserved.
+        split at h
+        all_goals (simp only [Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩)
+      case isFalse _ =>
+        split at h
+        all_goals (simp only [Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩)
+    · simp at h
+
+/-- Main theorem. `EvmYul.step` on the EVM side preserves `executionEnv`
+and `createdAccounts` for every handled op, INCLUDING SELFDESTRUCT. -/
+theorem EvmYul.step_preserves_eEnv_cA
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h_handled : handledByEvmYulStep op)
+    (h : EvmYul.step op arg s = .ok s') :
+    s'.executionEnv = s.executionEnv ∧ s'.createdAccounts = s.createdAccounts := by
+  cases op with
+  | StopArith o    => exact EvmYul.step_eECARow_StopArith o arg s s' h
+  | CompBit o      => exact EvmYul.step_eECARow_CompBit o arg s s' h
+  | Keccak o       => exact EvmYul.step_eECARow_Keccak o arg s s' h
+  | Env o          => exact EvmYul.step_eECARow_Env o arg s s' h
+  | Block o        => exact EvmYul.step_eECARow_Block o arg s s' h
+  | StackMemFlow o => exact EvmYul.step_eECARow_StackMemFlow o arg s s' h
+  | Push o         => exact EvmYul.step_eECARow_Push o arg s s' h
+  | Dup o          => exact EvmYul.step_eECARow_Dup o arg s s' h
+  | Exchange o     => exact EvmYul.step_eECARow_Exchange o arg s s' h
+  | Log o          => exact EvmYul.step_eECARow_Log o arg s s' h
+  | System o       => exact EvmYul.step_eECARow_System o arg s s' h_handled h
 
 end Frame
 end EvmYul
