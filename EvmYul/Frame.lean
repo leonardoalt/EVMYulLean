@@ -3,6 +3,7 @@ import EvmYul.Frame.StepFrame
 import EvmYul.Frame.SelfdestructFrame
 import EvmYul.Frame.MutualFrame
 import EvmYul.Frame.UpsilonFrame
+import EvmYul.Frame.XFrame
 
 /-!
 # Frame library (upstream A1–A6)
@@ -23,8 +24,18 @@ Status (2026-04-22):
                           **Open** (one `sorry`).
 * `MutualFrame` (A3+A4+A5) — `Θ`, `Λ`, `Ξ` balance frames, joint fuel
                           induction through the `mutual` block.
-                          **Open** (three `sorry`s).
+                          Ξ's sorry is now narrowed to just the
+                          X-success branch (the `.error`/`.revert`
+                          branches are discharged). **Open** (one
+                          `sorry`, narrowed).
 * `UpsilonFrame` (A6)   — `Υ` transaction-level balance frame with
                           parameterised code-preservation witness.
                           **Open** (one `sorry`).
+* `XFrame`              — infrastructure for the outer `X` fuel
+                          induction used by `Ξ_balanceOf_ge`'s +1
+                          case: `Ξ_freshEvmState` definition and
+                          rfl-equalities, `Ξ_succ_eq_X` reduction,
+                          `X_balance_ge_prop` proposition statement,
+                          `X_balance_ge_prop_zero` fuel-0 closure.
+                          **No new sorrys or axioms.**
 -/

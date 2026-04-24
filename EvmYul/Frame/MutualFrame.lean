@@ -1105,8 +1105,60 @@ theorem Ξ_balanceOf_ge
     rw [show EVM.Ξ 0 createdAccounts genesisBlockHeader blocks σ σ₀ g A I
              = .error .OutOfFuel from rfl]
     trivial
-  | _ + 1 =>
-    sorry
+  | f + 1 =>
+    -- Reduce Ξ to its X-based body and generalise on X's result.
+    -- The three branches of ExecutionResult are discharged as
+    -- follows:
+    --   `.error _`  → goal is `True`.
+    --   `.revert _ _` → goal is `True`.
+    --   `.success evmState' _` → goal is the real obligation:
+    --     `balanceOf evmState'.accountMap C ≥ balanceOf σ C`.
+    -- The last branch requires the full `X`-fuel induction; it is
+    -- the open structural obligation. Discharging the first two is
+    -- a partial reduction that shrinks the `sorry` footprint.
+    --
+    -- (For a full closure, a new file `XFrame.lean` stages
+    -- `X_balance_ge_prop` and its fuel-0 closure; the fuel-succ
+    -- case is the remaining obligation.)
+    have hΞ_eq :
+        EVM.Ξ (f + 1) createdAccounts genesisBlockHeader blocks σ σ₀ g A I
+          = (do
+              let defState : EVM.State := default
+              let freshEvmState : EVM.State :=
+                { defState with
+                    accountMap := σ
+                    σ₀ := σ₀
+                    executionEnv := I
+                    substate := A
+                    createdAccounts := createdAccounts
+                    gasAvailable := g
+                    blocks := blocks
+                    genesisBlockHeader := genesisBlockHeader }
+              let result ← EVM.X f (D_J I.code ⟨0⟩) freshEvmState
+              match result with
+              | .success evmState' o =>
+                let finalGas := evmState'.gasAvailable
+                .ok (ExecutionResult.success
+                  (evmState'.createdAccounts, evmState'.accountMap,
+                   finalGas, evmState'.substate) o)
+              | .revert g' o => .ok (ExecutionResult.revert g' o)) := rfl
+    rw [hΞ_eq]
+    -- Simplify the `do let ... let ... ← ... match ... with` to a
+    -- direct match on the X result.
+    simp only [bind, Except.bind]
+    -- Generalise on the X result. The fresh state, being a
+    -- `let`-binding, is shared across both the hypothesis and the
+    -- goal — we don't need to name it here.
+    generalize hXres : EVM.X f (D_J I.code ⟨0⟩) _ = xRes
+    cases xRes with
+    | error _ => trivial
+    | ok er =>
+      cases er with
+      | success evmState' out =>
+        -- Real obligation: `balanceOf evmState'.accountMap C ≥ balanceOf σ C`.
+        -- This is the output of `X`'s fuel induction, which remains open.
+        sorry
+      | revert _ _ => trivial
 
 /-- **applyPrecompile output invariant** — for any precompile index `pc`,
 `applyPrecompile pc σ₁ g A I` returns `.ok tup` where `tup.2.1 ∈ {σ₁, ∅}`.
