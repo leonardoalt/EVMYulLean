@@ -1529,5 +1529,162 @@ theorem EvmYul.step_preserves_eEnv_cA
   | Log o          => exact EvmYul.step_eECARow_Log o arg s s' h
   | System o       => exact EvmYul.step_eECARow_System o arg s s' h_handled h
 
+/-! ## accountMap literal-preservation for handled non-SELFDESTRUCT opcodes
+
+Every handled opcode except SSTORE, TSTORE, and SELFDESTRUCT preserves
+`accountMap` literally. For the "mostlyPreservesAccountMap" predicate we
+exclude SSTORE / TSTORE / SELFDESTRUCT. SSTORE/TSTORE preserve balance
+at every address (via `sstore_preserves_balanceOf` / `tstore_...`), so
+StateWF carries through regardless. -/
+
+/-- `EvmYul.step` "strictly preserves accountMap" iff `op` is neither
+CREATE/CREATE2/CALL/CALLCODE/DELEGATECALL/STATICCALL nor SSTORE nor TSTORE
+nor SELFDESTRUCT. -/
+def strictlyPreservesAccountMap (op : Operation .EVM) : Prop :=
+  handledByEvmYulStep op ∧ op ≠ .SELFDESTRUCT ∧
+    op ≠ .StackMemFlow .SSTORE ∧ op ≠ .StackMemFlow .TSTORE
+
+/-- opRow with the stronger conclusion: accountMap equals. -/
+theorem EvmYul.step_accountMap_eq_of_strict
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (hStrict : strictlyPreservesAccountMap op)
+    (h : EvmYul.step op arg s = .ok s') :
+    s'.accountMap = s.accountMap := by
+  obtain ⟨h_handled, _h_ne_sd, h_ne_sstore, h_ne_tstore⟩ := hStrict
+  cases op with
+  | StopArith o =>
+    cases o
+    all_goals (
+      unfold EvmYul.step at h
+      simp only [Id.run] at h)
+    · injection h with h; subst h; rfl
+    all_goals first
+      | exact execBinOp_preserves_accountMap h
+      | exact execTriOp_preserves_accountMap h
+  | CompBit o =>
+    cases o
+    all_goals (
+      unfold EvmYul.step at h
+      simp only [Id.run] at h)
+    all_goals first
+      | exact execBinOp_preserves_accountMap h
+      | exact execUnOp_preserves_accountMap h
+  | Keccak o =>
+    cases o
+    unfold EvmYul.step at h
+    simp only [Id.run] at h
+    exact binaryMachineStateOp'_preserves_accountMap h
+  | Env o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    · exact executionEnvOp_preserves_accountMap h
+    · exact unaryStateOp_preserves_accountMap
+        (fun st v => balance_preserves_accountMap st v) h
+    · exact executionEnvOp_preserves_accountMap h
+    · exact executionEnvOp_preserves_accountMap h
+    · exact executionEnvOp_preserves_accountMap h
+    · exact unaryStateOp_preserves_accountMap (fun _ _ => rfl) h
+    · exact executionEnvOp_preserves_accountMap h
+    · exact ternaryCopyOp_preserves_accountMap
+        (fun ss a b c => calldatacopy_preserves_accountMap ss a b c) h
+    · exact executionEnvOp_preserves_accountMap h
+    · exact executionEnvOp_preserves_accountMap h
+    · exact ternaryCopyOp_preserves_accountMap
+        (fun ss a b c => codeCopy_preserves_accountMap ss a b c) h
+    · exact unaryStateOp_preserves_accountMap
+        (fun st v => extCodeSize_preserves_accountMap st v) h
+    · exact quaternaryCopyOp_preserves_accountMap
+        (fun ss a b c d => extCodeCopy'_preserves_accountMap ss a b c d) h
+    · exact machineStateOp_preserves_accountMap h
+    · split at h
+      · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+      · exact absurd h (by simp)
+    · exact unaryStateOp_preserves_accountMap
+        (fun st v => extCodeHash_preserves_accountMap st v) h
+  | Block o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    · exact unaryStateOp_preserves_accountMap (fun _ _ => rfl) h
+    · exact stateOp_preserves_accountMap h
+    · exact stateOp_preserves_accountMap h
+    · exact stateOp_preserves_accountMap h
+    · exact executionEnvOp_preserves_accountMap h
+    · exact stateOp_preserves_accountMap h
+    · exact stateOp_preserves_accountMap h
+    · exact stateOp_preserves_accountMap h
+    · exact executionEnvOp_preserves_accountMap h
+    · exact unaryExecutionEnvOp_preserves_accountMap h
+    · exact executionEnvOp_preserves_accountMap h
+  | StackMemFlow o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    · split at h
+      · injection h with h; subst h; rfl
+      · exact absurd h (by simp)
+    · split at h
+      · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+      · exact absurd h (by simp)
+    · exact binaryMachineStateOp_preserves_accountMap h
+    · exact unaryStateOp_preserves_accountMap
+        (fun st v => sload_preserves_accountMap st v) h
+    · exact absurd rfl h_ne_sstore
+    · exact binaryMachineStateOp_preserves_accountMap h
+    · split at h
+      · injection h with h; subst h; rfl
+      · exact absurd h (by simp)
+    · split at h
+      · injection h with h; subst h; rfl
+      · exact absurd h (by simp)
+    · injection h with h; subst h; rfl
+    · exact machineStateOp_preserves_accountMap h
+    · exact machineStateOp_preserves_accountMap h
+    · injection h with h; subst h; rfl
+    · exact unaryStateOp_preserves_accountMap
+        (fun st v => tload_preserves_accountMap st v) h
+    · exact absurd rfl h_ne_tstore
+    · exact ternaryMachineStateOp_preserves_accountMap h
+  | Push o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    · injection h with h; subst h; rfl
+    all_goals (
+      cases harg : arg with
+      | none => simp [harg] at h
+      | some p =>
+        obtain ⟨a', w'⟩ := p
+        simp [harg] at h
+        subst h; rfl)
+  | Dup o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    all_goals exact dup_preserves_accountMap h
+  | Exchange o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    all_goals exact swap_preserves_accountMap h
+  | Log o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    · exact log0Op_preserves_accountMap h
+    · exact log1Op_preserves_accountMap h
+    · exact log2Op_preserves_accountMap h
+    · exact log3Op_preserves_accountMap h
+    · exact log4Op_preserves_accountMap h
+  | System o =>
+    obtain ⟨hne1, hne2, hne3, hne4, hne5, hne6⟩ := h_handled
+    cases o
+    all_goals (try unfold EvmYul.step at h; try simp only [Id.run] at h)
+    · exact absurd rfl hne1
+    · exact absurd rfl hne3
+    · exact absurd rfl hne4
+    · exact binaryMachineStateOp_preserves_accountMap h
+    · exact absurd rfl hne5
+    · exact absurd rfl hne2
+    · exact absurd rfl hne6
+    · exact binaryMachineStateOp_preserves_accountMap h
+    · exact absurd h (by simp [dispatchInvalid])
+    · exact absurd rfl _h_ne_sd
+
 end Frame
 end EvmYul

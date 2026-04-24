@@ -164,7 +164,8 @@ def ΞPreservesAtC (C : AccountAddress) : Prop :=
     I.codeOwner = C →
     (∀ a ∈ createdAccounts, a ≠ C) →
     match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
-    | .ok (.success (_, σ', _, _) _) => balanceOf σ' C ≥ balanceOf σ C
+    | .ok (.success (cA', σ', _, _) _) =>
+        balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
     | _ => True
 
 /-- The `Ξ_balanceOf_ge` statement as a `Prop`, parameterised over the
@@ -185,7 +186,8 @@ def ΞFrameAtC (C : AccountAddress) (maxFuel : ℕ) : Prop :=
       C ≠ I.codeOwner →
       (∀ a ∈ createdAccounts, a ≠ C) →
       match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
-      | .ok (.success (_, σ', _, _) _) => balanceOf σ' C ≥ balanceOf σ C
+      | .ok (.success (cA', σ', _, _) _) =>
+          balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
       | _ => True
 
 /-! ## Helper lemmas for Θ's value-transfer prefix
@@ -494,6 +496,392 @@ theorem totalETH_insert_of_mem
     rw [hLeft, hRight, hT, hIns, hvEq]
     simp [List.map_append, List.map_cons, List.sum_append, List.sum_cons]
     ring
+
+/-- If the new balance equals the old balance, `totalETH` is preserved
+across an `insert` at an existing key. -/
+theorem totalETH_insert_eq_bal
+    (σ : AccountMap .EVM) (k : AccountAddress)
+    (acc acc_old : Account .EVM) (hFind : σ.find? k = some acc_old)
+    (hBal : acc.balance = acc_old.balance) :
+    totalETH (σ.insert k acc) = totalETH σ := by
+  have h := totalETH_insert_of_mem σ k acc acc_old hFind
+  rw [hBal] at h
+  omega
+
+/-- `StateWF` is preserved across an `insert` at an existing key with
+balance unchanged. -/
+theorem StateWF_insert_eq_bal
+    (σ : AccountMap .EVM) (k : AccountAddress)
+    (acc acc_old : Account .EVM) (hFind : σ.find? k = some acc_old)
+    (hBal : acc.balance = acc_old.balance) (hWF : StateWF σ) :
+    StateWF (σ.insert k acc) := by
+  refine ⟨?_⟩
+  rw [totalETH_insert_eq_bal σ k acc acc_old hFind hBal]
+  exact hWF.boundedTotal
+
+/-- `binaryStateOp` preserves `StateWF` when `op` itself does. -/
+theorem binaryStateOp_preserves_StateWF
+    {op : EvmYul.State .EVM → UInt256 → UInt256 → EvmYul.State .EVM}
+    {s s' : EVM.State}
+    (hOp : ∀ st u v, StateWF st.accountMap → StateWF (op st u v).accountMap)
+    (h : EVM.binaryStateOp op s = .ok s')
+    (hWF : StateWF s.accountMap) :
+    StateWF s'.accountMap := by
+  unfold EVM.binaryStateOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h
+    subst h
+    show StateWF (op s.toState _ _).accountMap
+    exact hOp _ _ _ hWF
+  · exact absurd h (by simp)
+
+/-- `SSTORE` preserves `StateWF` — storage update leaves balance untouched. -/
+theorem sstore_preserves_StateWF
+    (self : EvmYul.State .EVM) (spos sval : UInt256)
+    (hWF : StateWF self.accountMap) :
+    StateWF (EvmYul.State.sstore self spos sval).accountMap := by
+  unfold EvmYul.State.sstore
+  simp only [EvmYul.State.lookupAccount]
+  match hFind : self.accountMap.find? self.executionEnv.codeOwner with
+  | none =>
+    simp only [Option.option, hFind]
+    exact hWF
+  | some acc =>
+    simp only [Option.option, hFind]
+    show StateWF (self.accountMap.insert self.executionEnv.codeOwner
+                    (acc.updateStorage spos sval))
+    refine StateWF_insert_eq_bal _ _ _ _ hFind ?_ hWF
+    show (acc.updateStorage spos sval).balance = acc.balance
+    unfold Account.updateStorage
+    split_ifs <;> rfl
+
+/-- `TSTORE` preserves `StateWF` — transient-storage update leaves balance untouched. -/
+theorem tstore_preserves_StateWF
+    (self : EvmYul.State .EVM) (spos sval : UInt256)
+    (hWF : StateWF self.accountMap) :
+    StateWF (EvmYul.State.tstore self spos sval).accountMap := by
+  unfold EvmYul.State.tstore
+  simp only [EvmYul.State.lookupAccount]
+  match hFind : self.accountMap.find? self.executionEnv.codeOwner with
+  | none =>
+    simp only [Option.option, hFind]
+    exact hWF
+  | some acc =>
+    simp only [Option.option, hFind]
+    show StateWF ((_ : EvmYul.State .EVM).accountMap)
+    -- updateAccount at codeOwner with {acc with tstorage-updated}.
+    -- accountMap = self.accountMap.insert codeOwner {acc with tstorage-updated}.
+    unfold EvmYul.State.updateAccount
+    refine StateWF_insert_eq_bal _ _ _ _ hFind ?_ hWF
+    show (acc.updateTransientStorage spos sval).balance = acc.balance
+    unfold Account.updateTransientStorage
+    split_ifs <;> rfl
+
+/-- Two sequential inserts preserve `StateWF` if (a) the first (`r`) is
+absent and the new balance is ≤ the old (r-absent) plus some bound,
+(b) at `Iₐ` we overwrite with balance 0.
+
+This is the SELFDESTRUCT case 3 / case 5A / case 4: `r`'s balance becomes
+the sum (or absent→value), and `Iₐ`'s balance becomes 0. Shown by
+re-expressing totalETH sums.
+
+Unified direct form for SD: we prove `totalETH σ' ≤ totalETH σ` by
+case analysis, then `StateWF σ' ⇐ StateWF σ`. -/
+private theorem totalETH_double_insert_sd_case3
+    (σ : AccountMap .EVM) (r Iₐ : AccountAddress) (σ_Iₐ : Account .EVM)
+    (hLookR : σ.find? r = none)
+    (hLookIₐ : σ.find? Iₐ = some σ_Iₐ)
+    (hrIₐ : r ≠ Iₐ) :
+    totalETH
+      ((σ.insert r
+        (have __src := (default : Account .EVM);
+        { nonce := __src.nonce, balance := σ_Iₐ.balance, storage := __src.storage,
+          code := __src.code, tstorage := __src.tstorage })).insert
+        Iₐ
+        { nonce := σ_Iₐ.nonce, balance := ⟨0⟩, storage := σ_Iₐ.storage,
+          code := σ_Iₐ.code, tstorage := σ_Iₐ.tstorage }) = totalETH σ := by
+  -- Step 1: insert r with balance σ_Iₐ.balance. Key r was absent, so add σ_Iₐ.balance.
+  set σ_mid := σ.insert r { (default : Account .EVM) with balance := σ_Iₐ.balance}
+    with hσ_mid_def
+  have h_mid : totalETH σ_mid = totalETH σ + σ_Iₐ.balance.toNat := by
+    rw [hσ_mid_def]
+    have h := totalETH_insert_of_not_mem σ r
+      { (default : Account .EVM) with balance := σ_Iₐ.balance} hLookR
+    rw [h]
+  -- Step 2: insert Iₐ with balance 0. Key Iₐ was present in σ_mid (since r ≠ Iₐ → find? Iₐ = σ.find? Iₐ = some σ_Iₐ).
+  have hLookIₐ_mid : σ_mid.find? Iₐ = some σ_Iₐ := by
+    rw [hσ_mid_def]
+    rw [find?_insert_ne _ _ _ _ hrIₐ]
+    exact hLookIₐ
+  have h2 := totalETH_insert_of_mem σ_mid Iₐ
+    {σ_Iₐ with balance := ⟨0⟩} σ_Iₐ hLookIₐ_mid
+  -- h2 : totalETH (σ_mid.insert Iₐ _) + σ_Iₐ.balance.toNat = totalETH σ_mid + 0
+  simp only [show ({σ_Iₐ with balance := (⟨0⟩ : UInt256)} : Account .EVM).balance.toNat = 0 from rfl,
+             Nat.add_zero] at h2
+  rw [h_mid] at h2
+  omega
+
+private theorem totalETH_double_insert_sd_case4
+    (σ : AccountMap .EVM) (r Iₐ : AccountAddress) (σ_r σ_Iₐ : Account .EVM)
+    (hLookR : σ.find? r = some σ_r)
+    (hLookIₐ : σ.find? Iₐ = some σ_Iₐ)
+    (hrIₐ : r ≠ Iₐ)
+    (hWF : StateWF σ) :
+    totalETH
+      ((σ.insert r
+        { nonce := σ_r.nonce, balance := σ_r.balance + σ_Iₐ.balance,
+          storage := σ_r.storage, code := σ_r.code, tstorage := σ_r.tstorage }).insert
+        Iₐ
+        { nonce := σ_Iₐ.nonce, balance := ⟨0⟩, storage := σ_Iₐ.storage,
+          code := σ_Iₐ.code, tstorage := σ_Iₐ.tstorage }) = totalETH σ := by
+  -- Uses no-wrap from StateWF.
+  have hNoWrap : σ_r.balance.toNat + σ_Iₐ.balance.toNat < UInt256.size :=
+    no_wrap_pair σ hWF r Iₐ σ_r σ_Iₐ hLookR hLookIₐ hrIₐ
+  set σ_mid := σ.insert r {σ_r with balance := σ_r.balance + σ_Iₐ.balance}
+    with hσ_mid_def
+  have h_add_toNat : (σ_r.balance + σ_Iₐ.balance).toNat = σ_r.balance.toNat + σ_Iₐ.balance.toNat :=
+    UInt256_add_toNat_of_no_wrap _ _ hNoWrap
+  have h_mid : totalETH σ_mid + σ_r.balance.toNat
+                = totalETH σ + σ_r.balance.toNat + σ_Iₐ.balance.toNat := by
+    rw [hσ_mid_def]
+    have h := totalETH_insert_of_mem σ r
+      {σ_r with balance := σ_r.balance + σ_Iₐ.balance} σ_r hLookR
+    rw [h_add_toNat] at h
+    -- h : totalETH (σ.insert ..) + σ_r.balance.toNat
+    --   = totalETH σ + (σ_r.balance.toNat + σ_Iₐ.balance.toNat)
+    omega
+  have hLookIₐ_mid : σ_mid.find? Iₐ = some σ_Iₐ := by
+    rw [hσ_mid_def]
+    rw [find?_insert_ne _ _ _ _ hrIₐ]
+    exact hLookIₐ
+  have h2 := totalETH_insert_of_mem σ_mid Iₐ
+    {σ_Iₐ with balance := ⟨0⟩} σ_Iₐ hLookIₐ_mid
+  simp only [show ({σ_Iₐ with balance := (⟨0⟩ : UInt256)} : Account .EVM).balance.toNat = 0 from rfl,
+             Nat.add_zero] at h2
+  -- h2 : totalETH (σ_mid.insert Iₐ _) + σ_Iₐ.balance.toNat = totalETH σ_mid
+  omega
+
+/-- SD case 5A (burn in Branch A): r = Iₐ, σ has σ_r at r.
+Final state is `σ.insert r {σ_r with balance := 0}.insert Iₐ {σ_Iₐ with balance := 0}`.
+Both inserts at the same key; the outer one wins: accountMap ends up as
+`σ.insert r {σ_Iₐ with balance := 0}`. totalETH decreases by σ_r.balance
+(which equals σ_Iₐ.balance since σ_r = σ_Iₐ by same find-key).
+
+In practice we don't need the ≤ with subtraction; we just show
+`totalETH (...) ≤ totalETH σ`. -/
+private theorem totalETH_double_insert_sd_case5A_le
+    (σ : AccountMap .EVM) (r Iₐ : AccountAddress) (σ_r σ_Iₐ : Account .EVM)
+    (hLookR : σ.find? r = some σ_r)
+    (hLookIₐ : σ.find? Iₐ = some σ_Iₐ)
+    (hrIₐ : r = Iₐ) :
+    totalETH
+      ((σ.insert r
+        { nonce := σ_r.nonce, balance := ⟨0⟩, storage := σ_r.storage,
+          code := σ_r.code, tstorage := σ_r.tstorage }).insert
+        Iₐ
+        { nonce := σ_Iₐ.nonce, balance := ⟨0⟩, storage := σ_Iₐ.storage,
+          code := σ_Iₐ.code, tstorage := σ_Iₐ.tstorage }) ≤ totalETH σ := by
+  subst hrIₐ
+  set σ_mid := σ.insert r {σ_r with balance := ⟨0⟩}
+    with hσ_mid_def
+  have h_same : σ_mid.find? r = some {σ_r with balance := ⟨0⟩} := by
+    rw [hσ_mid_def]; exact find?_insert_self _ _ _
+  have hEq : σ_r = σ_Iₐ := by
+    rw [hLookR] at hLookIₐ
+    exact (Option.some.inj hLookIₐ)
+  -- Outer insert at Iₐ = r over σ_mid (which has σ_r with balance := 0 at r).
+  have h_outer := totalETH_insert_of_mem σ_mid r
+    {σ_Iₐ with balance := ⟨0⟩} {σ_r with balance := ⟨0⟩} h_same
+  -- h_outer : totalETH (σ_mid.insert r {σ_Iₐ with balance := 0}) + {σ_r with balance := 0}.balance.toNat
+  --         = totalETH σ_mid + {σ_Iₐ with balance := 0}.balance.toNat
+  -- Both balance.toNat terms are 0.
+  simp only [show ({σ_Iₐ with balance := (⟨0⟩ : UInt256)} : Account .EVM).balance.toNat = 0 from rfl,
+             show ({σ_r with balance := (⟨0⟩ : UInt256)} : Account .EVM).balance.toNat = 0 from rfl,
+             Nat.add_zero] at h_outer
+  -- h_outer : totalETH (σ_mid.insert r _) = totalETH σ_mid
+  -- Compute totalETH σ_mid.
+  have h_mid := totalETH_insert_of_mem σ r {σ_r with balance := ⟨0⟩} σ_r hLookR
+  simp only [show ({σ_r with balance := (⟨0⟩ : UInt256)} : Account .EVM).balance.toNat = 0 from rfl,
+             Nat.add_zero] at h_mid
+  rw [← hσ_mid_def] at h_mid
+  -- h_mid : totalETH σ_mid + σ_r.balance.toNat = totalETH σ
+  omega
+
+/-- SELFDESTRUCT preserves `StateWF`. -/
+theorem selfdestruct_preserves_StateWF
+    (s s' : EVM.State)
+    (hWF : StateWF s.accountMap)
+    (h : EvmYul.step (.SELFDESTRUCT : Operation .EVM) .none s = .ok s') :
+    StateWF s'.accountMap := by
+  unfold EvmYul.step at h
+  simp only [Id.run] at h
+  set Iₐ := s.executionEnv.codeOwner with hIₐ_def
+  split at h
+  case _ stk μ₁ hPop =>
+    set r : AccountAddress := AccountAddress.ofUInt256 μ₁ with hr_def
+    split at h
+    case _ hCreated =>
+      -- Branch A
+      split at h
+      case _ hLookIₐ =>
+        -- Case 1: accountMap unchanged
+        simp only [Except.ok.injEq] at h
+        subst h
+        exact hWF
+      case _ σ_Iₐ hLookIₐ =>
+        split at h
+        case _ hLookR =>
+          split at h
+          case isTrue hBal =>
+            -- Case 2
+            simp only [Except.ok.injEq] at h
+            subst h
+            exact hWF
+          case isFalse hBal =>
+            -- Case 3
+            simp only [Except.ok.injEq] at h
+            subst h
+            refine ⟨?_⟩
+            show totalETH (_ : EVM.State).accountMap < UInt256.size
+            -- Need: r ≠ Iₐ (used in double_insert_sd_case3). When r = Iₐ?
+            -- Actually hBal is `¬σ_Iₐ.balance = 0` (i.e., balance nonzero).
+            -- If r = Iₐ, σ.find? r = σ.find? Iₐ = some σ_Iₐ, but hLookR : σ.find? r = none. Contradiction.
+            have hrIₐ : r ≠ Iₐ := by
+              intro heq
+              have : s.accountMap.find? r = some σ_Iₐ := by
+                rw [heq]; unfold EvmYul.State.lookupAccount at hLookIₐ; exact hLookIₐ
+              unfold EvmYul.State.lookupAccount at hLookR
+              rw [this] at hLookR; cases hLookR
+            -- The accountMap after SD is the double-insert.
+            have hLookRdom : s.accountMap.find? r = none := by
+              unfold EvmYul.State.lookupAccount at hLookR
+              exact hLookR
+            have hLookIₐdom : s.accountMap.find? Iₐ = some σ_Iₐ := by
+              unfold EvmYul.State.lookupAccount at hLookIₐ
+              exact hLookIₐ
+            have hEq := totalETH_double_insert_sd_case3 s.accountMap r Iₐ σ_Iₐ
+                hLookRdom hLookIₐdom hrIₐ
+            show totalETH _ < UInt256.size
+            refine Nat.lt_of_le_of_lt (Nat.le_of_eq ?_) hWF.boundedTotal
+            exact hEq
+        case _ σ_r hLookR =>
+          split at h
+          case isTrue hrIₐ =>
+            -- Case 4
+            simp only [Except.ok.injEq] at h
+            subst h
+            refine ⟨?_⟩
+            have hLookRdom : s.accountMap.find? r = some σ_r := by
+              unfold EvmYul.State.lookupAccount at hLookR; exact hLookR
+            have hLookIₐdom : s.accountMap.find? Iₐ = some σ_Iₐ := by
+              unfold EvmYul.State.lookupAccount at hLookIₐ; exact hLookIₐ
+            have hEq := totalETH_double_insert_sd_case4 s.accountMap r Iₐ σ_r σ_Iₐ
+                  hLookRdom hLookIₐdom hrIₐ hWF
+            show totalETH _ < UInt256.size
+            refine Nat.lt_of_le_of_lt (Nat.le_of_eq ?_) hWF.boundedTotal
+            exact hEq
+          case isFalse hrIₐ =>
+            -- Case 5A: burn
+            simp only [Except.ok.injEq] at h
+            subst h
+            refine ⟨?_⟩
+            have hrIₐ' : r = Iₐ := Classical.not_not.mp hrIₐ
+            have hLookRdom : s.accountMap.find? r = some σ_r := by
+              unfold EvmYul.State.lookupAccount at hLookR; exact hLookR
+            have hLookIₐdom : s.accountMap.find? Iₐ = some σ_Iₐ := by
+              unfold EvmYul.State.lookupAccount at hLookIₐ; exact hLookIₐ
+            have hLe := totalETH_double_insert_sd_case5A_le s.accountMap r Iₐ σ_r σ_Iₐ
+                  hLookRdom hLookIₐdom hrIₐ'
+            show totalETH _ < UInt256.size
+            exact Nat.lt_of_le_of_lt hLe hWF.boundedTotal
+    case _ hNotCreated =>
+      -- Branch B
+      split at h
+      case _ hLookIₐ =>
+        simp only [Except.ok.injEq] at h
+        subst h
+        exact hWF
+      case _ σ_Iₐ hLookIₐ =>
+        split at h
+        case _ hLookR =>
+          split at h
+          case isTrue hBal =>
+            simp only [Except.ok.injEq] at h
+            subst h
+            exact hWF
+          case isFalse hBal =>
+            simp only [Except.ok.injEq] at h
+            subst h
+            refine ⟨?_⟩
+            have hrIₐ : r ≠ Iₐ := by
+              intro heq
+              have : s.accountMap.find? r = some σ_Iₐ := by
+                rw [heq]; unfold EvmYul.State.lookupAccount at hLookIₐ; exact hLookIₐ
+              unfold EvmYul.State.lookupAccount at hLookR
+              rw [this] at hLookR; cases hLookR
+            have hLookRdom : s.accountMap.find? r = none := by
+              unfold EvmYul.State.lookupAccount at hLookR; exact hLookR
+            have hLookIₐdom : s.accountMap.find? Iₐ = some σ_Iₐ := by
+              unfold EvmYul.State.lookupAccount at hLookIₐ; exact hLookIₐ
+            have hEq := totalETH_double_insert_sd_case3 s.accountMap r Iₐ σ_Iₐ
+                  hLookRdom hLookIₐdom hrIₐ
+            show totalETH _ < UInt256.size
+            refine Nat.lt_of_le_of_lt (Nat.le_of_eq ?_) hWF.boundedTotal
+            exact hEq
+        case _ σ_r hLookR =>
+          split at h
+          case isTrue hrIₐ =>
+            simp only [Except.ok.injEq] at h
+            subst h
+            refine ⟨?_⟩
+            have hLookRdom : s.accountMap.find? r = some σ_r := by
+              unfold EvmYul.State.lookupAccount at hLookR; exact hLookR
+            have hLookIₐdom : s.accountMap.find? Iₐ = some σ_Iₐ := by
+              unfold EvmYul.State.lookupAccount at hLookIₐ; exact hLookIₐ
+            have hEq := totalETH_double_insert_sd_case4 s.accountMap r Iₐ σ_r σ_Iₐ
+                  hLookRdom hLookIₐdom hrIₐ hWF
+            show totalETH _ < UInt256.size
+            refine Nat.lt_of_le_of_lt (Nat.le_of_eq ?_) hWF.boundedTotal
+            exact hEq
+          case isFalse hrIₐ =>
+            -- Case 5B: no-op (accountMap unchanged)
+            simp only [Except.ok.injEq] at h
+            subst h
+            exact hWF
+  case _ hPop => simp at h
+
+/-- **`EvmYul.step` preserves `StateWF` for handled non-SELFDESTRUCT opcodes.** -/
+theorem EvmYul_step_preserves_StateWF
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h_handled : handledByEvmYulStep op)
+    (h_ne : op ≠ .SELFDESTRUCT)
+    (h : EvmYul.step op arg s = .ok s')
+    (hWF : StateWF s.accountMap) :
+    StateWF s'.accountMap := by
+  -- Case on whether op is SSTORE/TSTORE (balance-preserving insert) or
+  -- strictly-accountMap-preserving.
+  by_cases hSStore : op = .StackMemFlow .SSTORE
+  · rw [hSStore] at h
+    unfold EvmYul.step at h
+    simp only [Id.run] at h
+    -- `EVM.binaryStateOp EvmYul.State.sstore s = .ok s'`
+    exact binaryStateOp_preserves_StateWF
+      (fun st u v hW => sstore_preserves_StateWF st u v hW) h hWF
+  · by_cases hTStore : op = .StackMemFlow .TSTORE
+    · rw [hTStore] at h
+      unfold EvmYul.step at h
+      simp only [Id.run] at h
+      exact binaryStateOp_preserves_StateWF
+        (fun st u v hW => tstore_preserves_StateWF st u v hW) h hWF
+    · -- Strictly preserves accountMap case.
+      have hStrict : strictlyPreservesAccountMap op := by
+        refine ⟨h_handled, h_ne, ?_, ?_⟩
+        · exact hSStore
+        · exact hTStore
+      have hEq : s'.accountMap = s.accountMap :=
+        EvmYul.step_accountMap_eq_of_strict op arg s s' hStrict h
+      rw [hEq]; exact hWF
 
 /-- `StateWF` for Λ's transfer state `σStar`.
 
@@ -1308,7 +1696,7 @@ private theorem Θ_body_code
           have hW := hWitness fuel' createdAccounts genesisBlockHeader blocks
               σ₁ σ₀ g A I h_WFσ₁ hIowner h_newC
           rw [hΞ] at hW
-          have : balanceOf σ_Ξ C ≥ balanceOf σ C := Nat.le_trans h_σ₁_ge hW
+          have : balanceOf σ_Ξ C ≥ balanceOf σ C := Nat.le_trans h_σ₁_ge hW.1
           apply theta_σ'_clamp_ge
           intro _; exact this
         · have hIowner_ne : C ≠ I.codeOwner := by
@@ -1317,7 +1705,7 @@ private theorem Θ_body_code
               createdAccounts genesisBlockHeader blocks
               σ₁ σ₀ g A I h_WFσ₁ hIowner_ne h_newC
           rw [hΞ] at hΞge
-          have : balanceOf σ_Ξ C ≥ balanceOf σ C := Nat.le_trans h_σ₁_ge hΞge
+          have : balanceOf σ_Ξ C ≥ balanceOf σ C := Nat.le_trans h_σ₁_ge hΞge.1
           apply theta_σ'_clamp_ge
           intro _; exact this
       case h_2 => trivial
@@ -1843,9 +2231,9 @@ theorem Λ_balanceOf_ge
               σStarMap σ₀ g (A.addAccessedAccount a) exEnv
               hWFσStarMap (ha_ne_C'.symm) h_newC_iPair
             rw [hΞeq_folded] at hΞge_raw
-            -- hΞge_raw : balanceOf σ_Ξ C ≥ balanceOf σStarMap C
+            -- hΞge_raw : balanceOf σ_Ξ C ≥ balanceOf σStarMap C ∧ StateWF σ_Ξ ∧ ...
             have hσ_Ξ_ge : balanceOf σ_Ξ C ≥ balanceOf σ C := by
-              rw [← hσStar_balance]; exact hΞge_raw
+              rw [← hσStar_balance]; exact hΞge_raw.1
             -- Split on the outer `if` (the F condition) in the goal.
             split_ifs with hF
             · -- F=true: σ_final = σ, so balanceOf σ C ≥ balanceOf σ C.
@@ -1890,7 +2278,10 @@ private def X_inv (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
   ΞPreservesAtC C →
   ΞFrameAtC C f →
   match EVM.X f validJumps evmState with
-  | .ok (.success s' _) => balanceOf s'.accountMap C ≥ balanceOf evmState.accountMap C
+  | .ok (.success s' _) =>
+      balanceOf s'.accountMap C ≥ balanceOf evmState.accountMap C ∧
+      StateWF s'.accountMap ∧
+      (∀ a ∈ s'.createdAccounts, a ≠ C)
   | _ => True
 
 /-- Fuel-0 closure of `X_inv`. -/
@@ -1941,28 +2332,26 @@ private theorem step_bundled_invariant_at_C
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
   -- **Per-opcode dispatch obligation.**
   --
-  -- `EVM.step` at fuel 0 errors trivially; at `f + 1` it decodes `instr`,
-  -- bumps `execLength`, and dispatches on the decoded opcode. The full
-  -- dispatch covers 25 opcode families: handled-by-EvmYul arms (StopArith,
-  -- CompBit, Keccak, Env, Block, StackMemFlow, Push, Dup, Exchange, Log,
-  -- RETURN/REVERT/INVALID) which use `EvmYul.step_preserves_balanceOf`
-  -- and `_preserves_eEnv_cA`; Lambda arms (CREATE/CREATE2) which use
-  -- `Λ_balanceOf_ge` plus new StateWF-preservation helpers; call arms
-  -- (CALL/CALLCODE/DELEGATECALL/STATICCALL) which use `Θ_balanceOf_ge`
-  -- plus new StateWF-preservation helpers; and SELFDESTRUCT which uses
-  -- `selfdestruct_balanceOf_ne_Iₐ_ge` plus the existing
-  -- `selfdestruct_preserves_{executionEnv, createdAccounts}`.
+  -- Infrastructure now in place (this commit):
+  --   * `ΞFrameAtC` / `ΞPreservesAtC` bundled to carry StateWF + createdAccounts
+  --     preservation alongside balance monotonicity.
+  --   * `EvmYul_step_preserves_StateWF` — handles the non-SELFDESTRUCT arms
+  --     of `EvmYul.step` (via `step_accountMap_eq_of_strict` for 23 families
+  --     + `sstore_preserves_StateWF` / `tstore_preserves_StateWF`).
+  --   * `selfdestruct_preserves_StateWF` — closed (5-case totalETH analysis).
+  --   * `totalETH_double_insert_sd_case3/4/5A` helpers.
   --
-  -- The balance-monotonicity conjunct is dischargeable from existing
-  -- frame theorems. StateWF preservation for the Lambda/call arms
-  -- requires `Λ_preserves_StateWF` / `Θ_preserves_StateWF` (new
-  -- non-trivial helpers, ~1000+ LoC total). These infrastructure
-  -- lemmas are not yet closed in the codebase.
+  -- What remains for a mechanical close: the case dispatch on `EVM.step`'s
+  -- body for the CALL / CREATE arms. Θ and Λ currently conclude only
+  -- balance-mono; their StateWF / createdAccounts preservation is available
+  -- internally via the bundled `Ξ_frame` but not yet exposed as output
+  -- conclusions. Exposing requires rewriting `Θ_balanceOf_ge` /
+  -- `Λ_balanceOf_ge` body goals to produce the bundle (substantial work
+  -- across the ~100+ case-splits in each body).
   --
-  -- We expose this obligation as a single localized sorry. No new
-  -- sorrys are introduced downstream; `X_inv_holds`, `X_inv_succ_content`,
-  -- `Ξ_balanceOf_ge`, and all Frame-level callers close cleanly modulo
-  -- this one remaining per-opcode dispatch.
+  -- `X_inv_holds`, `X_inv_succ_content`, `Ξ_balanceOf_ge`, and all
+  -- Frame-level callers close cleanly modulo this one remaining per-opcode
+  -- dispatch.
   sorry
 
 /-- Balance monotonicity across a single step. -/
@@ -2044,7 +2433,9 @@ private theorem X_inv_succ_content
     (_IH : ∀ evmState', X_inv C f' validJumps evmState')
     (hXres : EVM.X (f' + 1) validJumps evmState
               = .ok (.success finalState _out)) :
-    balanceOf finalState.accountMap C ≥ balanceOf evmState.accountMap C := by
+    balanceOf finalState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF finalState.accountMap ∧
+    (∀ a ∈ finalState.createdAccounts, a ≠ C) := by
   simp only [EVM.X] at hXres
   -- Split on the outer Z-match in X's body.
   split at hXres
@@ -2132,7 +2523,9 @@ private theorem X_inv_succ_content
         -- Apply IH at sstepState. Thread hFrame : ΞFrameAtC C f' through.
         have hIH := _IH sstepState hWFsstep hCOsstep hNCsstep _hWit hFrame
         rw [hXres] at hIH
-        exact Nat.le_trans hStepGE hIH
+        -- hIH now produces the bundled triple at finalState.
+        refine ⟨?_, hIH.2.1, hIH.2.2⟩
+        exact Nat.le_trans hStepGE hIH.1
       case h_2 _ o hH_some =>
         -- H = some o → halt branch: `if w == .REVERT then .revert else .success`.
         split at hXres
@@ -2145,6 +2538,13 @@ private theorem X_inv_succ_content
           have hStepGE_Z : balanceOf sstepState.accountMap C ≥ balanceOf evmStateZ.accountMap C :=
             step_balance_mono_at_C C f' cost₂ _ evmStateZ sstepState
               hWFZ hCOZ hNCZ _hWit hFrame hStep
+          have hWFsstep : StateWF sstepState.accountMap :=
+            step_StateWF_preserved C f' cost₂ _ evmStateZ sstepState
+              hWFZ hCOZ hNCZ _hWit hFrame hStep
+          have hNCsstep : ∀ a ∈ sstepState.createdAccounts, a ≠ C :=
+            step_createdAccounts_preserved C f' cost₂ _ evmStateZ sstepState
+              hWFZ hCOZ hNCZ _hWit hFrame hStep
+          refine ⟨?_, hWFsstep, hNCsstep⟩
           rw [← hBalEq]; exact hStepGE_Z
 
 /-- **The inner X-fuel induction closing `Ξ_balanceOf_ge`'s `.success`
@@ -2175,15 +2575,13 @@ private theorem X_inv_holds
     trivial
   | succ f' IH =>
     intro hWF hCO hNC hWit _hFrameAtSucc
-    -- Unfold `EVM.X (f' + 1)` to expose its body. Its structure:
-    --   * decode the instruction at pc → `instr`
-    --   * run Z-gate → error (trivial) or (evmState', cost₂)
-    --   * run step → error (trivial) or s_post_step
-    --   * check H → halt or recurse on X f'
+    -- Unfold `EVM.X (f' + 1)` to expose its body.
     show match EVM.X (f' + 1) validJumps evmState with
-      | .ok (.success s' _) => balanceOf s'.accountMap C ≥ balanceOf evmState.accountMap C
+      | .ok (.success s' _) =>
+          balanceOf s'.accountMap C ≥ balanceOf evmState.accountMap C ∧
+          StateWF s'.accountMap ∧
+          (∀ a ∈ s'.createdAccounts, a ≠ C)
       | _ => True
-    -- We first generalize X's result, then case-split.
     generalize hXres : EVM.X (f' + 1) validJumps evmState = xRes
     cases xRes with
     | error _ => trivial
@@ -2191,9 +2589,6 @@ private theorem X_inv_holds
       cases er with
       | revert _ _ => trivial
       | success finalState out =>
-        -- The only remaining sub-goal: balance monotonicity.
-        -- Supply ΞFrameAtC at f' via hFrame, and a restricted hFrame'
-        -- for the IH recursion.
         have hFrame_f' : ΞFrameAtC C f' := hFrame f' (Nat.le_succ f')
         have hFrame' : ∀ f'_1, f'_1 ≤ f' → ΞFrameAtC C f'_1 :=
           fun f1 h1 => hFrame f1 (Nat.le_trans h1 (Nat.le_succ f'))
@@ -2221,9 +2616,8 @@ theorem Ξ_balanceOf_ge
     | .ok (.success (_, σ', _, _) _) => balanceOf σ' C ≥ balanceOf σ C
     | .ok (.revert _ _) => True
     | .error _ => True := by
-  -- Strong induction on fuel. We need the IH to apply at any fresh
-  -- state, so we first reduce to an auxiliary form parameterised over
-  -- all the Ξ arguments.
+  -- Strong induction on fuel. We prove a bundled form (balance-mono +
+  -- StateWF + createdAccounts) then project the balance-mono half.
   suffices h : ∀ (n : ℕ),
       ∀ (cA' : RBSet AccountAddress compare) (gbh' : BlockHeader)
         (bs' : ProcessedBlocks) (σ' σ₀' : AccountMap .EVM) (g' : UInt256)
@@ -2232,10 +2626,21 @@ theorem Ξ_balanceOf_ge
         C ≠ I'.codeOwner →
         (∀ a ∈ cA', a ≠ C) →
         match EVM.Ξ n cA' gbh' bs' σ' σ₀' g' A' I' with
-        | .ok (.success (_, σ''final, _, _) _) => balanceOf σ''final C ≥ balanceOf σ' C
-        | .ok (.revert _ _) => True
-        | .error _ => True by
-    exact h fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I hWF h_codeOwner h_newC
+        | .ok (.success (cA_out, σ''final, _, _) _) =>
+            balanceOf σ''final C ≥ balanceOf σ' C ∧ StateWF σ''final ∧
+              (∀ a ∈ cA_out, a ≠ C)
+        | _ => True by
+    have hh := h fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I
+                 hWF h_codeOwner h_newC
+    cases hEqΞ : EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+    | error _ => trivial
+    | ok er =>
+      cases er with
+      | success data out =>
+        obtain ⟨_, σ''f, _, _⟩ := data
+        rw [hEqΞ] at hh
+        exact hh.1
+      | revert _ _ => trivial
   intro n
   induction n using Nat.strong_induction_on with
   | _ n IH =>
@@ -2246,22 +2651,12 @@ theorem Ξ_balanceOf_ge
       trivial
     | f + 1 =>
       -- Build the Ξ_frame witness from IH: for any f' ≤ f, IH gives us
-      -- Ξ-monotonicity at fuel f' (since f' < f + 1).
+      -- the bundled monotonicity at fuel f' (since f' < f + 1).
       have Ξ_frame_at : ∀ f', f' ≤ f → ΞFrameAtC C f' := by
         intro f' hf'
         intro f'' hf'' cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hco'' hnc''
         have hlt : f'' < f + 1 := Nat.lt_succ_of_le (Nat.le_trans hf'' hf')
-        have := IH f'' hlt cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hco'' hnc''
-        -- Unify 3-branch match with 2-branch
-        cases heq : EVM.Ξ f'' cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' with
-        | error _ => trivial
-        | ok res =>
-          cases res with
-          | success data _ =>
-            rw [heq] at this
-            obtain ⟨_, σ''f, _, _⟩ := data
-            exact this
-          | revert _ _ => trivial
+        exact IH f'' hlt cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hco'' hnc''
       -- Reduce Ξ (f+1) via X.
       have hΞ_eq :
           EVM.Ξ (f + 1) cA' gbh' bs' σ' σ₀' g' A' I'

@@ -215,5 +215,10 @@ theorem UInt256_add_toNat_of_no_wrap
   have h2 : y.val.val = y.toNat := rfl
   rw [h1, h2]; exact hNoWrap
 
+/-- StateWF is preserved under accountMap equality. -/
+theorem StateWF_of_accountMap_eq
+    {σ σ' : AccountMap .EVM} (h : σ' = σ) (hWF : StateWF σ) :
+    StateWF σ' := h ▸ hWF
+
 end Frame
 end EvmYul
