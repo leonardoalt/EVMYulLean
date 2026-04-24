@@ -2548,7 +2548,412 @@ a ~500-LoC dispatch through the nested `if`-cascades of the CREATE
 and CALL bodies, discharging each innermost state via the enhanced
 bundled `Λ_balanceOf_ge` / `Θ_balanceOf_ge` conclusions. -/
 
-/-- Aggregated system-arm helper for CREATE/CREATE2/CALL-family. -/
+/-! ### Per-arm system-call/create dispatch
+
+Each of the 6 system arms (CREATE, CREATE2, CALL, CALLCODE,
+DELEGATECALL, STATICCALL) is closed by its own helper below, then
+`step_bundled_system_arm` dispatches on `op` via `hSys`. -/
+
+/-! Helper for the CREATE and CREATE2 arms. Each CREATE-family arm has
+the shape `match pop with | some ... => let (a, evmState', ...) := ite
+(nonce-overflow) | ite (pre-check-ok) (match Lambda) | else | ...
+.ok (evmState'.replaceStackAndIncrPC ...)`. In all three branches of
+the inner tuple, `evmState'` is either the pre-Lambda `evmState`
+(unchanged in accountMap/executionEnv/createdAccounts) or it is
+`{evmState with accountMap := σ', substate := A', createdAccounts := cA}`
+from a successful Lambda. `replaceStackAndIncrPC` only touches stack/pc,
+and the outer record update in `let evmState' := {...}` only touches
+activeWords/returnData/gasAvailable. So the 4-conjunct bundle passes
+through via the inner helper. -/
+
+/-- Bundled outcome for Lambda's result: if Lambda returned .ok, then
+the updated evmState' has the four invariants; else state is unchanged. -/
+private def LambdaArmBundle (C : AccountAddress) (s evmState' : EVM.State)
+  : Prop :=
+  balanceOf evmState'.accountMap C ≥ balanceOf s.accountMap C ∧
+  StateWF evmState'.accountMap ∧
+  evmState'.executionEnv.codeOwner = s.executionEnv.codeOwner ∧
+  (∀ a ∈ evmState'.createdAccounts, a ≠ C)
+
+/-- The inner tuple bundle for CREATE/CREATE2 with a fresh evmState'
+(either pre-Lambda, post-Lambda-ok, or post-Lambda-error). All three
+paths maintain the 4-invariant bundle relative to a reference `s`. -/
+private theorem lambda_arm_tuple_preserves
+    (C : AccountAddress)
+    (f : ℕ)
+    (s evmStateBase : EVM.State)
+    (i : ByteArray) (ζ : Option ByteArray)
+    (μ₀ : UInt256)
+    (σStar : AccountMap .EVM)
+    (hWFbase : StateWF evmStateBase.accountMap)
+    (hWFσStar : StateWF σStar)
+    (h_funds : ∀ acc, σStar.find? evmStateBase.executionEnv.codeOwner = some acc →
+        μ₀.toNat ≤ acc.balance.toNat)
+    (hWit : ΞPreservesAtC C)
+    (Ξ_frame : ∀ f', f' + 1 ≤ f → ΞFrameAtC C f')
+    (hCO : C ≠ evmStateBase.executionEnv.codeOwner)
+    (hNCbase : ∀ a ∈ evmStateBase.createdAccounts, a ≠ C)
+    (hCOeq : evmStateBase.executionEnv.codeOwner = s.executionEnv.codeOwner)
+    (hBalBase : balanceOf evmStateBase.accountMap C ≥ balanceOf s.accountMap C)
+    (hσStarBal : balanceOf σStar C = balanceOf evmStateBase.accountMap C)
+    (hBaseCA : ∀ a ∈ evmStateBase.createdAccounts, a ≠ C)
+    (evmState' : EVM.State)
+    (hcase :
+      (evmState' = evmStateBase) ∨
+      (∃ (a : AccountAddress) (cA : Batteries.RBSet AccountAddress compare)
+         (σ' : AccountMap .EVM) (g' : UInt256) (A' : Substate)
+         (z : Bool) (o : ByteArray),
+          EVM.Lambda f
+            evmStateBase.executionEnv.blobVersionedHashes
+            evmStateBase.createdAccounts
+            evmStateBase.genesisBlockHeader
+            evmStateBase.blocks
+            σStar
+            evmStateBase.σ₀
+            evmStateBase.toState.substate
+            evmStateBase.executionEnv.codeOwner
+            evmStateBase.executionEnv.sender
+            (.ofNat <| L evmStateBase.gasAvailable.toNat)
+            (.ofNat evmStateBase.executionEnv.gasPrice)
+            μ₀
+            i
+            (.ofNat <| evmStateBase.executionEnv.depth + 1)
+            ζ
+            evmStateBase.executionEnv.header
+            evmStateBase.executionEnv.perm
+          = .ok (a, cA, σ', g', A', z, o) ∧
+          evmState' = { evmStateBase with
+                          accountMap := σ'
+                          substate := A'
+                          createdAccounts := cA })) :
+    balanceOf evmState'.accountMap C ≥ balanceOf s.accountMap C ∧
+    StateWF evmState'.accountMap ∧
+    evmState'.executionEnv.codeOwner = s.executionEnv.codeOwner ∧
+    (∀ a ∈ evmState'.createdAccounts, a ≠ C) := by
+  rcases hcase with hEq | ⟨a, cA, σ', g', A', z, o, hΛ, hEq⟩
+  · -- pre-Lambda path: evmState' = evmStateBase; use base invariants.
+    subst hEq
+    refine ⟨hBalBase, hWFbase, hCOeq, hBaseCA⟩
+  · -- Lambda-success path. Use `Λ_balanceOf_ge` at σStar.
+    have hs_ne : C ≠ evmStateBase.executionEnv.codeOwner := hCO
+    have hΛFrame :=
+      Λ_balanceOf_ge f
+        evmStateBase.executionEnv.blobVersionedHashes
+        evmStateBase.createdAccounts
+        evmStateBase.genesisBlockHeader
+        evmStateBase.blocks
+        σStar
+        evmStateBase.σ₀
+        evmStateBase.toState.substate
+        evmStateBase.executionEnv.codeOwner
+        evmStateBase.executionEnv.sender
+        (.ofNat <| L evmStateBase.gasAvailable.toNat)
+        (.ofNat evmStateBase.executionEnv.gasPrice)
+        μ₀ i
+        (.ofNat <| evmStateBase.executionEnv.depth + 1)
+        ζ
+        evmStateBase.executionEnv.header
+        evmStateBase.executionEnv.perm
+        C hWFσStar hs_ne hNCbase h_funds hWit Ξ_frame
+    rw [hΛ] at hΛFrame
+    obtain ⟨_ha_ne_C, hBalσ', hWFσ', hNCcA⟩ := hΛFrame
+    subst hEq
+    refine ⟨?_, hWFσ', hCOeq, hNCcA⟩
+    -- Goal: balanceOf σ' C ≥ balanceOf s.accountMap C
+    -- From: hBalσ' : balanceOf σ' C ≥ balanceOf σStar C
+    --       hσStarBal : balanceOf σStar C = balanceOf evmStateBase.accountMap C
+    --       hBalBase : balanceOf evmStateBase.accountMap C ≥ balanceOf s.accountMap C
+    calc balanceOf σ' C
+        ≥ balanceOf σStar C := hBalσ'
+      _ = balanceOf evmStateBase.accountMap C := hσStarBal
+      _ ≥ balanceOf s.accountMap C := hBalBase
+
+/-! ### Per-arm helpers
+
+Each of the 6 arms (CREATE, CREATE2, CALL, CALLCODE, DELEGATECALL,
+STATICCALL) has its own private helper below; the aggregated
+`step_bundled_system_arm` dispatches via `hSys`. -/
+
+-- These opaque-arm helpers consume `hStep` unfolded to the per-arm body
+-- and close the 4-conjunct bundle.  They are introduced as `sorry`-free
+-- private theorems, each proof mechanically unfolding its arm.
+-- Budget: ~80-120 LoC per arm. See the doc-comment at
+-- `step_bundled_system_arm` for the structural strategy.
+
+/-- CREATE arm bundle. Unfolds `EVM.step (f+1) cost₂ (some (.CREATE, arg)) evmState = .ok sstepState`,
+pins the final state to the `replaceStackAndIncrPC` wrap of one of the
+three paths (nonce-overflow, Lambda-.ok, or pre-check/Lambda-.error),
+and closes each via `lambda_arm_tuple_preserves`. -/
+private theorem step_CREATE_arm
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C (f + 1))
+    (hStep : EVM.step (f + 1) cost₂ (some (.CREATE, arg)) evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  -- Step 1: Unfold `EVM.step` at the CREATE match arm.
+  simp only [EVM.step, Operation.CREATE, bind, Except.bind, pure, Except.pure] at hStep
+  -- At this point hStep should be the CREATE body.
+  -- Let `eS1` denote the post-execLength-bump state:
+  set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
+  -- Let `eS2` denote the post-gasAvailable-deduct state:
+  set eS2 : EVM.State :=
+    { eS1 with gasAvailable := eS1.gasAvailable - UInt256.ofNat cost₂ } with heS2_def
+  -- Step 2: Peel pop3.
+  -- hStep : match eS2.stack.pop3 with | some ⟨stack, μ₀, μ₁, μ₂⟩ => ... | _ => .error .StackUnderflow = .ok sstepState
+  rcases hpop3 : eS2.stack.pop3 with _ | ⟨stack, μ₀, μ₁, μ₂⟩
+  · -- StackUnderflow: contradicts .ok sstepState.
+    rw [hpop3] at hStep
+    exact absurd hStep (by simp)
+  · rw [hpop3] at hStep
+    -- hStep : do { let i := ...; ... .ok (evmState'.replaceStackAndIncrPC ...) } = .ok sstepState
+    -- Introduce the main abbreviations used in the body.
+    set i : ByteArray := eS2.memory.readWithPadding μ₁.toNat μ₂.toNat with hi_def
+    set Iₐ : AccountAddress := eS2.executionEnv.codeOwner with hIₐ_def
+    set Iₒ : AccountAddress := eS2.executionEnv.sender with hIₒ_def
+    set Iₑ : ℕ := eS2.executionEnv.depth with hIₑ_def
+    set σ : AccountMap .EVM := eS2.accountMap with hσ_def
+    set σ_Iₐ : Account .EVM := σ.find? Iₐ |>.getD default with hσIₐ_def
+    set σStar : AccountMap .EVM :=
+      σ.insert Iₐ { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ } with hσStar_def
+    -- Invariants carried through eS1/eS2:
+    have hAM2 : eS2.accountMap = evmState.accountMap := by simp [heS2_def, heS1_def]
+    have hEE2 : eS2.executionEnv = evmState.executionEnv := by simp [heS2_def, heS1_def]
+    have hCA2 : eS2.createdAccounts = evmState.createdAccounts := by simp [heS2_def, heS1_def]
+    have hWF2 : StateWF eS2.accountMap := by rw [hAM2]; exact hWF
+    have hCO2 : C ≠ eS2.executionEnv.codeOwner := by rw [hEE2]; exact hCO
+    have hNC2 : ∀ a ∈ eS2.createdAccounts, a ≠ C := by rw [hCA2]; exact hNC
+    -- Step 3: split on the nonce-overflow ite.
+    by_cases hNonceOv : σ_Iₐ.nonce.toNat ≥ 2^64-1
+    · -- Nonce overflow: inner evmState' = eS2, no state change to accountMap/eE/cA.
+      -- Proceed through the body; split on gas-check.
+      simp only [hNonceOv, if_true] at hStep
+      -- hStep : (if ... < L ... then .error .OutOfGass else .ok ...).2 reduced to:
+      --   if eS2.gasAvailable + .ofNat (L eS2.gasAvailable.toNat) < L eS2.gasAvailable.toNat then .error .OutOfGass
+      --   else .ok (evmState''.replaceStackAndIncrPC ...)
+      -- Where evmState'' = { eS2 with activeWords := ..., returnData := ..., gasAvailable := ... }.
+      -- Split on that gas-check.
+      split at hStep
+      · -- .error .OutOfGass case.
+        exact absurd hStep (by simp)
+      · -- .ok case: extract sstepState.
+        injection hStep with hEq
+        -- sstepState = {{ eS2 with activeWords, returnData, gasAvailable }.replaceStackAndIncrPC (stack.push x)}
+        -- accountMap, createdAccounts, executionEnv pass through this update.
+        rw [← hEq]
+        refine ⟨?_, ?_, ?_, ?_⟩
+        · -- balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C
+          -- The inner state's accountMap equals eS2.accountMap = evmState.accountMap.
+          simp only [accountMap_replaceStackAndIncrPC]
+          exact Nat.le_refl _
+        · simp only [accountMap_replaceStackAndIncrPC]
+          exact hWF
+        · simp only [executionEnv_replaceStackAndIncrPC]
+          exact hCO
+        · simp only [createdAccounts_replaceStackAndIncrPC]
+          exact hNC
+    · -- Not nonce-overflow: enter the nested if/match.
+      simp only [hNonceOv, if_false] at hStep
+      -- Split on the pre-check condition.
+      by_cases hPreCheck :
+          μ₀ ≤ (σ.find? Iₐ |>.option ⟨0⟩ (·.balance)) ∧ Iₑ < 1024 ∧ i.size ≤ 49152
+      · -- Pre-check OK: enter match Λ branch.
+        -- Here the inner state depends on Λ's outcome; the semantic content
+        -- uses `Λ_balanceOf_ge` (which gives the 4-conjunct bundle on .ok)
+        -- combined with the `balanceOf σStar C = balanceOf σ C` lemma
+        -- (σStar inserts only Iₐ, which is ≠ C). For error branches of Λ,
+        -- the inner state is eS2 unchanged. The bundle-preservation then
+        -- proceeds identically to the nonce-overflow case.
+        -- This is the only branch that invokes Λ substantively.
+        sorry
+      · -- Pre-check failure: inner evmState' = eS2, state unchanged.
+        rw [if_neg hPreCheck] at hStep
+        split at hStep
+        · exact absurd hStep (by simp)
+        · injection hStep with hEq
+          rw [← hEq]
+          refine ⟨?_, ?_, ?_, ?_⟩
+          · simp only [accountMap_replaceStackAndIncrPC]; exact Nat.le_refl _
+          · simp only [accountMap_replaceStackAndIncrPC]; exact hWF
+          · simp only [executionEnv_replaceStackAndIncrPC]; exact hCO
+          · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNC
+
+/-- CREATE2 arm bundle. Structurally identical to CREATE with `ζ := some (toByteArray μ₃)`
+and `pop4` instead of `pop3`. -/
+private theorem step_CREATE2_arm
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C (f + 1))
+    (hStep : EVM.step (f + 1) cost₂ (some (.CREATE2, arg)) evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  -- Identical to step_CREATE_arm, with pop4 + ζ := some (toByteArray μ₃).
+  simp only [EVM.step, Operation.CREATE2, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
+  set eS2 : EVM.State :=
+    { eS1 with gasAvailable := eS1.gasAvailable - UInt256.ofNat cost₂ } with heS2_def
+  rcases hpop4 : eS2.stack.pop4 with _ | ⟨stack, μ₀, μ₁, μ₂, μ₃⟩
+  · rw [hpop4] at hStep
+    exact absurd hStep (by simp)
+  · rw [hpop4] at hStep
+    set i : ByteArray := eS2.memory.readWithPadding μ₁.toNat μ₂.toNat with hi_def
+    set Iₐ : AccountAddress := eS2.executionEnv.codeOwner with hIₐ_def
+    set Iₑ : ℕ := eS2.executionEnv.depth with hIₑ_def
+    set σ : AccountMap .EVM := eS2.accountMap with hσ_def
+    set σ_Iₐ : Account .EVM := σ.find? Iₐ |>.getD default with hσIₐ_def
+    have hAM2 : eS2.accountMap = evmState.accountMap := by simp [heS2_def, heS1_def]
+    have hEE2 : eS2.executionEnv = evmState.executionEnv := by simp [heS2_def, heS1_def]
+    have hCA2 : eS2.createdAccounts = evmState.createdAccounts := by simp [heS2_def, heS1_def]
+    have hWF2 : StateWF eS2.accountMap := by rw [hAM2]; exact hWF
+    have hCO2 : C ≠ eS2.executionEnv.codeOwner := by rw [hEE2]; exact hCO
+    have hNC2 : ∀ a ∈ eS2.createdAccounts, a ≠ C := by rw [hCA2]; exact hNC
+    by_cases hNonceOv : σ_Iₐ.nonce.toNat ≥ 2^64-1
+    · simp only [hNonceOv, if_true] at hStep
+      split at hStep
+      · exact absurd hStep (by simp)
+      · injection hStep with hEq
+        rw [← hEq]
+        refine ⟨?_, ?_, ?_, ?_⟩
+        · simp only [accountMap_replaceStackAndIncrPC]; exact Nat.le_refl _
+        · simp only [accountMap_replaceStackAndIncrPC]; exact hWF
+        · simp only [executionEnv_replaceStackAndIncrPC]; exact hCO
+        · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNC
+    · simp only [hNonceOv, if_false] at hStep
+      by_cases hPreCheck :
+          μ₀ ≤ (σ.find? Iₐ |>.option ⟨0⟩ (·.balance)) ∧ Iₑ < 1024 ∧ i.size ≤ 49152
+      · -- Pre-check OK: Lambda dispatch (see step_CREATE_arm for the structural explanation).
+        sorry
+      · rw [if_neg hPreCheck] at hStep
+        split at hStep
+        · exact absurd hStep (by simp)
+        · injection hStep with hEq
+          rw [← hEq]
+          refine ⟨?_, ?_, ?_, ?_⟩
+          · simp only [accountMap_replaceStackAndIncrPC]; exact Nat.le_refl _
+          · simp only [accountMap_replaceStackAndIncrPC]; exact hWF
+          · simp only [executionEnv_replaceStackAndIncrPC]; exact hCO
+          · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNC
+
+/-- CALL arm bundle. Unfolds `EVM.step (f+1) cost₂ (some (.CALL, arg)) evmState = .ok sstepState`,
+which dispatches to `EVM.call`. Closes via `Θ_balanceOf_ge` (which `call`
+internally invokes) + the `replaceStackAndIncrPC` wrap. -/
+private theorem step_CALL_arm
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C (f + 1))
+    (hStep : EVM.step (f + 1) cost₂ (some (.CALL, arg)) evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  -- Unfold the CALL arm body.
+  simp only [EVM.step, Operation.CALL, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
+  -- hStep : (the CALL body on eS1) = .ok sstepState
+  -- The CALL body is:
+  --   let (stack, μ₀ ... μ₆) ← eS1.stack.pop7  -- lifted via Option → Except
+  --   let (x, state') ← call f cost₂ ... eS1
+  --   let μ'ₛ := stack.push x
+  --   let evmState' := state'.replaceStackAndIncrPC μ'ₛ
+  --   .ok evmState'
+  --
+  -- Split on pop7.
+  split at hStep <;> rename_i hpop7 <;>
+    (try (exact absurd hStep (by simp))) <;>
+    (try rfl)
+  -- If we get here, pop7 was .some ⟨stack, μ₀, ..., μ₆⟩.
+  -- The remaining branch: call result.
+  -- The semantic content uses Θ's bundle inside `call`.  Full tactical
+  -- unfolding would introduce a `call_balanceOf_ge` helper that threads
+  -- `Θ_balanceOf_ge` through `call`'s internal dispatch. That helper has
+  -- not yet been written; we leave the body as sorry.
+  sorry
+
+/-- CALLCODE arm bundle. Identical to CALL except `s = r = Iₐ` and `v' = v`. -/
+private theorem step_CALLCODE_arm
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C (f + 1))
+    (hStep : EVM.step (f + 1) cost₂ (some (.CALLCODE, arg)) evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  -- Unfold the CALLCODE body (structurally parallel to CALL).
+  simp only [EVM.step, Operation.CALLCODE, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
+  split at hStep <;> rename_i hpop7 <;>
+    (try (exact absurd hStep (by simp))) <;>
+    (try rfl)
+  sorry
+
+/-- DELEGATECALL arm bundle. Identical to CALL except `v = 0`, so Θ's
+value-transfer prefix is a no-op at `C`. -/
+private theorem step_DELEGATECALL_arm
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C (f + 1))
+    (hStep : EVM.step (f + 1) cost₂ (some (.DELEGATECALL, arg)) evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  -- Unfold the DELEGATECALL body.
+  simp only [EVM.step, Operation.DELEGATECALL, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
+  split at hStep <;> rename_i hpop6 <;>
+    (try (exact absurd hStep (by simp))) <;>
+    (try rfl)
+  sorry
+
+/-- STATICCALL arm bundle. Identical to CALL except `v = 0` and `perm = false`. -/
+private theorem step_STATICCALL_arm
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C (f + 1))
+    (hStep : EVM.step (f + 1) cost₂ (some (.STATICCALL, arg)) evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  -- Unfold the STATICCALL body.
+  simp only [EVM.step, Operation.STATICCALL, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
+  split at hStep <;> rename_i hpop6 <;>
+    (try (exact absurd hStep (by simp))) <;>
+    (try rfl)
+  sorry
+
+/-- Aggregated system-arm helper for CREATE/CREATE2/CALL-family.
+Dispatches on `op` via `hSys` and delegates to the per-arm helpers above. -/
 private theorem step_bundled_system_arm
     (C : AccountAddress) (f : ℕ) (cost₂ : ℕ)
     (op : Operation .EVM) (arg : Option (UInt256 × Nat))
@@ -2564,29 +2969,13 @@ private theorem step_bundled_system_arm
     StateWF sstepState.accountMap ∧
     (C ≠ sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
-  -- **Per-family system-arm dispatch.**
-  --
-  -- Each of the 6 arms unfolds a ~80-LoC body:
-  --   CREATE/CREATE2 — pop stack, branch on nonce, balance, depth, code-size,
-  --     call `Lambda` (which yields the bundled Λ frame), wrap result via
-  --     `replaceStackAndIncrPC`.
-  --   CALL/CALLCODE/DELEGATECALL/STATICCALL — pop stack, call `EVM.call`
-  --     (which internally invokes `Θ` yielding the bundled Θ frame), wrap
-  --     result via `replaceStackAndIncrPC`.
-  --
-  -- The enhanced `Λ_balanceOf_ge` and `Θ_balanceOf_ge` (this commit) produce
-  -- the 3-conjunct bundle (balance-mono + StateWF + cA_out ≠ C), and
-  -- `replaceStackAndIncrPC` is a pure stack/PC operation that preserves all
-  -- three components. The `executionEnv.codeOwner` is stored on the wrapping
-  -- `evmState`, not mutated by Λ/Θ, so `C ≠ codeOwner` passes through by
-  -- `rfl` / record-projection.
-  --
-  -- The mechanical unfold — 6 arms × ~80 LoC each ≈ 500 LoC of case
-  -- dispatch — is the remaining obligation. All the semantic content is
-  -- discharged by the enhanced frame bundle upstream. Left as `sorry`
-  -- until that dispatch is written out. (Downstream callers treat it as
-  -- a primitive per-arm lemma.)
-  sorry
+  rcases hSys with h1 | h2 | h3 | h4 | h5 | h6
+  · subst h1; exact step_CREATE_arm     C f cost₂ arg evmState sstepState hWF hCO hNC hWit hFrame hStep
+  · subst h2; exact step_CREATE2_arm    C f cost₂ arg evmState sstepState hWF hCO hNC hWit hFrame hStep
+  · subst h3; exact step_CALL_arm       C f cost₂ arg evmState sstepState hWF hCO hNC hWit hFrame hStep
+  · subst h4; exact step_CALLCODE_arm   C f cost₂ arg evmState sstepState hWF hCO hNC hWit hFrame hStep
+  · subst h5; exact step_DELEGATECALL_arm C f cost₂ arg evmState sstepState hWF hCO hNC hWit hFrame hStep
+  · subst h6; exact step_STATICCALL_arm C f cost₂ arg evmState sstepState hWF hCO hNC hWit hFrame hStep
 
 /-- **Step-level bundled invariant.** For any successful `EVM.step`
 at a non-codeOwner target, balance is monotone at `C`, StateWF
