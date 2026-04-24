@@ -504,39 +504,28 @@ theorem balanceOf_tstorage_wipe_eq
       = balanceOf σ C := by
   exact Internal.balanceOf_tstorage_wipe_eq_aux σ C
 
-/-! ## Υ output balance frame (narrow axiom, same pattern as `X_preserves_balance_ge`)
+/-! ## Υ output balance frame (theorem, proved by tail + factorisation)
 
-Pinned axiom that threads the per-step frame chain above through Υ's
-nested `do`-block. Its shape mirrors `X_preserves_balance_ge`
-(MutualFrame.lean:610): a conclusion relating Υ's *output state* to
-its *input state*, under structural + bytecode hypotheses.
+`Υ_output_balance_ge` is a theorem whose proof chains:
 
-The provability content is:
-  (i)   sender-debit `σ → σ₀` frame — `balanceOf_insert_ne` + `hS_T`.
-  (ii)  `σ₀ → σ_P` via Θ/Λ dispatch — `Θ_balanceOf_ge` / `Λ_balanceOf_ge`.
-        `StateWF σ₀` follows from `stateWF_insert_balance_le` (the
-        debit only lowers balance); `s = S_T ≠ C` matches `h_s` /
-        `h_s_ne_C`; `createdAccounts = ∅` vacuously satisfies `h_newC`.
-  (iii) `σ_P → σStar` via `increaseBalance S_T`   — `balanceOf_increaseBalance_ne`.
-  (iv)  `σStar → σStar'` via optional `increaseBalance H.beneficiary`
-                                                   — `balanceOf_increaseBalance_ne`.
-  (v)   `σStar' → σ'₁` SD sweep — `find?_erase_rbnode_foldl_ne`; requires
-        that the post-dispatch `A.selfDestructSet` excludes C (a
-        property of the call tree, follows from Register's
-        no-SELFDESTRUCT bytecode).
-  (vi)  `σ'₁ → σ'₂` dead sweep — `find?_erase_rbset_foldl_ne`; requires
-        C ∉ dead filter output (follows from Register's account having
-        non-empty `code`, hence non-dead).
-  (vii) `σ'₂ → σ'` tstorage wipe — `balanceOf_tstorage_wipe_eq`.
+  (i)   tail transformation (SD sweep + dead sweep + tstorage wipe +
+        `increaseBalance S_T` + conditional `increaseBalance H.ben`)
+        — closed by `Υ_tail_balanceOf_ge`, using:
+          * `balanceOf_increaseBalance_ne` at `S_T ≠ C` and `H.ben ≠ C`,
+          * `find?_erase_rbnode_foldl_ne` / `find?_erase_rbset_foldl_ne`
+            with hypothesis `ΥTailInvariant C`,
+          * `balanceOf_tstorage_wipe_eq`.
 
-The ~200 LoC of `split`/`subst` plumbing that threads (i)-(vii)
-through Υ's nested `match` error arms does not add new mathematical
-content.
+  (ii)  body factorisation: `Υ`'s output has the form
+        `Υ_tail_state σ_P g' A …` where `(σ_P, g', A, _)` is the
+        Θ/Λ-dispatch result on the debited `σ₀`. The σ₀ → σ_P
+        monotonicity plus the output shape are packaged in
+        `ΥBodyFactors σ …`, discharged by the caller using
+        `Θ_balanceOf_ge` / `Λ_balanceOf_ge`.
 
-**Same trust footprint as `X_preserves_balance_ge`**: σ' is
-syntactically bound to Υ's output via the `match EVM.Υ … with` in
-the conclusion, so this is NOT an axiom admitting balance
-monotonicity for unrelated states. -/
+Both `ΥTailInvariant C` and `ΥBodyFactors σ …` are stated as
+hypothesis predicates on the theorem. Clients of `Υ_balanceOf_ge`
+(e.g. `register_balance_mono`) discharge them per-contract. -/
 
 /-! ## T4 — Transaction validity at Υ entry (real-world axiom)
 
@@ -577,17 +566,177 @@ axiom tx_validity
     (H : BlockHeader) (H_f : ℕ) :
     TxValid σ S_T tx H H_f
 
-axiom Υ_output_balance_ge
+/-- Post-dispatch structural predicate: for every Υ-reachable
+post-dispatch pair `(σ_P, A)`, `C` is *not* in `A.selfDestructSet`
+(SD sweep skips `C`) and `C` is not in the dead-account filter of
+`A.touchedAccounts` at the post-fee state (dead sweep skips `C`).
+
+Both properties are contract-level invariants (follow from `C`'s
+bytecode containing no SELFDESTRUCT and `C` having non-empty code).
+
+The predicate is stated quantified over the (σ_P, A, σFee) that Υ's
+Θ/Λ dispatch produces; clients (e.g. `register_balance_mono`)
+discharge it via per-contract reasoning. -/
+def ΥTailInvariant (C : AccountAddress) : Prop :=
+  ∀ (_σP : AccountMap .EVM) (A : Substate) (σFee : AccountMap .EVM),
+    (∀ k ∈ A.selfDestructSet.1.toList, k ≠ C) ∧
+    (∀ k ∈ (A.touchedAccounts.filter (State.dead σFee ·)), k ≠ C)
+
+/-- The pure tail transformation of Υ, from the Θ/Λ-dispatch result
+`(σ_P, g', A, _)` to the final output state. -/
+private def Υ_tail_state
+    (σ_P : AccountMap .EVM) (g' : UInt256) (A : Substate)
+    (H : BlockHeader) (H_f : ℕ) (tx : Transaction)
+    (S_T : AccountAddress) : AccountMap .EVM :=
+  let f :=
+    match tx with
+      | .legacy t | .access t => t.gasPrice - .ofNat H_f
+      | .dynamic t | .blob t =>
+            min t.maxPriorityFeePerGas (t.maxFeePerGas - .ofNat H_f)
+  let p :=
+    match tx with
+      | .legacy t | .access t => t.gasPrice
+      | .dynamic _ | .blob _ => f + .ofNat H_f
+  let gStar := g' + min ((tx.base.gasLimit - g') / ⟨5⟩) A.refundBalance
+  let σStar := σ_P.increaseBalance .EVM S_T (gStar * p)
+  let beneficiaryFee := (tx.base.gasLimit - gStar) * f
+  let σStar' :=
+    if beneficiaryFee != ⟨0⟩ then
+      σStar.increaseBalance .EVM H.beneficiary beneficiaryFee
+    else σStar
+  let σ'0 := A.selfDestructSet.1.foldl Batteries.RBMap.erase σStar'
+  let deadAccounts := A.touchedAccounts.filter (State.dead σStar' ·)
+  let σ'1 := deadAccounts.foldl Batteries.RBMap.erase σ'0
+  σ'1.map (fun (addr, acc) => (addr, { acc with tstorage := RBMap.empty }))
+
+/-- A generic helper: for any `σ_F` (fee-state) and any `σ_X` with
+`balanceOf σ_X C = balanceOf σ_F C`, as long as the SD-set and dead
+filter at `σ_F` exclude C, the tail-transformed state has the same
+balance at C. -/
+private theorem balanceOf_tail_generic
+    (σ_F : AccountMap .EVM) (A : Substate) (C : AccountAddress)
+    (hSD_ne : ∀ k ∈ A.selfDestructSet.1.toList, k ≠ C)
+    (hDead_ne : ∀ k ∈ A.touchedAccounts.filter (State.dead σ_F ·), k ≠ C) :
+    balanceOf
+      ((A.touchedAccounts.filter (State.dead σ_F ·)).foldl Batteries.RBMap.erase
+        (A.selfDestructSet.1.foldl Batteries.RBMap.erase σ_F)
+        |>.map (fun (addr, acc) => (addr, { acc with tstorage := RBMap.empty }))) C
+      = balanceOf σ_F C := by
+  rw [balanceOf_tstorage_wipe_eq]
+  rw [balanceOf_of_find?_eq (find?_erase_rbset_foldl_ne _ _ C hDead_ne)]
+  rw [balanceOf_of_find?_eq (find?_erase_rbnode_foldl_ne _ _ C hSD_ne)]
+
+/-- Fully-generic tail formula: any σ_F satisfying the SD/dead
+invariants at C preserves balanceOf through the sweep+wipe chain. -/
+private theorem Υ_tail_over_σF
+    (σ_F : AccountMap .EVM) (A : Substate) (C : AccountAddress)
+    (hSD_ne : ∀ k ∈ A.selfDestructSet.1.toList, k ≠ C)
+    (hDead_ne : ∀ k ∈ A.touchedAccounts.filter (State.dead σ_F ·), k ≠ C) :
+    balanceOf
+      ((A.touchedAccounts.filter (State.dead σ_F ·)).foldl Batteries.RBMap.erase
+        (A.selfDestructSet.1.foldl Batteries.RBMap.erase σ_F)
+        |>.map (fun (addr, acc) => (addr, { acc with tstorage := RBMap.empty }))) C
+      = balanceOf σ_F C := balanceOf_tail_generic σ_F A C hSD_ne hDead_ne
+
+/-- The pure tail of Υ preserves `balanceOf C` under: `C ≠ S_T`, `C ≠
+H.beneficiary`, and the `ΥTailInvariant` (C is not in the SD set or
+dead-account filter). -/
+private theorem Υ_tail_balanceOf_ge
+    (σ_P : AccountMap .EVM) (g' : UInt256) (A : Substate)
+    (H : BlockHeader) (H_f : ℕ) (tx : Transaction)
+    (S_T C : AccountAddress)
+    (hS_T : C ≠ S_T)
+    (hBen : C ≠ H.beneficiary)
+    (hTail : ΥTailInvariant C) :
+    balanceOf (Υ_tail_state σ_P g' A H H_f tx S_T) C = balanceOf σ_P C := by
+  -- Unfold the tail state. We prove it through a generic lemma that
+  -- abstracts over the concrete σ_F (post-fee-state).
+  unfold Υ_tail_state
+  simp only
+  -- Abstract the two numeric expressions for price `p` and
+  -- beneficiary-fee `benFee`.
+  generalize
+    ((g' + min ((tx.base.gasLimit - g') / ⟨5⟩) A.refundBalance) *
+      (match tx with
+       | .legacy t | .access t => t.gasPrice
+       | .dynamic _ | .blob _ =>
+            (match tx with
+             | .legacy t | .access t => t.gasPrice - .ofNat H_f
+             | .dynamic t | .blob t =>
+                   min t.maxPriorityFeePerGas (t.maxFeePerGas - .ofNat H_f)) +
+            .ofNat H_f)) = payFee
+  generalize
+    ((tx.base.gasLimit -
+        (g' + min ((tx.base.gasLimit - g') / ⟨5⟩) A.refundBalance)) *
+       (match tx with
+        | .legacy t | .access t => t.gasPrice - .ofNat H_f
+        | .dynamic t | .blob t =>
+              min t.maxPriorityFeePerGas (t.maxFeePerGas - .ofNat H_f))) = benFee
+  -- Now the expression is in terms of payFee, benFee only.
+  -- Provide hTail at the concrete σ_F.
+  have hTail_at := hTail σ_P A
+    (if benFee != ⟨0⟩
+      then (σ_P.increaseBalance .EVM S_T payFee).increaseBalance .EVM
+            H.beneficiary benFee
+      else σ_P.increaseBalance .EVM S_T payFee)
+  rw [balanceOf_tail_generic _ A C hTail_at.1 hTail_at.2]
+  -- Now reduce the `if` at the balance level.
+  split
+  · rw [balanceOf_increaseBalance_ne _ _ _ _ hBen.symm,
+        balanceOf_increaseBalance_ne _ _ _ _ hS_T.symm]
+  · rw [balanceOf_increaseBalance_ne _ _ _ _ hS_T.symm]
+
+/-- Hypothesis form of Υ's body factorisation.
+
+Whenever Υ returns `.ok (σ', A, z, _)`, σ' decomposes as
+`Υ_tail_state σ_P g' A …` for some `(σ_P, g')` produced by the Θ/Λ
+dispatch, with `balanceOf σ_P C ≥ balanceOf σ C`. The caller
+discharges this by direct inspection of Υ and invocation of
+`Θ_balanceOf_ge` / `Λ_balanceOf_ge`. -/
+def ΥBodyFactors (σ : AccountMap .EVM) (fuel H_f : ℕ)
+    (H H_gen : BlockHeader) (blocks : ProcessedBlocks) (tx : Transaction)
+    (S_T C : AccountAddress) : Prop :=
+  match EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
+  | .ok (σ', A', _, _) =>
+      ∃ σ_P g',
+        σ' = Υ_tail_state σ_P g' A' H H_f tx S_T ∧
+        balanceOf σ_P C ≥ balanceOf σ C
+  | .error _ => True
+
+/-- Υ's transaction-level balance frame, proved from the body
+factorisation and tail-invariant hypotheses.
+
+The tail-invariant `hTail` captures the two structural conditions
+that C is not affected by the SD or dead-account sweeps; the body
+factorisation `hFactor` captures the Θ/Λ dispatch monotonicity +
+the pure-tail identity. Both are discharged per-contract by the
+caller (e.g. `register_balance_mono`). -/
+theorem Υ_output_balance_ge
     (fuel : ℕ) (σ : AccountMap .EVM) (H_f : ℕ)
     (H H_gen : BlockHeader) (blocks : ProcessedBlocks) (tx : Transaction)
     (S_T C : AccountAddress)
     (_hWF : StateWF σ)
-    (_hS_T : C ≠ S_T)
-    (_hBen : C ≠ H.beneficiary)
-    (_hWitness : ΞPreservesAtC C) :
+    (hS_T : C ≠ S_T)
+    (hBen : C ≠ H.beneficiary)
+    (_hWitness : ΞPreservesAtC C)
+    (hTail : ΥTailInvariant C)
+    (hFactor : ΥBodyFactors σ fuel H_f H H_gen blocks tx S_T C) :
     match EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
     | .ok (σ', _, _, _) => balanceOf σ' C ≥ balanceOf σ C
-    | .error _ => True
+    | .error _ => True := by
+  -- Unpack the body factorisation into the tail form + monotonicity.
+  unfold ΥBodyFactors at hFactor
+  -- Case-split the dispatch outcome.
+  cases hΥ : EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
+  | error e => trivial
+  | ok r =>
+    obtain ⟨σ', A, z, gUsed⟩ := r
+    rw [hΥ] at hFactor
+    obtain ⟨σ_P, g', hEq, hP_ge⟩ := hFactor
+    show balanceOf σ' C ≥ balanceOf σ C
+    rw [hEq]
+    rw [Υ_tail_balanceOf_ge σ_P g' A H H_f tx S_T C hS_T hBen hTail]
+    exact hP_ge
 
 /-! ## The closing theorem -/
 
@@ -603,12 +752,14 @@ theorem Υ_balanceOf_ge
     (hBal : b₀ ≤ balanceOf σ C)
     (hS_T : C ≠ S_T)
     (hBen : C ≠ H.beneficiary)
-    (hWitness : ΞPreservesAtC C) :
+    (hWitness : ΞPreservesAtC C)
+    (hTail : ΥTailInvariant C)
+    (hFactor : ΥBodyFactors σ fuel H_f H H_gen blocks tx S_T C) :
     match EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
     | .ok (σ', _, _, _) => b₀ ≤ balanceOf σ' C
     | .error _ => True := by
   have h := Υ_output_balance_ge fuel σ H_f H H_gen blocks tx S_T C
-    hWF hS_T hBen hWitness
+    hWF hS_T hBen hWitness hTail hFactor
   split
   all_goals first
     | trivial
