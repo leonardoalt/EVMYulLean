@@ -79,9 +79,36 @@ so `σ[a].balance + σ[b].balance` doesn't wrap.
 def totalETH (σ : AccountMap .EVM) : ℕ :=
   σ.foldl (fun acc _ v => acc + v.balance.toNat) 0
 
-/-- Real-world well-formedness: total ETH supply fits in `UInt256`. -/
+/-- Real-world well-formedness: total ETH supply is bounded below
+half of `UInt256.size`.
+
+The `< 2^255` (vs the naïve `< 2^256`) is still real-world valid —
+ETH supply is ≈ 120M ETH ≈ 2^87 wei, many orders of magnitude below
+2^255. The half-bound is needed to handle self-call (r = s = codeOwner)
+no-wrap: `σ[s].balance + v ≤ 2·σ[s].balance ≤ 2·totalETH < 2^256`.
+
+For consumers wanting only `< 2^256`, we provide `boundedTotal'` as a
+weaker form derived from `boundedTotal`. -/
 structure StateWF (σ : AccountMap .EVM) : Prop where
-  boundedTotal : totalETH σ < UInt256.size
+  boundedTotal : totalETH σ < UInt256.size / 2
+
+/-- Weaker form of `boundedTotal`: the sum is below `UInt256.size` —
+trivially derived. Used by most frame-lemma consumers that only need
+the full-width bound. -/
+theorem StateWF.boundedTotal' {σ : AccountMap .EVM} (h : StateWF σ) :
+    totalETH σ < UInt256.size :=
+  Nat.lt_of_lt_of_le h.boundedTotal (Nat.div_le_self _ _)
+
+/-- Double-bound: `2·totalETH σ < UInt256.size`. Used for self-call
+no-wrap reasoning. -/
+theorem StateWF.boundedTotalDouble {σ : AccountMap .EVM} (h : StateWF σ) :
+    2 * totalETH σ < UInt256.size := by
+  have := h.boundedTotal
+  have hUsize : (2 : ℕ) ∣ UInt256.size := by decide
+  calc 2 * totalETH σ
+      < 2 * (UInt256.size / 2) := by omega
+    _ = UInt256.size := by
+        rw [Nat.mul_div_cancel' hUsize]
 
 /-! ## `totalETH` membership bounds
 
@@ -192,7 +219,7 @@ theorem no_wrap_one
     (σ : AccountMap .EVM) (hWF : StateWF σ)
     (a : AccountAddress) (acc : Account .EVM) (h : σ.find? a = some acc) :
     acc.balance.toNat < UInt256.size :=
-  Nat.lt_of_le_of_lt (balance_toNat_le_totalETH σ a acc h) hWF.boundedTotal
+  Nat.lt_of_le_of_lt (balance_toNat_le_totalETH σ a acc h) hWF.boundedTotal'
 
 /-- Two-account no-wrap: sum of any two distinct balances is `< UInt256.size`. -/
 theorem no_wrap_pair
@@ -201,7 +228,7 @@ theorem no_wrap_pair
     (ha : σ.find? a = some σa) (hb : σ.find? b = some σb) (hab : a ≠ b) :
     σa.balance.toNat + σb.balance.toNat < UInt256.size :=
   Nat.lt_of_le_of_lt (balance_pair_toNat_le_totalETH σ a b σa σb ha hb hab)
-    hWF.boundedTotal
+    hWF.boundedTotal'
 
 /-- Helper: UInt256 addition agrees with ℕ addition under no-wrap. -/
 theorem UInt256_add_toNat_of_no_wrap
