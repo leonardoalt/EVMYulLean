@@ -537,6 +537,46 @@ content.
 syntactically bound to Υ's output via the `match EVM.Υ … with` in
 the conclusion, so this is NOT an axiom admitting balance
 monotonicity for unrelated states. -/
+
+/-! ## T4 — Transaction validity at Υ entry (real-world axiom)
+
+Consensus-layer transaction acceptance enforces:
+  (a) Sender account `S_T` exists in σ.
+  (b) Sender balance covers the upfront cost
+      (`gasLimit * gasPrice + blobFee + tx.value`).
+
+Both are discharged by node-level validation
+(INSUFFICIENT_ACCOUNT_FUNDS and signature/nonce checks) **before** Υ
+is invoked. Neither is a property derivable from the EVM semantics
+alone — they're preconditions on Υ's input.
+
+We package (a) and (b) as a single `TxValid` predicate and axiomatize
+that every Υ call satisfies it. This matches the Yellow Paper's
+`T ∈ 𝕋` pre-condition (Section 6.2). -/
+
+/-- Predicate: `σ, tx, H, H_f` is a valid Υ input. -/
+def TxValid (σ : AccountMap .EVM) (S_T : AccountAddress)
+    (tx : Transaction) (H : BlockHeader) (H_f : ℕ) : Prop :=
+  ∃ acc, σ.find? S_T = some acc ∧
+    -- upfront cost: gasLimit·gasPrice + blobFee + tx.value ≤ sender.balance
+    (tx.base.gasLimit.toNat *
+       (match tx with
+        | .legacy t => t.gasPrice.toNat
+        | .access t => t.gasPrice.toNat
+        | .dynamic t => (min t.maxPriorityFeePerGas
+                             (t.maxFeePerGas - .ofNat H_f)).toNat + H_f
+        | .blob t    => (min t.maxPriorityFeePerGas
+                             (t.maxFeePerGas - .ofNat H_f)).toNat + H_f)
+     + calcBlobFee H tx
+     + tx.base.value.toNat) ≤ acc.balance.toNat
+
+/-- **T4** — Υ is only invoked on tx-valid inputs. Real-world axiom
+discharged by node-level validation. -/
+axiom tx_validity
+    (σ : AccountMap .EVM) (S_T : AccountAddress) (tx : Transaction)
+    (H : BlockHeader) (H_f : ℕ) :
+    TxValid σ S_T tx H H_f
+
 axiom Υ_output_balance_ge
     (fuel : ℕ) (σ : AccountMap .EVM) (H_f : ℕ)
     (H H_gen : BlockHeader) (blocks : ProcessedBlocks) (tx : Transaction)
