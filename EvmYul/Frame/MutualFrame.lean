@@ -1915,6 +1915,238 @@ private def StepBundledFrame (C : AccountAddress) (s s' : EVM.State) : Prop :=
   s'.executionEnv.codeOwner = s.executionEnv.codeOwner ∧
   (∀ a ∈ s'.createdAccounts, a ≠ C)
 
+/-- **Step-level bundled invariant.** For any successful `EVM.step`
+at a non-codeOwner target, balance is monotone at `C`, StateWF
+preserved, codeOwner unchanged, createdAccounts tracked no new C.
+
+This is the per-opcode composite of the four already-closed frames
+(Θ_balanceOf_ge, Λ_balanceOf_ge, selfdestruct_balanceOf_ne_Iₐ_ge,
+EvmYul.step_preserves_balanceOf). Its body is the full 25-opcode
+dispatch, mechanically routine but bulky (~400 LoC). We state it
+here as the single remaining obligation; the structural skeleton
+for `X_inv_holds` above is fully closed modulo this helper. -/
+private theorem step_bundled_invariant_at_C
+    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
+    (instr : Option (Operation .EVM × Option (UInt256 × Nat)))
+    (evmState sstepState : EVM.State)
+    (_hWF : StateWF evmState.accountMap)
+    (_hCO : C ≠ evmState.executionEnv.codeOwner)
+    (_hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (_hWit : ΞPreservesAtC C)
+    (_hFrame : ΞFrameAtC C f')
+    (_hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  -- **Per-opcode dispatch obligation.**
+  --
+  -- `EVM.step` at fuel 0 errors trivially; at `f + 1` it decodes `instr`,
+  -- bumps `execLength`, and dispatches on the decoded opcode. The full
+  -- dispatch covers 25 opcode families: handled-by-EvmYul arms (StopArith,
+  -- CompBit, Keccak, Env, Block, StackMemFlow, Push, Dup, Exchange, Log,
+  -- RETURN/REVERT/INVALID) which use `EvmYul.step_preserves_balanceOf`
+  -- and `_preserves_eEnv_cA`; Lambda arms (CREATE/CREATE2) which use
+  -- `Λ_balanceOf_ge` plus new StateWF-preservation helpers; call arms
+  -- (CALL/CALLCODE/DELEGATECALL/STATICCALL) which use `Θ_balanceOf_ge`
+  -- plus new StateWF-preservation helpers; and SELFDESTRUCT which uses
+  -- `selfdestruct_balanceOf_ne_Iₐ_ge` plus the existing
+  -- `selfdestruct_preserves_{executionEnv, createdAccounts}`.
+  --
+  -- The balance-monotonicity conjunct is dischargeable from existing
+  -- frame theorems. StateWF preservation for the Lambda/call arms
+  -- requires `Λ_preserves_StateWF` / `Θ_preserves_StateWF` (new
+  -- non-trivial helpers, ~1000+ LoC total). These infrastructure
+  -- lemmas are not yet closed in the codebase.
+  --
+  -- We expose this obligation as a single localized sorry. No new
+  -- sorrys are introduced downstream; `X_inv_holds`, `X_inv_succ_content`,
+  -- `Ξ_balanceOf_ge`, and all Frame-level callers close cleanly modulo
+  -- this one remaining per-opcode dispatch.
+  sorry
+
+/-- Balance monotonicity across a single step. -/
+private theorem step_balance_mono_at_C
+    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
+    (instr : Option (Operation .EVM × Option (UInt256 × Nat)))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C f')
+    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C :=
+  (step_bundled_invariant_at_C C f' cost₂ instr evmState sstepState
+    hWF hCO hNC hWit hFrame hStep).1
+
+/-- StateWF preserved across a step. -/
+private theorem step_StateWF_preserved
+    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
+    (instr : Option (Operation .EVM × Option (UInt256 × Nat)))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C f')
+    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
+    StateWF sstepState.accountMap :=
+  (step_bundled_invariant_at_C C f' cost₂ instr evmState sstepState
+    hWF hCO hNC hWit hFrame hStep).2.1
+
+/-- codeOwner preserved across a step. -/
+private theorem step_codeOwner_preserved
+    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
+    (instr : Option (Operation .EVM × Option (UInt256 × Nat)))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C f')
+    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
+    C ≠ sstepState.executionEnv.codeOwner :=
+  (step_bundled_invariant_at_C C f' cost₂ instr evmState sstepState
+    hWF hCO hNC hWit hFrame hStep).2.2.1
+
+/-- createdAccounts preserves `≠ C`. -/
+private theorem step_createdAccounts_preserved
+    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
+    (instr : Option (Operation .EVM × Option (UInt256 × Nat)))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C f')
+    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
+    ∀ a ∈ sstepState.createdAccounts, a ≠ C :=
+  (step_bundled_invariant_at_C C f' cost₂ instr evmState sstepState
+    hWF hCO hNC hWit hFrame hStep).2.2.2
+
+/-- **Helper.** The content-carrying `.succ` closure of `X_inv_holds`.
+Given `EVM.X (f' + 1) validJumps evmState = .ok (.success finalState out)`,
+derives `balanceOf finalState.accountMap C ≥ balanceOf evmState.accountMap C`.
+
+This is where the per-opcode step frame dispatch happens. We unfold
+`EVM.X`'s body and invoke `Θ_balanceOf_ge` / `Λ_balanceOf_ge` /
+`selfdestruct_balanceOf_ne_Iₐ_ge` / `EvmYul.step_preserves_balanceOf`
+based on the decoded instruction. -/
+private theorem X_inv_succ_content
+    (C : AccountAddress) (f' : ℕ) (validJumps : Array UInt256)
+    (evmState finalState : EVM.State) (_out : ByteArray)
+    (_hWF : StateWF evmState.accountMap)
+    (_hCO : C ≠ evmState.executionEnv.codeOwner)
+    (_hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (_hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C f')
+    (_IH : ∀ evmState', X_inv C f' validJumps evmState')
+    (hXres : EVM.X (f' + 1) validJumps evmState
+              = .ok (.success finalState _out)) :
+    balanceOf finalState.accountMap C ≥ balanceOf evmState.accountMap C := by
+  simp only [EVM.X] at hXres
+  -- Split on the outer Z-match in X's body.
+  split at hXres
+  case h_1 _ _ => -- Z errored → `.error e ≠ .ok (.success ...)` — contradiction.
+    exact absurd hXres (by simp)
+  case h_2 _ evmStateZ cost₂ hZ =>
+    -- hZ : Z-body = .ok (evmStateZ, cost₂). The Z body is a chain of ifs
+    -- ending in `pure ({evmState with gasAvailable := g'}, cost₂')`. Successive
+    -- by_cases on the 11 Z conditions yields the single surviving all-`false`
+    -- branch, where injection gives `evmStateZ = {evmState with gasAvailable := ...}`.
+    have hZ_struct :
+        evmStateZ.accountMap = evmState.accountMap ∧
+        evmStateZ.executionEnv = evmState.executionEnv ∧
+        evmStateZ.createdAccounts = evmState.createdAccounts := by
+      -- Normalize monadic `bind`/`pure` in hZ once, then by_cases on
+      -- each of the 11 throw-conditions in order.
+      -- Unfold bind/pure for Except so hZ becomes nested `if _ then .error _ else ...`.
+      simp only [bind, Except.bind, pure, Except.pure] at hZ
+      -- By-cases on each of the 11 Z throw-conditions.
+      by_cases hc1 : evmState.gasAvailable.toNat < memoryExpansionCost evmState ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1
+      · rw [if_pos hc1] at hZ; exact Except.noConfusion hZ
+      rw [if_neg hc1] at hZ
+      set evmState' : EVM.State :=
+        { evmState with gasAvailable := evmState.gasAvailable - UInt256.ofNat (memoryExpansionCost evmState ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1) } with hevmState'
+      -- evmState' differs from evmState only in gasAvailable, so preserves the 3 projections.
+      have h_accMap : evmState'.accountMap = evmState.accountMap := by rw [hevmState']
+      have h_eEnv   : evmState'.executionEnv = evmState.executionEnv := by rw [hevmState']
+      have h_cA     : evmState'.createdAccounts = evmState.createdAccounts := by rw [hevmState']
+      -- Condition 2.
+      by_cases hc2 : evmState'.gasAvailable.toNat < C' evmState' ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1
+      · rw [if_pos hc2] at hZ; exact Except.noConfusion hZ
+      rw [if_neg hc2] at hZ
+      -- Condition 3.
+      by_cases hc3 : δ ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1 = none
+      · rw [if_pos hc3] at hZ; exact Except.noConfusion hZ
+      rw [if_neg hc3] at hZ
+      -- Condition 4.
+      by_cases hc4 : evmState'.stack.length < (δ ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1).getD 0
+      · rw [if_pos hc4] at hZ; exact Except.noConfusion hZ
+      rw [if_neg hc4] at hZ
+      -- From here on we let `split_ifs at hZ` close each remaining `if` chain
+      -- because the earlier simp has left hZ in a form where each if condition
+      -- is a pure Prop that Lean's elab can dispatch via decidable instances.
+      split_ifs at hZ <;>
+        first
+        | exact Except.noConfusion hZ
+        | (injection hZ with h_inj
+           injection h_inj with h_inj1 _
+           subst h_inj1
+           exact ⟨h_accMap, h_eEnv, h_cA⟩)
+    obtain ⟨hZ_accMap, hZ_eEnv, hZ_cA⟩ := hZ_struct
+    -- Transport the preservation facts to evmStateZ.
+    have hWFZ : StateWF evmStateZ.accountMap := by rw [hZ_accMap]; exact _hWF
+    have hCOZ : C ≠ evmStateZ.executionEnv.codeOwner := by
+      rw [hZ_eEnv]; exact _hCO
+    have hNCZ : ∀ a ∈ evmStateZ.createdAccounts, a ≠ C := by
+      rw [hZ_cA]; exact _hNC
+    -- balance equality at C.
+    have hBalEq : balanceOf evmStateZ.accountMap C = balanceOf evmState.accountMap C := by
+      rw [hZ_accMap]
+    -- The body simplifies to `step >>= (λ s ↦ match H s w with ...)`.
+    simp only [bind, Except.bind] at hXres
+    split at hXres
+    case h_1 _ _ => -- step errored → contradiction.
+      exact absurd hXres (by simp)
+    case h_2 _ sstepState hStep =>
+      -- step succeeded at sstepState. `hStep : step f' cost₂ _ evmStateZ = .ok sstepState`.
+      split at hXres
+      case h_1 _ hH_none =>
+        -- H = none → recurse branch: hXres : X f' validJumps sstepState = .ok (.success finalState _out).
+        have hStepGE_Z : balanceOf sstepState.accountMap C ≥ balanceOf evmStateZ.accountMap C :=
+          step_balance_mono_at_C C f' cost₂ _ evmStateZ sstepState
+            hWFZ hCOZ hNCZ _hWit hFrame hStep
+        have hStepGE : balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C := by
+          rw [← hBalEq]; exact hStepGE_Z
+        have hWFsstep : StateWF sstepState.accountMap :=
+          step_StateWF_preserved C f' cost₂ _ evmStateZ sstepState
+            hWFZ hCOZ hNCZ _hWit hFrame hStep
+        have hCOsstep : C ≠ sstepState.executionEnv.codeOwner :=
+          step_codeOwner_preserved C f' cost₂ _ evmStateZ sstepState
+            hWFZ hCOZ hNCZ _hWit hFrame hStep
+        have hNCsstep : ∀ a ∈ sstepState.createdAccounts, a ≠ C :=
+          step_createdAccounts_preserved C f' cost₂ _ evmStateZ sstepState
+            hWFZ hCOZ hNCZ _hWit hFrame hStep
+        -- Apply IH at sstepState. Thread hFrame : ΞFrameAtC C f' through.
+        have hIH := _IH sstepState hWFsstep hCOsstep hNCsstep _hWit hFrame
+        rw [hXres] at hIH
+        exact Nat.le_trans hStepGE hIH
+      case h_2 _ o hH_some =>
+        -- H = some o → halt branch: `if w == .REVERT then .revert else .success`.
+        split at hXres
+        case isTrue _ =>
+          exact absurd hXres (by simp)
+        case isFalse _ =>
+          injection hXres with hXres_inj
+          injection hXres_inj with hfin _
+          subst hfin
+          have hStepGE_Z : balanceOf sstepState.accountMap C ≥ balanceOf evmStateZ.accountMap C :=
+            step_balance_mono_at_C C f' cost₂ _ evmStateZ sstepState
+              hWFZ hCOZ hNCZ _hWit hFrame hStep
+          rw [← hBalEq]; exact hStepGE_Z
+
 /-- **The inner X-fuel induction closing `Ξ_balanceOf_ge`'s `.success`
 branch.** Takes the mutual strong IH as a `ΞFrameAtC` witness (at all
 smaller fuels) and the per-bytecode `ΞPreservesAtC` witness.
@@ -1928,14 +2160,7 @@ by induction on `f`, the `X`-fuel:
     `accountMap`/`executionEnv`/`createdAccounts`. The `step` call's
     per-arm balance preservation is delegated to the already-closed
     component frame lemmas (Θ, Λ, selfdestruct, EvmYul.step). The
-    recursive `X f` call consumes the IH.
-
-**Status (this commit):** The high-level structural skeleton is in
-place (fuel-0 closure, X unfolding via rfl, Z-gate trivial branches,
-Z-success step-branch, halt/recurse dispatch). The remaining work
-factors into a `step_balance_bundled` per-arm proof (invoking the
-component lemmas above). That helper lives at the end of
-`StepSystemFrame.lean`; see there for the status of individual arms. -/
+    recursive `X f` call consumes the IH. -/
 private theorem X_inv_holds
     (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
     (evmState : EVM.State)
@@ -1967,203 +2192,15 @@ private theorem X_inv_holds
       | revert _ _ => trivial
       | success finalState out =>
         -- The only remaining sub-goal: balance monotonicity.
-        -- We invoke `X_inv_succ_content` — a helper that unfolds
-        -- `EVM.X (f'+1)` inside its body and closes via per-arm
-        -- frame lemmas.
+        -- Supply ΞFrameAtC at f' via hFrame, and a restricted hFrame'
+        -- for the IH recursion.
+        have hFrame_f' : ΞFrameAtC C f' := hFrame f' (Nat.le_succ f')
+        have hFrame' : ∀ f'_1, f'_1 ≤ f' → ΞFrameAtC C f'_1 :=
+          fun f1 h1 => hFrame f1 (Nat.le_trans h1 (Nat.le_succ f'))
+        have IH' : ∀ evmState', X_inv C f' validJumps evmState' :=
+          fun es => IH es hFrame'
         exact X_inv_succ_content C f' validJumps evmState finalState out
-          hWF hCO hNC hWit IH hXres
-
-/-- **Step-level bundled invariant.** For any successful `EVM.step`
-at a non-codeOwner target, balance is monotone at `C`, StateWF
-preserved, codeOwner unchanged, createdAccounts tracked no new C.
-
-This is the per-opcode composite of the four already-closed frames
-(Θ_balanceOf_ge, Λ_balanceOf_ge, selfdestruct_balanceOf_ne_Iₐ_ge,
-EvmYul.step_preserves_balanceOf). Its body is the full 25-opcode
-dispatch, mechanically routine but bulky (~400 LoC). We state it
-here as the single remaining obligation; the structural skeleton
-for `X_inv_holds` above is fully closed modulo this helper. -/
-private theorem step_bundled_invariant_at_C
-    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
-    (instr : Operation .EVM × Option (UInt256 × Nat))
-    (evmState sstepState : EVM.State)
-    (_hWF : StateWF evmState.accountMap)
-    (_hCO : C ≠ evmState.executionEnv.codeOwner)
-    (_hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (_hWit : ΞPreservesAtC C)
-    (_hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
-    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
-    StateWF sstepState.accountMap ∧
-    (C ≠ sstepState.executionEnv.codeOwner) ∧
-    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
-  -- **Closure plan.**
-  -- We destructure `instr` as `(w, arg)` and case on the opcode `w`.
-  -- For each of 25 opcode families, the per-arm frame lemma closes.
-  --
-  -- * `.StopArith _ / .CompBit _ / .Keccak _ / .Env _ / .Block _ /
-  --    .StackMemFlow _ / .Push _ / .Dup _ / .Exchange _ / .Log _`:
-  --    accountMap preserved (equality), executionEnv unchanged,
-  --    createdAccounts unchanged → all four conjuncts trivial
-  --    via EvmYul.step_preserves_balanceOf.
-  -- * `.System .CREATE / .CREATE2`: invokes `Lambda` in the EVM.step
-  --    body. Use `Λ_balanceOf_ge`.
-  -- * `.System .CALL / .CALLCODE / .DELEGATECALL / .STATICCALL`:
-  --    invokes `call` → `Θ`. Use `Θ_balanceOf_ge` via call-unfold.
-  -- * `.System .SELFDESTRUCT`: handled by EvmYul.step's SELFDESTRUCT
-  --    case. Use `selfdestruct_balanceOf_ne_Iₐ_ge`.
-  -- * `.System .RETURN / .REVERT / .INVALID`: accountMap preserved.
-  --
-  -- **This commit** exposes the single well-typed obligation with
-  -- its statement precisely matching the composite of the four
-  -- closed per-arm frames. Closing is mechanical — the proof
-  -- factors into 25 case-splits, each ~15 LoC. Total ~400 LoC.
-  -- We elide the expansion here for brevity; the obligation is
-  -- semantically sound given the closed component lemmas and the
-  -- a4cd6f0 fix.
-  sorry
-
-/-- Balance monotonicity across a single step. -/
-private theorem step_balance_mono_at_C
-    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
-    (instr : Operation .EVM × Option (UInt256 × Nat))
-    (evmState sstepState : EVM.State)
-    (hWF : StateWF evmState.accountMap)
-    (hCO : C ≠ evmState.executionEnv.codeOwner)
-    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
-    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
-    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C :=
-  (step_bundled_invariant_at_C C f' cost₂ instr evmState sstepState
-    hWF hCO hNC hWit hStep).1
-
-/-- StateWF preserved across a step. -/
-private theorem step_StateWF_preserved
-    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
-    (instr : Operation .EVM × Option (UInt256 × Nat))
-    (evmState sstepState : EVM.State)
-    (hWF : StateWF evmState.accountMap)
-    (hCO : C ≠ evmState.executionEnv.codeOwner)
-    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
-    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
-    StateWF sstepState.accountMap :=
-  (step_bundled_invariant_at_C C f' cost₂ instr evmState sstepState
-    hWF hCO hNC hWit hStep).2.1
-
-/-- codeOwner preserved across a step. -/
-private theorem step_codeOwner_preserved
-    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
-    (instr : Operation .EVM × Option (UInt256 × Nat))
-    (evmState sstepState : EVM.State)
-    (hWF : StateWF evmState.accountMap)
-    (hCO : C ≠ evmState.executionEnv.codeOwner)
-    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
-    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
-    C ≠ sstepState.executionEnv.codeOwner :=
-  (step_bundled_invariant_at_C C f' cost₂ instr evmState sstepState
-    hWF hCO hNC hWit hStep).2.2.1
-
-/-- createdAccounts preserves `≠ C`. -/
-private theorem step_createdAccounts_preserved
-    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
-    (instr : Operation .EVM × Option (UInt256 × Nat))
-    (evmState sstepState : EVM.State)
-    (hWF : StateWF evmState.accountMap)
-    (hCO : C ≠ evmState.executionEnv.codeOwner)
-    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
-    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
-    ∀ a ∈ sstepState.createdAccounts, a ≠ C :=
-  (step_bundled_invariant_at_C C f' cost₂ instr evmState sstepState
-    hWF hCO hNC hWit hStep).2.2.2
-
-/-- **Helper.** The content-carrying `.succ` closure of `X_inv_holds`.
-Given `EVM.X (f' + 1) validJumps evmState = .ok (.success finalState out)`,
-derives `balanceOf finalState.accountMap C ≥ balanceOf evmState.accountMap C`.
-
-This is where the per-opcode step frame dispatch happens. We unfold
-`EVM.X`'s body and invoke `Θ_balanceOf_ge` / `Λ_balanceOf_ge` /
-`selfdestruct_balanceOf_ne_Iₐ_ge` / `EvmYul.step_preserves_balanceOf`
-based on the decoded instruction. -/
-private theorem X_inv_succ_content
-    (C : AccountAddress) (f' : ℕ) (validJumps : Array UInt256)
-    (evmState finalState : EVM.State) (_out : ByteArray)
-    (_hWF : StateWF evmState.accountMap)
-    (_hCO : C ≠ evmState.executionEnv.codeOwner)
-    (_hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (_hWit : ΞPreservesAtC C)
-    (_IH : ∀ evmState', X_inv C f' validJumps evmState')
-    (hXres : EVM.X (f' + 1) validJumps evmState
-              = .ok (.success finalState _out)) :
-    balanceOf finalState.accountMap C ≥ balanceOf evmState.accountMap C := by
-  -- Unfold X's body inside `hXres` so we can destructure.
-  simp only [EVM.X] at hXres
-  -- The outer match in X's body is on `Z evmState`. We case on it.
-  split at hXres
-  · -- Z errored → `.error e ≠ .ok (.success ...)` — contradiction.
-    exact absurd hXres (by simp)
-  · -- Z succeeded. Next: step at cost₂, then H, then halt or recurse.
-    rename_i hZ
-    simp only [bind, Except.bind] at hXres
-    split at hXres
-    · -- step errored → contradiction.
-      exact absurd hXres (by simp)
-    · -- step succeeded at s_step. Name it explicitly.
-      rename_i sstepState hStep
-      -- Case on H's result (halt vs recurse).
-      split at hXres
-      · -- halt branch: check w == .REVERT.
-        split at hXres
-        · -- w = .REVERT → revert, not success — contradiction.
-          exact absurd hXres (by simp)
-        · -- Success halt. hXres: `.ok (.success sstepState _) = .ok (.success finalState _)`.
-          -- Injecting the equality gives finalState = sstepState.
-          -- The remaining obligation: balance monotonicity from
-          -- evmState → sstepState (the step-level frame).
-          injection hXres with hXres_inj
-          injection hXres_inj with hfin _
-          subst hfin
-          -- Goal now: balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C.
-          -- This is the step-level balance monotonicity, which is the
-          -- composite of the four per-arm frames. We expose it as a
-          -- single obligation.
-          exact step_balance_mono_at_C C f' _ _ evmState sstepState
-            _hWF _hCO _hNC _hWit hStep
-      · -- recurse branch: hXres : `.ok (something) = .ok (.success finalState _)`.
-        -- We destructure hXres to identify the inner success state.
-        -- The recursion call `X f' validJumps sstepState` must equal
-        -- `.ok (.success finalState _out)`. By IH at `sstepState`,
-        -- we get monotonicity from sstepState to finalState. Chain
-        -- with step-level monotonicity evmState → sstepState.
-        rename_i hH
-        -- hXres has the form `(X f' validJumps sstepState : Except _ _) = .ok (.success finalState _out)`.
-        -- Apply IH.
-        have hStepGE : balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C :=
-          step_balance_mono_at_C C f' _ _ evmState sstepState
-            _hWF _hCO _hNC _hWit hStep
-        -- For IH, we need StateWF at sstepState, C ≠ sstepState.executionEnv.codeOwner,
-        -- and h_newC at sstepState.
-        have hWFsstep : StateWF sstepState.accountMap :=
-          step_StateWF_preserved C f' _ _ evmState sstepState
-            _hWF _hCO _hNC _hWit hStep
-        have hCOsstep : C ≠ sstepState.executionEnv.codeOwner :=
-          step_codeOwner_preserved C f' _ _ evmState sstepState
-            _hWF _hCO _hNC _hWit hStep
-        have hNCsstep : ∀ a ∈ sstepState.createdAccounts, a ≠ C :=
-          step_createdAccounts_preserved C f' _ _ evmState sstepState
-            _hWF _hCO _hNC _hWit hStep
-        -- Apply IH at sstepState.
-        have hIH := _IH sstepState hWFsstep hCOsstep hNCsstep _hWit (by
-          intro _ _ _ _ _ _ _ _ _ _ _ _
-          trivial)
-        -- hIH : match X f' validJumps sstepState with
-        --   | .ok (.success s' _) => balanceOf s'.accountMap C ≥ ...
-        --   | _ => True
-        -- hXres : X f' validJumps sstepState = .ok (.success finalState _out)
-        rw [hXres] at hIH
-        -- hIH : balanceOf finalState.accountMap C ≥ balanceOf sstepState.accountMap C
-        exact Nat.le_trans hStepGE hIH
+          hWF hCO hNC hWit hFrame_f' IH' hXres
 
 /-- `Ξ_balanceOf_ge` — Ξ (code execution) preserves `balanceOf C` when
 code runs at `I.codeOwner ≠ C`.
