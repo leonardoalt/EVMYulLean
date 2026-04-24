@@ -287,6 +287,16 @@ theorem UInt256_sub_toNat_of_le
   show (a.val - b.val).val = a.toNat - b.toNat
   exact Fin.sub_val_of_le h
 
+/-- `UInt256` multiplication agrees with `ℕ` multiplication under no-wrap. -/
+theorem UInt256_mul_toNat_of_no_wrap
+    (a b : UInt256) (hNoWrap : a.toNat * b.toNat < UInt256.size) :
+    (a * b).toNat = a.toNat * b.toNat := by
+  show ((a.val * b.val : Fin _)).val = _
+  rw [Fin.val_mul]
+  apply Nat.mod_eq_of_lt
+  show a.val.val * b.val.val < UInt256.size
+  exact hNoWrap
+
 /-- Pair-level comparator used at the AccountMap layer. -/
 private abbrev pairCmp :
     AccountAddress × Account .EVM → AccountAddress × Account .EVM → Ordering :=
