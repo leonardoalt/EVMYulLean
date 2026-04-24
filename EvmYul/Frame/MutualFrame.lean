@@ -280,7 +280,7 @@ under `≤`; (b) `totalETH` update under a single `.insert`; (c)
 map-manipulation and do not involve mutual recursion. -/
 
 /-- `UInt256` subtraction agrees with `ℕ` subtraction when no underflow. -/
-private theorem UInt256_sub_toNat_of_le
+theorem UInt256_sub_toNat_of_le
     (a b : UInt256) (h : b.toNat ≤ a.toNat) :
     (a - b).toNat = a.toNat - b.toNat := by
   show (⟨a.val - b.val⟩ : UInt256).toNat = a.toNat - b.toNat
@@ -293,12 +293,12 @@ private abbrev pairCmp :
   Ordering.byKey Prod.fst compare
 
 /-- AccountMap-level bridge: `σ.find? k = (σ.1.find? (compare k ·.1)).map (·.2)`. -/
-private theorem find?_eq_rbnode_am
+theorem find?_eq_rbnode_am
     (σ : AccountMap .EVM) (k : AccountAddress) :
     σ.find? k = (σ.1.find? (fun p => compare k p.1)).map (·.2) := rfl
 
 /-- Case split for insert proofs: the list decomposition of an insert. -/
-private theorem am_insert_toList_split
+theorem am_insert_toList_split
     (σ : AccountMap .EVM) (k : AccountAddress) (acc : Account .EVM) :
     (∃ L R, σ.toList = L ++ R
           ∧ (σ.insert k acc).toList = L ++ (k, acc) :: R
@@ -336,7 +336,7 @@ private theorem am_insert_toList_split
       rw [find?_eq_rbnode_am, hroot]; rfl
 
 /-- `totalETH` of an insert over a *new* key adds the new balance. -/
-private theorem totalETH_insert_of_not_mem
+theorem totalETH_insert_of_not_mem
     (σ : AccountMap .EVM) (k : AccountAddress) (acc : Account .EVM)
     (hk : σ.find? k = none) :
     totalETH (σ.insert k acc) = totalETH σ + acc.balance.toNat := by
@@ -384,7 +384,7 @@ private theorem totalETH_insert_of_not_mem
   · rw [hFound] at hk; cases hk
 
 /-- `totalETH` of an insert over an *existing* key swaps old for new. -/
-private theorem totalETH_insert_of_mem
+theorem totalETH_insert_of_mem
     (σ : AccountMap .EVM) (k : AccountAddress)
     (acc acc' : Account .EVM) (hk : σ.find? k = some acc') :
     totalETH (σ.insert k acc) + acc'.balance.toNat
