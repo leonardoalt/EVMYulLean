@@ -2,6 +2,7 @@ import EvmYul.Frame.Projection
 import EvmYul.Frame.StepFrame
 import EvmYul.Frame.SelfdestructFrame
 import EvmYul.Frame.MutualFrame
+import EvmYul.Frame.StepSystemFrame
 import EvmYul.Frame.UpsilonFrame
 import EvmYul.Frame.XFrame
 
