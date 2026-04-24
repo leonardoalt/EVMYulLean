@@ -519,6 +519,39 @@ theorem StateWF_insert_eq_bal
   rw [totalETH_insert_eq_bal σ k acc acc_old hFind hBal]
   exact hWF.boundedTotal
 
+/-- `StateWF` is preserved when inserting `{σ.findD k default with code := c}`
+at key `k`. The balance of the inserted account equals the balance stored at
+`k` in `σ` (either the present account's balance, or `0 = default.balance` if
+absent), so `totalETH` is unchanged. -/
+theorem StateWF_insert_findD_code
+    (σ : AccountMap .EVM) (k : AccountAddress) (c : ByteArray)
+    (hWF : StateWF σ) :
+    StateWF (σ.insert k { σ.findD k default with code := c }) := by
+  refine ⟨?_⟩
+  cases hFind : σ.find? k with
+  | none =>
+    -- findD returns default; default.balance = 0.
+    have hDefaultD : σ.findD k default = default := by
+      show (σ.find? k).getD default = default
+      rw [hFind]; rfl
+    rw [hDefaultD]
+    -- The inserted account's balance = default.balance = 0.
+    -- totalETH (σ.insert k {default with code := c}) = totalETH σ + 0 = totalETH σ.
+    have hEq := totalETH_insert_of_not_mem σ k
+      { (default : Account .EVM) with code := c } hFind
+    have h0 : ({ (default : Account .EVM) with code := c } : Account .EVM).balance.toNat = 0 := rfl
+    rw [h0, Nat.add_zero] at hEq
+    rw [hEq]; exact hWF.boundedTotal
+  | some accA =>
+    have hDefaultD : σ.findD k default = accA := by
+      show (σ.find? k).getD default = accA
+      rw [hFind]; rfl
+    rw [hDefaultD]
+    -- Inserted account has balance = accA.balance. Apply totalETH_insert_eq_bal.
+    have hEq : totalETH (σ.insert k { accA with code := c }) = totalETH σ :=
+      totalETH_insert_eq_bal σ k _ accA hFind rfl
+    rw [hEq]; exact hWF.boundedTotal
+
 /-- `binaryStateOp` preserves `StateWF` when `op` itself does. -/
 theorem binaryStateOp_preserves_StateWF
     {op : EvmYul.State .EVM → UInt256 → UInt256 → EvmYul.State .EVM}
@@ -1561,10 +1594,66 @@ private theorem applyPrecompile_accountMap
   refine ⟨default, rfl, Or.inr ?_⟩
   rfl
 
+/-- `applyPrecompile` bundles: accountMap preservation + createdAccounts = ∅. -/
+private theorem applyPrecompile_bundled
+    (pc : AccountAddress) (σ₁ : AccountMap .EVM) (g : UInt256)
+    (A : Substate) (I : ExecutionEnv .EVM) :
+    ∃ tup : Batteries.RBSet AccountAddress compare × Bool
+              × AccountMap .EVM × UInt256 × Substate × ByteArray,
+      EVM.applyPrecompile pc σ₁ g A I = .ok tup
+        ∧ (tup.2.2.1 = σ₁ ∨ tup.2.2.1 = ∅)
+        ∧ tup.1 = ∅ := by
+  unfold EVM.applyPrecompile
+  by_cases hp1 : pc = 1
+  · rw [if_pos hp1]
+    refine ⟨_, rfl, ?_, rfl⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_ECREC
+  rw [if_neg hp1]
+  by_cases hp2 : pc = 2
+  · rw [if_pos hp2]; refine ⟨_, rfl, ?_, rfl⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_SHA256
+  rw [if_neg hp2]
+  by_cases hp3 : pc = 3
+  · rw [if_pos hp3]; refine ⟨_, rfl, ?_, rfl⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_RIP160
+  rw [if_neg hp3]
+  by_cases hp4 : pc = 4
+  · rw [if_pos hp4]; refine ⟨_, rfl, ?_, rfl⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_ID
+  rw [if_neg hp4]
+  by_cases hp5 : pc = 5
+  · rw [if_pos hp5]; refine ⟨_, rfl, ?_, rfl⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_EXPMOD
+  rw [if_neg hp5]
+  by_cases hp6 : pc = 6
+  · rw [if_pos hp6]; refine ⟨_, rfl, ?_, rfl⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_BN_ADD
+  rw [if_neg hp6]
+  by_cases hp7 : pc = 7
+  · rw [if_pos hp7]; refine ⟨_, rfl, ?_, rfl⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_BN_MUL
+  rw [if_neg hp7]
+  by_cases hp8 : pc = 8
+  · rw [if_pos hp8]; refine ⟨_, rfl, ?_, rfl⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_SNARKV
+  rw [if_neg hp8]
+  by_cases hp9 : pc = 9
+  · rw [if_pos hp9]; refine ⟨_, rfl, ?_, rfl⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_BLAKE2_F
+  rw [if_neg hp9]
+  by_cases hp10 : pc = 10
+  · rw [if_pos hp10]; refine ⟨_, rfl, ?_, rfl⟩
+    exact precompile_preserves_accountMap σ₁ g A I Ξ_PointEval
+  rw [if_neg hp10]
+  refine ⟨default, rfl, Or.inr rfl, rfl⟩
+
 /-- **Θ-body helper (precompile branch)** — closes the precompile
 dispatch arm of Θ under the monotonicity hypothesis
 `balanceOf σ₁ C ≥ balanceOf σ C`. Uses `applyPrecompile_accountMap`
-to avoid pattern-matching on the 10-way if-cascade. -/
+to avoid pattern-matching on the 10-way if-cascade.
+
+Enhanced to also produce `StateWF σ'` and `∀ a ∈ cA'_out, a ≠ C`.
+`applyPrecompile` always returns `cA'_out = ∅`, so the latter is vacuous. -/
 private theorem Θ_body_precompile
     (σ σ₁ : AccountMap .EVM) (A : Substate) (I : ExecutionEnv .EVM)
     (C : AccountAddress) (fuel' : Nat)
@@ -1575,6 +1664,8 @@ private theorem Θ_body_precompile
     (g p v v' : UInt256) (d : ByteArray) (e : Nat)
     (H : BlockHeader) (w : Bool)
     (h_σ₁_ge : balanceOf σ₁ C ≥ balanceOf σ C)
+    (hWF : StateWF σ)
+    (h_WFσ₁ : StateWF σ₁)
     (hΘeq : EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
                 genesisBlockHeader blocks σ σ₀ A s o r
                 (ToExecute.Precompiled pc) g p v v' d e H w
@@ -1588,20 +1679,39 @@ private theorem Θ_body_precompile
     match EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
                   genesisBlockHeader blocks σ σ₀ A s o r
                   (ToExecute.Precompiled pc) g p v v' d e H w with
-    | .ok (_, σ', _, _, _, _) => balanceOf σ' C ≥ balanceOf σ C
+    | .ok (cA'_out, σ', _, _, _, _) =>
+        balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
     | .error _ => True := by
   rw [hΘeq]
   -- Extract the applyPrecompile result via the bundled invariant.
-  obtain ⟨tup, hTup, hCases⟩ := applyPrecompile_accountMap pc σ₁ g A I
+  obtain ⟨tup, hTup, hCases, hcA_empty⟩ := applyPrecompile_bundled pc σ₁ g A I
   rw [hTup]
-  -- Now the bind reduces to a match on the tuple.
-  obtain ⟨cA'', z, σ'', g', A'', out⟩ := tup
-  -- The goal becomes `balanceOf (if σ''==∅ then σ else σ'') C ≥ balanceOf σ C`.
-  exact theta_σ'_clamp_ge_of_σ₁_or_empty σ σ₁ σ'' C h_σ₁_ge hCases
+  -- hTup expanded; now goal references tup components via (tup.2.2.1 etc).
+  -- Keep tup unsplit so hCases/hcA_empty continue to typecheck.
+  refine ⟨?_, ?_, ?_⟩
+  · -- Balance monotonicity.
+    exact theta_σ'_clamp_ge_of_σ₁_or_empty σ σ₁ tup.2.2.1 C h_σ₁_ge hCases
+  · -- StateWF σ'.
+    show StateWF (if (tup.2.2.1 == ∅) = true then σ else tup.2.2.1)
+    rcases hCases with heq | heq
+    · split_ifs
+      · exact hWF
+      · rw [heq]; exact h_WFσ₁
+    · rw [heq]
+      have h : ((∅ : AccountMap .EVM) == ∅) = true := rfl
+      rw [h]; simp only [if_true]; exact hWF
+  · -- ∀ a ∈ cA'_out, a ≠ C.  Here cA'_out = tup.1 = ∅.
+    show ∀ a' ∈ tup.1, a' ≠ C
+    rw [hcA_empty]
+    intro a' ha'
+    -- a' ∈ (∅ : RBSet) is impossible.
+    exact absurd ha' (fun h => by cases h)
 
 /-- **Θ-body helper (code branch)** — closes the `ToExecute.Code`
 dispatch arm of Θ, invoking `Ξ_balanceOf_ge` (`r ≠ C`) or `hWitness`
-(`r = C`) in the Ξ-success subcase. -/
+(`r = C`) in the Ξ-success subcase.
+
+Enhanced to produce the bundled triple (balance-mono + StateWF + cA_out ≠ C). -/
 private theorem Θ_body_code
     (σ σ₁ : AccountMap .EVM) (A : Substate) (I : ExecutionEnv .EVM)
     (C : AccountAddress) (fuel' : Nat)
@@ -1612,6 +1722,7 @@ private theorem Θ_body_code
     (g p v v' : UInt256) (d : ByteArray) (e : Nat)
     (H : BlockHeader) (w : Bool)
     (h_σ₁_ge : balanceOf σ₁ C ≥ balanceOf σ C)
+    (hWF : StateWF σ)
     (h_WFσ₁ : StateWF σ₁)
     (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
     (hWitness : ΞPreservesAtC C)
@@ -1639,7 +1750,8 @@ private theorem Θ_body_code
     match EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
                   genesisBlockHeader blocks σ σ₀ A s o r
                   (ToExecute.Code c_code) g p v v' d e H w with
-    | .ok (_, σ', _, _, _, _) => balanceOf σ' C ≥ balanceOf σ C
+    | .ok (cA'_out, σ', _, _, _, _) =>
+        balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
     | .error _ => True := by
   rw [hΘeq]
   cases hΞ : EVM.Ξ fuel' createdAccounts genesisBlockHeader blocks σ₁ σ₀ g A I
@@ -1665,8 +1777,12 @@ private theorem Θ_body_code
         injection heq with h1
         injection h1 with h1a h1b
         injection h1b with h1ba h1bb
+        subst h1a
         subst h1ba
-        split_ifs <;> exact Nat.le_refl _
+        -- σ'' = σ, cA'' = createdAccounts.
+        refine ⟨?_, ?_, h_newC⟩
+        · split_ifs <;> exact Nat.le_refl _
+        · split_ifs <;> exact hWF
     case h_2 => trivial
   case ok res =>
     cases res
@@ -1678,8 +1794,12 @@ private theorem Θ_body_code
         injection heq with h1
         injection h1 with h1a h1b
         injection h1b with h1ba h1bb
+        subst h1a
         subst h1ba
-        split_ifs <;> exact Nat.le_refl _
+        -- σ'' = σ, cA'' = createdAccounts.
+        refine ⟨?_, ?_, h_newC⟩
+        · split_ifs <;> exact Nat.le_refl _
+        · split_ifs <;> exact hWF
       case h_2 => trivial
     case success details out =>
       obtain ⟨cA', σ_Ξ, g', A_Ξ⟩ := details
@@ -1690,24 +1810,40 @@ private theorem Θ_body_code
         injection heq with h1
         injection h1 with h1a h1b
         injection h1b with h1ba h1bb
+        subst h1a
         subst h1ba
+        -- σ'' = σ_Ξ, cA'' = cA'.
         by_cases hrC : r = C
         · have hIowner : I.codeOwner = C := by rw [hI_codeOwner]; exact hrC
           have hW := hWitness fuel' createdAccounts genesisBlockHeader blocks
               σ₁ σ₀ g A I h_WFσ₁ hIowner h_newC
           rw [hΞ] at hW
-          have : balanceOf σ_Ξ C ≥ balanceOf σ C := Nat.le_trans h_σ₁_ge hW.1
-          apply theta_σ'_clamp_ge
-          intro _; exact this
+          obtain ⟨hW_ge, hW_WF, hW_newC⟩ := hW
+          have hge : balanceOf σ_Ξ C ≥ balanceOf σ C := Nat.le_trans h_σ₁_ge hW_ge
+          refine ⟨?_, ?_, ?_⟩
+          · apply theta_σ'_clamp_ge
+            intro _; exact hge
+          · show StateWF (if (σ_Ξ == ∅) = true then σ else σ_Ξ)
+            split_ifs
+            · exact hWF
+            · exact hW_WF
+          · exact hW_newC
         · have hIowner_ne : C ≠ I.codeOwner := by
             rw [hI_codeOwner]; intro h; exact hrC h.symm
           have hΞge := Ξ_frame fuel' (Nat.le_refl _)
               createdAccounts genesisBlockHeader blocks
               σ₁ σ₀ g A I h_WFσ₁ hIowner_ne h_newC
           rw [hΞ] at hΞge
-          have : balanceOf σ_Ξ C ≥ balanceOf σ C := Nat.le_trans h_σ₁_ge hΞge.1
-          apply theta_σ'_clamp_ge
-          intro _; exact this
+          obtain ⟨hΞge_ge, hΞge_WF, hΞge_newC⟩ := hΞge
+          have hge : balanceOf σ_Ξ C ≥ balanceOf σ C := Nat.le_trans h_σ₁_ge hΞge_ge
+          refine ⟨?_, ?_, ?_⟩
+          · apply theta_σ'_clamp_ge
+            intro _; exact hge
+          · show StateWF (if (σ_Ξ == ∅) = true then σ else σ_Ξ)
+            split_ifs
+            · exact hWF
+            · exact hΞge_WF
+          · exact hΞge_newC
       case h_2 => trivial
 
 /-- **A3** — Θ (message call) preserves `balanceOf C` given a
@@ -1741,7 +1877,8 @@ theorem Θ_balanceOf_ge
     (Ξ_frame : ∀ f, f + 1 ≤ fuel → ΞFrameAtC C f) :
     match EVM.Θ fuel blobVersionedHashes createdAccounts
                   genesisBlockHeader blocks σ σ₀ A s o r c g p v v' d e H w with
-    | .ok (_, σ', _, _, _, _) => balanceOf σ' C ≥ balanceOf σ C
+    | .ok (cA'_out, σ', _, _, _, _) =>
+        balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
     | .error _ => True := by
   -- Base case: fuel = 0 returns .error OutOfFuel.
   match fuel with
@@ -1891,7 +2028,7 @@ theorem Θ_balanceOf_ge
         rfl
       exact Θ_body_precompile σ σ₁ A I C fuel' blobVersionedHashes
         createdAccounts genesisBlockHeader blocks σ₀ s o r pc g p v v' d e H w
-        h_σ₁_ge hΘeq
+        h_σ₁_ge hWF h_WFσ₁ hΘeq
     | Code c_code =>
       have hΘeq :
           EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
@@ -1919,7 +2056,7 @@ theorem Θ_balanceOf_ge
       have Ξ_frame' : ΞFrameAtC C fuel' := Ξ_frame fuel' (Nat.le_refl _)
       exact Θ_body_code σ σ₁ A I C fuel' blobVersionedHashes
         createdAccounts genesisBlockHeader blocks σ₀ s o r c_code g p v v' d e H w
-        h_σ₁_ge h_WFσ₁ h_newC hWitness Ξ_frame' hI_co hΘeq
+        h_σ₁_ge hWF h_WFσ₁ h_newC hWitness Ξ_frame' hI_co hΘeq
 
 /-- **A4** — Λ (contract creation) returns a derived address `a ≠ C`
 (by Keccak collision-resistance) and preserves `balanceOf C`.
@@ -1981,8 +2118,8 @@ theorem Λ_balanceOf_ge
     (Ξ_frame : ∀ f, f + 1 ≤ fuel → ΞFrameAtC C f) :
     match EVM.Lambda fuel blobVersionedHashes createdAccounts
                   genesisBlockHeader blocks σ σ₀ A s o g p v i e ζ H w with
-    | .ok (a, _, σ', _, _, _, _) =>
-        a ≠ C ∧ balanceOf σ' C ≥ balanceOf σ C
+    | .ok (a, cA', σ', _, _, _, _) =>
+        a ≠ C ∧ balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a' ∈ cA', a' ≠ C)
     | .error _ => True := by
   set_option maxHeartbeats 2400000 in
   match fuel with
@@ -2188,24 +2325,26 @@ theorem Λ_balanceOf_ge
             · -- then-branch: .error = .ok → contradiction
               exact absurd heq (by simp)
             · -- else-branch: .ok (a, _, σ, 0, _, false, .empty) = .ok(a✝, _, σ'✝, _, _, _, _)
-              -- Extract a✝ = a and σ'✝ = σ.
+              -- Extract a✝ = a, cA'✝ = iPair.2, σ'✝ = σ.
               injection heq with h1
               injection h1 with h1a h1b
               injection h1b with h1ba h1bb
               injection h1bb with h1bba h1bbb
               subst h1a
+              subst h1ba
               subst h1bba
-              refine ⟨ha_ne_C', ?_⟩
-              exact Nat.le_refl _
+              refine ⟨ha_ne_C', Nat.le_refl _, hWF, ?_⟩
+              exact h_newC_iPair
           · -- Ξ returned revert. heq: .ok(a, _, σ, g', _, false, o) = .ok(a✝, _, σ'✝, _, _, _, _)
             injection heq with h1
             injection h1 with h1a h1b
             injection h1b with h1ba h1bb
             injection h1bb with h1bba h1bbb
             subst h1a
+            subst h1ba
             subst h1bba
-            refine ⟨ha_ne_C', ?_⟩
-            exact Nat.le_refl _
+            refine ⟨ha_ne_C', Nat.le_refl _, hWF, ?_⟩
+            exact h_newC_iPair
           · -- Ξ returned success. Main case.
             rename_i cA_out σ_Ξ gSS AStarStar returnedData hΞeq
             -- hΞeq : Ξ f ... = .ok (.success (cA_out, σ_Ξ, gSS, AStarStar) returnedData)
@@ -2216,8 +2355,8 @@ theorem Λ_balanceOf_ge
             injection h1b with h1ba h1bb
             injection h1bb with h1bba h1bbb
             subst h1a
+            subst h1ba
             subst h1bba
-            refine ⟨ha_ne_C', ?_⟩
             -- Build Ξ monotonicity fact from scratch using the folded forms.
             -- `hΞeq_folded` will be derived from `hΞeq` by using the fact that
             -- the inlined Ξ call is defeq to the folded one.
@@ -2231,16 +2370,22 @@ theorem Λ_balanceOf_ge
               σStarMap σ₀ g (A.addAccessedAccount a) exEnv
               hWFσStarMap (ha_ne_C'.symm) h_newC_iPair
             rw [hΞeq_folded] at hΞge_raw
-            -- hΞge_raw : balanceOf σ_Ξ C ≥ balanceOf σStarMap C ∧ StateWF σ_Ξ ∧ ...
+            -- hΞge_raw : balanceOf σ_Ξ C ≥ balanceOf σStarMap C ∧ StateWF σ_Ξ ∧ ∀ a∈cA_out, a≠C
             have hσ_Ξ_ge : balanceOf σ_Ξ C ≥ balanceOf σ C := by
               rw [← hσStar_balance]; exact hΞge_raw.1
-            -- Split on the outer `if` (the F condition) in the goal.
-            split_ifs with hF
-            · -- F=true: σ_final = σ, so balanceOf σ C ≥ balanceOf σ C.
-              exact Nat.le_refl (balanceOf σ C)
-            · -- F=false: σ_final = σ_Ξ.insert a {... with code := returnedData}.
-              rw [balanceOf_of_find?_eq (find?_insert_ne _ a C _ ha_ne_C')]
-              exact hσ_Ξ_ge
+            have hWFσ_Ξ : StateWF σ_Ξ := hΞge_raw.2.1
+            have h_newC_out : ∀ a' ∈ cA_out, a' ≠ C := hΞge_raw.2.2
+            refine ⟨ha_ne_C', ?_, ?_, h_newC_out⟩
+            · -- Split on the outer `if` (the F condition) in the goal.
+              split_ifs with hF
+              · exact Nat.le_refl (balanceOf σ C)
+              · rw [balanceOf_of_find?_eq (find?_insert_ne _ a C _ ha_ne_C')]
+                exact hσ_Ξ_ge
+            · -- StateWF of σ_final.
+              split_ifs with hF
+              · exact hWF
+              · -- σ_final = σ_Ξ.insert a { σ_Ξ.findD a default with code := returnedData }.
+                exact StateWF_insert_findD_code σ_Ξ a returnedData hWFσ_Ξ
 
 /-! ## Closing `Ξ_balanceOf_ge` via strong induction on fuel
 
@@ -2306,6 +2451,143 @@ private def StepBundledFrame (C : AccountAddress) (s s' : EVM.State) : Prop :=
   s'.executionEnv.codeOwner = s.executionEnv.codeOwner ∧
   (∀ a ∈ s'.createdAccounts, a ≠ C)
 
+/-- Operation-family classifier: is `op` handled by a CALL-family or CREATE-family arm? -/
+private def opIsSystemCallOrCreate (op : Operation .EVM) : Prop :=
+  op = .CREATE ∨ op = .CREATE2 ∨ op = .CALL ∨ op = .CALLCODE
+    ∨ op = .DELEGATECALL ∨ op = .STATICCALL
+
+/-- Classification: every `op : Operation .EVM` is either a CALL/CREATE
+family op or is handled by `EvmYul.step`. -/
+private theorem op_classification (op : Operation .EVM) :
+    opIsSystemCallOrCreate op ∨ handledByEvmYulStep op := by
+  by_cases h1 : op = .CREATE
+  · exact Or.inl (Or.inl h1)
+  by_cases h2 : op = .CREATE2
+  · exact Or.inl (Or.inr (Or.inl h2))
+  by_cases h3 : op = .CALL
+  · exact Or.inl (Or.inr (Or.inr (Or.inl h3)))
+  by_cases h4 : op = .CALLCODE
+  · exact Or.inl (Or.inr (Or.inr (Or.inr (Or.inl h4))))
+  by_cases h5 : op = .DELEGATECALL
+  · exact Or.inl (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h5)))))
+  by_cases h6 : op = .STATICCALL
+  · exact Or.inl (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr h6)))))
+  exact Or.inr ⟨h1, h2, h3, h4, h5, h6⟩
+
+/-- For a handled op, `EVM.step (f+1) _ _ _` falls through to `EvmYul.step op arg evmState'`
+where `evmState' := {evmState with gasAvailable := evmState.gasAvailable - ...}`.
+We show that when step succeeds, the bundle holds. -/
+private theorem step_bundled_handled_case
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hHandled : handledByEvmYulStep op)
+    (hStep : EvmYul.step op arg
+              {evmState with
+                execLength := evmState.execLength + 1,
+                gasAvailable := evmState.gasAvailable - UInt256.ofNat cost₂}
+              = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  set s_pre : EVM.State :=
+    {evmState with
+      execLength := evmState.execLength + 1,
+      gasAvailable := evmState.gasAvailable - UInt256.ofNat cost₂}
+    with hs_pre_def
+  have hAM : s_pre.accountMap = evmState.accountMap := rfl
+  have hCOEq : s_pre.executionEnv = evmState.executionEnv := rfl
+  have hCAEq : s_pre.createdAccounts = evmState.createdAccounts := rfl
+  have hWF_pre : StateWF s_pre.accountMap := by rw [hAM]; exact hWF
+  have hCO_pre : C ≠ s_pre.executionEnv.codeOwner := by rw [hCOEq]; exact hCO
+  have hNC_pre : ∀ a ∈ s_pre.createdAccounts, a ≠ C := by rw [hCAEq]; exact hNC
+  -- StateWF & eEnv/cA preservation + balance depending on SELFDESTRUCT.
+  by_cases hSD : op = .SELFDESTRUCT
+  · subst hSD
+    -- Normalize arg to .none for SELFDESTRUCT (since the body doesn't read arg).
+    have hStep_none : EvmYul.step (.SELFDESTRUCT : Operation .EVM) .none s_pre = .ok sstepState := by
+      have : EvmYul.step (.SELFDESTRUCT : Operation .EVM) arg s_pre
+          = EvmYul.step (.SELFDESTRUCT : Operation .EVM) .none s_pre := by
+        unfold EvmYul.step; rfl
+      rw [← this]; exact hStep
+    have hBalGE :=
+      selfdestruct_balanceOf_ne_Iₐ_ge s_pre sstepState C hWF_pre hStep_none hCO_pre
+    have hWFresult := selfdestruct_preserves_StateWF s_pre sstepState hWF_pre hStep_none
+    have hEnv := selfdestruct_preserves_executionEnv s_pre sstepState hStep_none
+    have hCA := selfdestruct_preserves_createdAccounts s_pre sstepState hStep_none
+    refine ⟨?_, hWFresult, ?_, ?_⟩
+    · rw [← hAM]; exact hBalGE
+    · rw [hEnv, hCOEq]; exact hCO
+    · rw [hCA, hCAEq]; exact hNC
+  · have hBalEq := EvmYul.step_preserves_balanceOf op arg s_pre sstepState C hHandled hSD hStep
+    have hBalGE : balanceOf sstepState.accountMap C ≥ balanceOf s_pre.accountMap C :=
+      Nat.le_of_eq hBalEq.symm
+    have hWFresult := EvmYul_step_preserves_StateWF op arg s_pre sstepState hHandled hSD hStep hWF_pre
+    have hEnvCA := EvmYul.step_preserves_eEnv_cA op arg s_pre sstepState hHandled hStep
+    refine ⟨?_, hWFresult, ?_, ?_⟩
+    · rw [← hAM]; exact hBalGE
+    · rw [hEnvCA.1, hCOEq]; exact hCO
+    · rw [hEnvCA.2, hCAEq]; exact hNC
+
+/-! ## Per-family step helpers
+
+The CREATE/CREATE2/CALL/CALLCODE/DELEGATECALL/STATICCALL arms of
+`EVM.step` all invoke `Lambda` (for CREATE[2]) or `call` (which
+internally calls `Θ`) and wrap the result into the final state via
+`replaceStackAndIncrPC`. All 6 arms share the same structural
+obligation: the resulting `sstepState`'s `accountMap` is either
+`evmState.accountMap` unchanged, or is the `σ'` output by Λ/Θ.
+
+We bundle the 6 arms into a single helper `step_bundled_system_arm`.
+This helper is the only remaining unproved obligation; its proof is
+a ~500-LoC dispatch through the nested `if`-cascades of the CREATE
+and CALL bodies, discharging each innermost state via the enhanced
+bundled `Λ_balanceOf_ge` / `Θ_balanceOf_ge` conclusions. -/
+
+/-- Aggregated system-arm helper for CREATE/CREATE2/CALL-family. -/
+private theorem step_bundled_system_arm
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C (f + 1))
+    (hSys : opIsSystemCallOrCreate op)
+    (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  -- **Per-family system-arm dispatch.**
+  --
+  -- Each of the 6 arms unfolds a ~80-LoC body:
+  --   CREATE/CREATE2 — pop stack, branch on nonce, balance, depth, code-size,
+  --     call `Lambda` (which yields the bundled Λ frame), wrap result via
+  --     `replaceStackAndIncrPC`.
+  --   CALL/CALLCODE/DELEGATECALL/STATICCALL — pop stack, call `EVM.call`
+  --     (which internally invokes `Θ` yielding the bundled Θ frame), wrap
+  --     result via `replaceStackAndIncrPC`.
+  --
+  -- The enhanced `Λ_balanceOf_ge` and `Θ_balanceOf_ge` (this commit) produce
+  -- the 3-conjunct bundle (balance-mono + StateWF + cA_out ≠ C), and
+  -- `replaceStackAndIncrPC` is a pure stack/PC operation that preserves all
+  -- three components. The `executionEnv.codeOwner` is stored on the wrapping
+  -- `evmState`, not mutated by Λ/Θ, so `C ≠ codeOwner` passes through by
+  -- `rfl` / record-projection.
+  --
+  -- The mechanical unfold — 6 arms × ~80 LoC each ≈ 500 LoC of case
+  -- dispatch — is the remaining obligation. All the semantic content is
+  -- discharged by the enhanced frame bundle upstream. Left as `sorry`
+  -- until that dispatch is written out. (Downstream callers treat it as
+  -- a primitive per-arm lemma.)
+  sorry
+
 /-- **Step-level bundled invariant.** For any successful `EVM.step`
 at a non-codeOwner target, balance is monotone at `C`, StateWF
 preserved, codeOwner unchanged, createdAccounts tracked no new C.
@@ -2320,39 +2602,91 @@ private theorem step_bundled_invariant_at_C
     (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
     (instr : Option (Operation .EVM × Option (UInt256 × Nat)))
     (evmState sstepState : EVM.State)
-    (_hWF : StateWF evmState.accountMap)
-    (_hCO : C ≠ evmState.executionEnv.codeOwner)
-    (_hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (_hWit : ΞPreservesAtC C)
-    (_hFrame : ΞFrameAtC C f')
-    (_hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C f')
+    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
     balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C ≠ sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
-  -- **Per-opcode dispatch obligation.**
-  --
-  -- Infrastructure now in place (this commit):
-  --   * `ΞFrameAtC` / `ΞPreservesAtC` bundled to carry StateWF + createdAccounts
-  --     preservation alongside balance monotonicity.
-  --   * `EvmYul_step_preserves_StateWF` — handles the non-SELFDESTRUCT arms
-  --     of `EvmYul.step` (via `step_accountMap_eq_of_strict` for 23 families
-  --     + `sstore_preserves_StateWF` / `tstore_preserves_StateWF`).
-  --   * `selfdestruct_preserves_StateWF` — closed (5-case totalETH analysis).
-  --   * `totalETH_double_insert_sd_case3/4/5A` helpers.
-  --
-  -- What remains for a mechanical close: the case dispatch on `EVM.step`'s
-  -- body for the CALL / CREATE arms. Θ and Λ currently conclude only
-  -- balance-mono; their StateWF / createdAccounts preservation is available
-  -- internally via the bundled `Ξ_frame` but not yet exposed as output
-  -- conclusions. Exposing requires rewriting `Θ_balanceOf_ge` /
-  -- `Λ_balanceOf_ge` body goals to produce the bundle (substantial work
-  -- across the ~100+ case-splits in each body).
-  --
-  -- `X_inv_holds`, `X_inv_succ_content`, `Ξ_balanceOf_ge`, and all
-  -- Frame-level callers close cleanly modulo this one remaining per-opcode
-  -- dispatch.
-  sorry
+  match f' with
+  | 0 =>
+    simp only [EVM.step] at hStep
+    exact absurd hStep (by simp)
+  | f + 1 =>
+    -- Normalize `instr` to `.some (op, arg)` first, then dispatch on `op`.
+    -- Obtain the resolved (op, arg) from either fetch or directly.
+    have hResolved : ∃ (op : Operation .EVM) (arg : Option (UInt256 × Nat)),
+        EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState := by
+      match instr with
+      | .some (op, arg) => exact ⟨op, arg, hStep⟩
+      | .none =>
+        -- Unfold EVM.step to extract from fetchInstr.
+        unfold EVM.step at hStep
+        simp only [bind, Except.bind, pure, Except.pure] at hStep
+        cases hFetch : fetchInstr evmState.executionEnv evmState.pc with
+        | error e => rw [hFetch] at hStep; exact absurd hStep (by simp)
+        | ok pair =>
+          obtain ⟨op, arg⟩ := pair
+          rw [hFetch] at hStep
+          simp only at hStep
+          refine ⟨op, arg, ?_⟩
+          -- Reconstruct the call. At this point hStep matches
+          -- `EVM.step (f+1) cost₂ (some (op, arg)) evmState = .ok sstepState`
+          -- modulo the outer let-binding on `evmState`.
+          show EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState
+          unfold EVM.step
+          simp only [bind, Except.bind, pure, Except.pure]
+          exact hStep
+    obtain ⟨op, arg, hStep⟩ := hResolved
+    -- Classify op.
+    rcases op_classification op with hSysCall | hHandled
+    · -- CREATE/CREATE2/CALL/CALLCODE/DELEGATECALL/STATICCALL.
+      -- Delegate to the aggregated system-arm helper.
+      exact step_bundled_system_arm C f cost₂ op arg evmState sstepState
+        hWF hCO hNC hWit hFrame hSysCall hStep
+    · -- Non-CALL/CREATE: fallthrough via EvmYul.step.
+      -- Unfold EVM.step to expose the fallthrough body.
+      have hStep' :
+          EvmYul.step op arg
+            { evmState with
+              execLength := evmState.execLength + 1,
+              gasAvailable := evmState.gasAvailable - UInt256.ofNat cost₂ }
+          = .ok sstepState := by
+        -- EVM.step (f+1) _ (some (op, arg)) evmState simplifies to the body
+        -- with the match on `op`. For handled ops, the match falls through.
+        unfold EVM.step at hStep
+        simp only [bind, Except.bind, pure, Except.pure] at hStep
+        -- hStep now expresses the body match; reduce it to EvmYul.step fallthrough.
+        obtain ⟨hne1, hne2, hne3, hne4, hne5, hne6⟩ := hHandled
+        cases op with
+        | StopArith _ => exact hStep
+        | CompBit _ => exact hStep
+        | Keccak _ => exact hStep
+        | Env _ => exact hStep
+        | Block _ => exact hStep
+        | StackMemFlow _ => exact hStep
+        | Push _ => exact hStep
+        | Dup _ => exact hStep
+        | Exchange _ => exact hStep
+        | Log _ => exact hStep
+        | System o =>
+          cases o with
+          | CREATE => exact absurd rfl hne1
+          | CALL => exact absurd rfl hne3
+          | CALLCODE => exact absurd rfl hne4
+          | RETURN => exact hStep
+          | DELEGATECALL => exact absurd rfl hne5
+          | CREATE2 => exact absurd rfl hne2
+          | STATICCALL => exact absurd rfl hne6
+          | REVERT => exact hStep
+          | INVALID => exact hStep
+          | SELFDESTRUCT => exact hStep
+      exact step_bundled_handled_case C f cost₂ op arg evmState sstepState
+        hWF hCO hNC hHandled hStep'
 
 /-- Balance monotonicity across a single step. -/
 private theorem step_balance_mono_at_C
