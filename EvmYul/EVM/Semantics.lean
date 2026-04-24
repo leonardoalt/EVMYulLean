@@ -313,7 +313,7 @@ def step (fuel : ℕ) (gasCost : ℕ) (instr : Option (Operation .EVM × Option 
                     , z
                     , o
                     )
-                  | _ => (0, {evmState with accountMap := ∅}, ⟨0⟩, False, .empty)
+                  | _ => (0, evmState, ⟨0⟩, False, .empty)
               else
                 (0, evmState, .ofNat (L evmState.gasAvailable.toNat), False, .empty)
             let x : UInt256 :=
@@ -371,7 +371,7 @@ def step (fuel : ℕ) (gasCost : ℕ) (instr : Option (Operation .EVM × Option 
                 match Λ with
                   | .ok (a, cA, σ', g', A', z, o) =>
                     (a, {evmState with accountMap := σ', substate := A', createdAccounts := cA}, g', z, o)
-                  | _ => (0, {evmState with accountMap := ∅}, ⟨0⟩, False, .empty)
+                  | _ => (0, evmState, ⟨0⟩, False, .empty)
               else
                 (0, evmState, .ofNat (L evmState.gasAvailable.toNat), False, .empty)
             let x : UInt256 :=
