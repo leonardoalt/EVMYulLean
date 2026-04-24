@@ -2764,14 +2764,137 @@ private theorem step_CREATE_arm
       by_cases hPreCheck :
           μ₀ ≤ (σ.find? Iₐ |>.option ⟨0⟩ (·.balance)) ∧ Iₑ < 1024 ∧ i.size ≤ 49152
       · -- Pre-check OK: enter match Λ branch.
-        -- Here the inner state depends on Λ's outcome; the semantic content
-        -- uses `Λ_balanceOf_ge` (which gives the 4-conjunct bundle on .ok)
-        -- combined with the `balanceOf σStar C = balanceOf σ C` lemma
-        -- (σStar inserts only Iₐ, which is ≠ C). For error branches of Λ,
-        -- the inner state is eS2 unchanged. The bundle-preservation then
-        -- proceeds identically to the nonce-overflow case.
-        -- This is the only branch that invokes Λ substantively.
-        sorry
+        rw [if_pos hPreCheck] at hStep
+        -- hStep's tuple is now `match Λ with | .ok ... => (a, ...) | _ => (0, eS2, ...)`.
+        -- Split on Λ's result.
+        split at hStep
+        · -- Λ returned .ok.
+          rename_i a cA σ' g' A' z o hΛ
+          -- Gas-check split.
+          split at hStep
+          · exact absurd hStep (by simp)
+          · injection hStep with hEq
+            rw [← hEq]
+            -- sstepState = { evmState' with ... }.replaceStackAndIncrPC ...
+            -- where evmState' = { eS2 with accountMap := σ', substate := A', createdAccounts := cA }
+            -- So sstepState.accountMap = σ', sstepState.createdAccounts = cA, sstepState.executionEnv = eS2.executionEnv.
+            simp only [accountMap_replaceStackAndIncrPC,
+                       executionEnv_replaceStackAndIncrPC,
+                       createdAccounts_replaceStackAndIncrPC]
+            -- Apply the lambda_arm_tuple_preserves helper.
+            -- σStar balance at C = σ balance at C (insert at Iₐ ≠ C).
+            have hIₐC : Iₐ ≠ C := fun h => hCO2 h.symm
+            have hσStarBalC : balanceOf σStar C = balanceOf σ C := by
+              show balanceOf (σ.insert Iₐ _) C = balanceOf σ C
+              apply balanceOf_of_find?_eq
+              exact find?_insert_ne _ _ _ _ hIₐC
+            -- StateWF σStar via StateWF_insert_eq_bal or new-key insert.
+            have hWFσStar : StateWF σStar := by
+              show StateWF (σ.insert Iₐ _)
+              by_cases hFindIₐ : ∃ acc, σ.find? Iₐ = some acc
+              · obtain ⟨acc, hFind⟩ := hFindIₐ
+                have hσIₐ_eq : σ_Iₐ = acc := by
+                  show (σ.find? Iₐ).getD default = acc
+                  rw [hFind]; rfl
+                refine StateWF_insert_eq_bal σ Iₐ _ acc hFind ?_ hWF2
+                show (σ_Iₐ.balance : UInt256) = acc.balance
+                rw [hσIₐ_eq]
+              · push_neg at hFindIₐ
+                have hFindNone : σ.find? Iₐ = none := by
+                  match hF : σ.find? Iₐ with
+                  | none => rfl
+                  | some acc => exact absurd hF (hFindIₐ acc)
+                have hσIₐ_def_eq : σ_Iₐ = default := by
+                  show (σ.find? Iₐ).getD default = default
+                  rw [hFindNone]; rfl
+                refine ⟨?_⟩
+                have hEq2 := totalETH_insert_of_not_mem σ Iₐ
+                  { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ } hFindNone
+                have h0 : ({ σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ } : Account .EVM).balance.toNat = 0 := by
+                  rw [hσIₐ_def_eq]; rfl
+                rw [h0, Nat.add_zero] at hEq2
+                rw [hEq2]; exact hWF2.boundedTotal
+            -- h_funds: μ₀ ≤ σStar.find? Iₐ-balance (via σStar is σ with nonce bumped at Iₐ).
+            have h_funds_at_σStar :
+                ∀ acc, σStar.find? Iₐ = some acc → μ₀.toNat ≤ acc.balance.toNat := by
+              intro acc hFind
+              have hFindEq : σStar.find? Iₐ =
+                  some { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ } := find?_insert_self _ _ _
+              rw [hFindEq] at hFind
+              injection hFind with hAcc
+              subst hAcc
+              have hμ := hPreCheck.1
+              have hU : (σ.find? Iₐ |>.option (⟨0⟩ : UInt256) (·.balance)) = σ_Iₐ.balance := by
+                show (σ.find? Iₐ |>.option (⟨0⟩ : UInt256) (·.balance))
+                       = ((σ.find? Iₐ).getD default).balance
+                cases hF : σ.find? Iₐ with
+                | none => simp [hF]; rfl
+                | some acc2 => simp [hF]; rfl
+              rw [hU] at hμ
+              -- μ₀ ≤ σ_Iₐ.balance (UInt256) unfolds to μ₀.val.val ≤ σ_Iₐ.balance.val.val, i.e., toNat ≤ toNat.
+              exact hμ
+            -- Build Ξ_frame at smaller fuel.
+            have Ξ_frame_f : ∀ f', f' + 1 ≤ f → ΞFrameAtC C f' := by
+              intro f' hf'
+              -- hf' : f' + 1 ≤ f, so f' ≤ f ≤ f + 1.
+              exact ΞFrameAtC_mono C (f + 1) f'
+                (Nat.le_trans (Nat.le_of_succ_le hf') (Nat.le_succ _)) hFrame
+            -- Now rewrite hΛ using eS2's field equalities so its Lambda
+            -- matches the form Λ_balanceOf_ge expects.
+            -- hΛ uses eS2.xxx; eS2.accountMap = σ, eS2.executionEnv = evmState.executionEnv, etc.
+            -- The key reconciliation is the gasAvailable argument:
+            --   hΛ: L eS2.gasAvailable.toNat
+            --   target: L evmState.gasAvailable.toNat (in our Λ_balanceOf_ge call)
+            -- They differ by cost₂ subtraction.
+            -- Rather than reconcile, we just instantiate Λ_balanceOf_ge at eS2's values.
+            have hΛFrame :=
+              Λ_balanceOf_ge f
+                eS2.executionEnv.blobVersionedHashes
+                eS2.createdAccounts
+                eS2.genesisBlockHeader
+                eS2.blocks
+                σStar
+                eS2.σ₀
+                eS2.toState.substate
+                Iₐ
+                Iₒ
+                (.ofNat <| L eS2.gasAvailable.toNat)
+                (.ofNat eS2.executionEnv.gasPrice)
+                μ₀ i
+                (.ofNat <| Iₑ + 1)
+                none
+                eS2.executionEnv.header
+                eS2.executionEnv.perm
+                C hWFσStar hCO2
+                (by rw [hCA2]; exact hNC)
+                h_funds_at_σStar hWit Ξ_frame_f
+            rw [hΛ] at hΛFrame
+            obtain ⟨_ha_ne_C, hBalσ', hWFσ', hNCcA⟩ := hΛFrame
+            refine ⟨?_, hWFσ', ?_, ?_⟩
+            · -- Balance: σ' ≥ σStar ≥ σ = evmState.accountMap
+              show balanceOf σ' C ≥ balanceOf evmState.accountMap C
+              calc balanceOf σ' C
+                  ≥ balanceOf σStar C := hBalσ'
+                _ = balanceOf σ C := hσStarBalC
+                _ = balanceOf evmState.accountMap C := by rw [hσ_def, hAM2]
+            · -- codeOwner: unchanged through updates.
+              show C ≠ ({eS2 with accountMap := σ', substate := A', createdAccounts := cA }).executionEnv.codeOwner
+              rw [hEE2] at hCO2
+              exact hCO
+            · -- createdAccounts: subset from Λ.
+              show ∀ a ∈ ({eS2 with accountMap := σ', substate := A', createdAccounts := cA}).createdAccounts, a ≠ C
+              exact hNCcA
+        · -- Λ returned .error: state is eS2 unchanged.
+          rename_i hΛ
+          split at hStep
+          · exact absurd hStep (by simp)
+          · injection hStep with hEq
+            rw [← hEq]
+            refine ⟨?_, ?_, ?_, ?_⟩
+            · simp only [accountMap_replaceStackAndIncrPC]; exact Nat.le_refl _
+            · simp only [accountMap_replaceStackAndIncrPC]; exact hWF
+            · simp only [executionEnv_replaceStackAndIncrPC]; exact hCO
+            · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNC
       · -- Pre-check failure: inner evmState' = eS2, state unchanged.
         rw [if_neg hPreCheck] at hStep
         split at hStep
@@ -2831,10 +2954,115 @@ private theorem step_CREATE2_arm
         · simp only [executionEnv_replaceStackAndIncrPC]; exact hCO
         · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNC
     · simp only [hNonceOv, if_false] at hStep
+      set σStar : AccountMap .EVM :=
+        σ.insert Iₐ { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ } with hσStar_def
       by_cases hPreCheck :
           μ₀ ≤ (σ.find? Iₐ |>.option ⟨0⟩ (·.balance)) ∧ Iₑ < 1024 ∧ i.size ≤ 49152
-      · -- Pre-check OK: Lambda dispatch (see step_CREATE_arm for the structural explanation).
-        sorry
+      · -- Pre-check OK: Lambda dispatch (structurally parallel to CREATE).
+        rw [if_pos hPreCheck] at hStep
+        split at hStep
+        · rename_i a cA σ' g' A' z o hΛ
+          split at hStep
+          · exact absurd hStep (by simp)
+          · injection hStep with hEq
+            rw [← hEq]
+            simp only [accountMap_replaceStackAndIncrPC,
+                       executionEnv_replaceStackAndIncrPC,
+                       createdAccounts_replaceStackAndIncrPC]
+            have hIₐC : Iₐ ≠ C := fun h => hCO2 h.symm
+            have hσStarBalC : balanceOf σStar C = balanceOf σ C := by
+              show balanceOf (σ.insert Iₐ _) C = balanceOf σ C
+              apply balanceOf_of_find?_eq
+              exact find?_insert_ne _ _ _ _ hIₐC
+            have hWFσStar : StateWF σStar := by
+              show StateWF (σ.insert Iₐ _)
+              by_cases hFindIₐ : ∃ acc, σ.find? Iₐ = some acc
+              · obtain ⟨acc, hFind⟩ := hFindIₐ
+                have hσIₐ_eq : σ_Iₐ = acc := by
+                  show (σ.find? Iₐ).getD default = acc
+                  rw [hFind]; rfl
+                refine StateWF_insert_eq_bal σ Iₐ _ acc hFind ?_ hWF2
+                show (σ_Iₐ.balance : UInt256) = acc.balance
+                rw [hσIₐ_eq]
+              · push_neg at hFindIₐ
+                have hFindNone : σ.find? Iₐ = none := by
+                  match hF : σ.find? Iₐ with
+                  | none => rfl
+                  | some acc => exact absurd hF (hFindIₐ acc)
+                have hσIₐ_def_eq : σ_Iₐ = default := by
+                  show (σ.find? Iₐ).getD default = default
+                  rw [hFindNone]; rfl
+                refine ⟨?_⟩
+                have hEq2 := totalETH_insert_of_not_mem σ Iₐ
+                  { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ } hFindNone
+                have h0 : ({ σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ } : Account .EVM).balance.toNat = 0 := by
+                  rw [hσIₐ_def_eq]; rfl
+                rw [h0, Nat.add_zero] at hEq2
+                rw [hEq2]; exact hWF2.boundedTotal
+            have h_funds_at_σStar :
+                ∀ acc, σStar.find? Iₐ = some acc → μ₀.toNat ≤ acc.balance.toNat := by
+              intro acc hFind
+              have hFindEq : σStar.find? Iₐ =
+                  some { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ } := find?_insert_self _ _ _
+              rw [hFindEq] at hFind
+              injection hFind with hAcc
+              subst hAcc
+              have hμ := hPreCheck.1
+              have hU : (σ.find? Iₐ |>.option (⟨0⟩ : UInt256) (·.balance)) = σ_Iₐ.balance := by
+                show (σ.find? Iₐ |>.option (⟨0⟩ : UInt256) (·.balance))
+                       = ((σ.find? Iₐ).getD default).balance
+                cases hF : σ.find? Iₐ with
+                | none => rfl
+                | some acc2 => rfl
+              rw [hU] at hμ
+              exact hμ
+            have Ξ_frame_f : ∀ f', f' + 1 ≤ f → ΞFrameAtC C f' := by
+              intro f' hf'
+              exact ΞFrameAtC_mono C (f + 1) f'
+                (Nat.le_trans (Nat.le_of_succ_le hf') (Nat.le_succ _)) hFrame
+            have hΛFrame :=
+              Λ_balanceOf_ge f
+                eS2.executionEnv.blobVersionedHashes
+                eS2.createdAccounts
+                eS2.genesisBlockHeader
+                eS2.blocks
+                σStar
+                eS2.σ₀
+                eS2.toState.substate
+                Iₐ
+                eS2.executionEnv.sender
+                (.ofNat <| L eS2.gasAvailable.toNat)
+                (.ofNat eS2.executionEnv.gasPrice)
+                μ₀ i
+                (.ofNat <| Iₑ + 1)
+                (some (EvmYul.UInt256.toByteArray μ₃))
+                eS2.executionEnv.header
+                eS2.executionEnv.perm
+                C hWFσStar hCO2
+                (by rw [hCA2]; exact hNC)
+                h_funds_at_σStar hWit Ξ_frame_f
+            rw [hΛ] at hΛFrame
+            obtain ⟨_ha_ne_C, hBalσ', hWFσ', hNCcA⟩ := hΛFrame
+            refine ⟨?_, hWFσ', ?_, ?_⟩
+            · show balanceOf σ' C ≥ balanceOf evmState.accountMap C
+              calc balanceOf σ' C
+                  ≥ balanceOf σStar C := hBalσ'
+                _ = balanceOf σ C := hσStarBalC
+                _ = balanceOf evmState.accountMap C := by rw [hσ_def, hAM2]
+            · show C ≠ ({eS2 with accountMap := σ', substate := A', createdAccounts := cA }).executionEnv.codeOwner
+              rw [hEE2] at hCO2
+              exact hCO
+            · exact hNCcA
+        · rename_i hΛ
+          split at hStep
+          · exact absurd hStep (by simp)
+          · injection hStep with hEq
+            rw [← hEq]
+            refine ⟨?_, ?_, ?_, ?_⟩
+            · simp only [accountMap_replaceStackAndIncrPC]; exact Nat.le_refl _
+            · simp only [accountMap_replaceStackAndIncrPC]; exact hWF
+            · simp only [executionEnv_replaceStackAndIncrPC]; exact hCO
+            · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNC
       · rw [if_neg hPreCheck] at hStep
         split at hStep
         · exact absurd hStep (by simp)
@@ -2845,6 +3073,125 @@ private theorem step_CREATE2_arm
           · simp only [accountMap_replaceStackAndIncrPC]; exact hWF
           · simp only [executionEnv_replaceStackAndIncrPC]; exact hCO
           · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNC
+
+/-- **Helper for the CALL-family arms.**
+
+Given an `EVM.call` invocation returning `.ok (x, state')`, the
+4-conjunct bundle at `C ≠ codeOwner` is preserved. The caller
+supplies:
+* `hCO : C ≠ codeOwner`.
+* `hWF, hNC` — standard invariants on the input state.
+* `h_s : C ≠ source ∨ v = ⟨0⟩` — discharges Θ's sender-frame.
+* `h_vb : StateWF bound for the no-wrap at the recipient` — either
+  `no_wrap_pair`-derived (recipient ≠ codeOwner) or trivially 0-value.
+* `h_fs : v = 0 ∨ sender has enough funds`.
+
+This helper wraps `Θ_balanceOf_ge` via `call`'s gate + Θ dispatch. -/
+private theorem call_balanceOf_ge
+    (C : AccountAddress) (fuel : ℕ) (gasCost : ℕ)
+    (gas src rcp t v v' inOff inSize outOff outSize : UInt256)
+    (permission : Bool) (evmState state' : EVM.State) (x : UInt256)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C fuel)
+    (h_s : C ≠ AccountAddress.ofUInt256 src ∨ v = ⟨0⟩)
+    (h_vb : ∀ acc,
+        (evmState.accountMap).find? (AccountAddress.ofUInt256 rcp) = some acc →
+        acc.balance.toNat + v.toNat < UInt256.size)
+    (h_fs : v = ⟨0⟩ ∨ ∃ acc,
+              (evmState.accountMap).find? (AccountAddress.ofUInt256 src) = some acc ∧
+              v.toNat ≤ acc.balance.toNat)
+    (hCall :
+      EVM.call fuel gasCost evmState.executionEnv.blobVersionedHashes
+        gas src rcp t v v' inOff inSize outOff outSize permission evmState
+      = .ok (x, state')) :
+    balanceOf state'.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF state'.accountMap ∧
+    state'.executionEnv.codeOwner = evmState.executionEnv.codeOwner ∧
+    (∀ a ∈ state'.createdAccounts, a ≠ C) := by
+  -- Unfold EVM.call.
+  unfold EVM.call at hCall
+  simp only [bind, Except.bind, pure, Except.pure] at hCall
+  -- Case on fuel: if fuel = 0, hCall is .error, contradiction.
+  cases fuel with
+  | zero =>
+    -- After unfolding, hCall : match 0 with ... = .ok _.
+    simp only at hCall
+    exact absurd hCall (by simp)
+  | succ f =>
+  simp only at hCall
+  -- Split on the gate.
+  split at hCall
+  · -- Gate passed. Θ was invoked.
+    rename_i hGate
+    -- Inspect Θ's result: if .error, `call` errors → contradiction; if .ok, bundle.
+    -- The result of Θ is bound via `← Θ`. Split on that.
+    split at hCall
+    · -- Θ returned .error → hCall = .error, contradiction.
+      exact absurd hCall (by simp)
+    · -- Θ returned .ok with a 6-tuple.
+      rename_i hΘ_prod hΘ
+      obtain ⟨cA, σ', g', A', z, o⟩ := hΘ_prod
+      injection hCall with hEq
+      -- hEq : (x_computed, result_state) = (x, state')
+      -- Apply Θ_balanceOf_ge at fuel = f.
+      have Ξ_frame_f : ∀ f', f' + 1 ≤ f → ΞFrameAtC C f' := by
+        intro f' hf'
+        exact ΞFrameAtC_mono C (f + 1) f'
+          (Nat.le_trans (Nat.le_of_succ_le hf') (Nat.le_succ _)) hFrame
+      -- The σ passed to Θ is evmState.accountMap (unchanged by pre-Θ let).
+      -- Rewrite hΘ using the fact that the Θ invocation uses a state with
+      -- only gasAvailable adjusted — but all accountMap-like fields are
+      -- the same as evmState's. By definitional equality.
+      -- Apply Θ_balanceOf_ge.
+      have hΘFrame :=
+        Θ_balanceOf_ge f
+          evmState.executionEnv.blobVersionedHashes
+          evmState.createdAccounts
+          evmState.genesisBlockHeader
+          evmState.blocks
+          evmState.accountMap
+          evmState.σ₀
+          ((evmState.addAccessedAccount (AccountAddress.ofUInt256 t)).substate)
+          (AccountAddress.ofUInt256 src)
+          evmState.executionEnv.sender
+          (AccountAddress.ofUInt256 rcp)
+          (toExecute .EVM evmState.accountMap (AccountAddress.ofUInt256 t))
+          (.ofNat <| Ccallgas (AccountAddress.ofUInt256 t)
+                              (AccountAddress.ofUInt256 rcp) v gas
+                              evmState.accountMap evmState.toMachineState
+                              evmState.substate)
+          (.ofNat evmState.executionEnv.gasPrice)
+          v v' (evmState.memory.readWithPadding inOff.toNat inSize.toNat)
+          (evmState.executionEnv.depth + 1)
+          evmState.executionEnv.header permission
+          C hWF h_s hNC h_vb h_fs hWit Ξ_frame_f
+      rw [hΘ] at hΘFrame
+      obtain ⟨hBalGe, hWF', hCA'⟩ := hΘFrame
+      -- The final state' in call is:
+      --   { { evmState with accountMap := σ', substate := A', createdAccounts := cA }
+      --       with toMachineState := μ'incomplete }
+      -- Its accountMap = σ', createdAccounts = cA, executionEnv = evmState.executionEnv.
+      -- Pair equality hEq gives state' equals this record.
+      -- Use the second component of hEq.
+      have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
+      obtain ⟨_hx, hState⟩ := hState_eq
+      rw [← hState]
+      refine ⟨?_, ?_, ?_, ?_⟩
+      · show balanceOf σ' C ≥ balanceOf evmState.accountMap C
+        exact hBalGe
+      · exact hWF'
+      · rfl
+      · exact hCA'
+  · -- Gate failed. Inner tuple is (createdAccounts, accountMap, callgas, A', false, .empty).
+    -- σ' = accountMap unchanged, cA = createdAccounts unchanged.
+    injection hCall with hEq
+    have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
+    obtain ⟨_hx, hState⟩ := hState_eq
+    rw [← hState]
+    refine ⟨Nat.le_refl _, hWF, rfl, hNC⟩
 
 /-- CALL arm bundle. Unfolds `EVM.step (f+1) cost₂ (some (.CALL, arg)) evmState = .ok sstepState`,
 which dispatches to `EVM.call`. Closes via `Θ_balanceOf_ge` (which `call`
@@ -2865,24 +3212,9 @@ private theorem step_CALL_arm
   -- Unfold the CALL arm body.
   simp only [EVM.step, Operation.CALL, bind, Except.bind, pure, Except.pure] at hStep
   set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
-  -- hStep : (the CALL body on eS1) = .ok sstepState
-  -- The CALL body is:
-  --   let (stack, μ₀ ... μ₆) ← eS1.stack.pop7  -- lifted via Option → Except
-  --   let (x, state') ← call f cost₂ ... eS1
-  --   let μ'ₛ := stack.push x
-  --   let evmState' := state'.replaceStackAndIncrPC μ'ₛ
-  --   .ok evmState'
-  --
-  -- Split on pop7.
   split at hStep <;> rename_i hpop7 <;>
     (try (exact absurd hStep (by simp))) <;>
     (try rfl)
-  -- If we get here, pop7 was .some ⟨stack, μ₀, ..., μ₆⟩.
-  -- The remaining branch: call result.
-  -- The semantic content uses Θ's bundle inside `call`.  Full tactical
-  -- unfolding would introduce a `call_balanceOf_ge` helper that threads
-  -- `Θ_balanceOf_ge` through `call`'s internal dispatch. That helper has
-  -- not yet been written; we leave the body as sorry.
   sorry
 
 /-- CALLCODE arm bundle. Identical to CALL except `s = r = Iₐ` and `v' = v`. -/
@@ -2925,10 +3257,47 @@ private theorem step_DELEGATECALL_arm
   -- Unfold the DELEGATECALL body.
   simp only [EVM.step, Operation.DELEGATECALL, bind, Except.bind, pure, Except.pure] at hStep
   set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
-  split at hStep <;> rename_i hpop6 <;>
-    (try (exact absurd hStep (by simp))) <;>
-    (try rfl)
-  sorry
+  split at hStep
+  · exact absurd hStep (by simp)
+  · rename_i p hpop6
+    obtain ⟨stack, μ₀, μ₁, μ₃, μ₄, μ₅, μ₆⟩ := p
+    split at hStep
+    · exact absurd hStep (by simp)
+    · rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      have hWFes1 : StateWF eS1.accountMap := hWF
+      have hCOes1 : C ≠ eS1.executionEnv.codeOwner := hCO
+      have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
+      -- DELEGATECALL: source = evmState.executionEnv.source, value = 0, permission = perm.
+      have h_s_call :
+          C ≠ AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.source) ∨
+              (⟨0⟩ : UInt256) = ⟨0⟩ := Or.inr rfl
+      have h_vb_call :
+          ∀ acc, (eS1.accountMap).find?
+              (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner)) = some acc →
+            acc.balance.toNat + (⟨0⟩ : UInt256).toNat < UInt256.size := by
+        intro acc _
+        show acc.balance.toNat + 0 < UInt256.size
+        rw [Nat.add_zero]
+        exact acc.balance.val.isLt
+      have h_fs_call :
+          (⟨0⟩ : UInt256) = ⟨0⟩ ∨ ∃ acc, (eS1.accountMap).find?
+                        (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.source)) = some acc ∧
+                  (⟨0⟩ : UInt256).toNat ≤ acc.balance.toNat := Or.inl rfl
+      have hFrame_f : ΞFrameAtC C f := ΞFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+      have hBundle :=
+        call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.source)
+          (.ofNat eS1.executionEnv.codeOwner) μ₁ ⟨0⟩ eS1.executionEnv.weiValue
+          μ₃ μ₄ μ₅ μ₆ eS1.executionEnv.perm eS1 state' x
+          hWFes1 hCOes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+      obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
+      refine ⟨?_, ?_, ?_, ?_⟩
+      · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
+      · simp only [accountMap_replaceStackAndIncrPC]; exact hWFres
+      · simp only [executionEnv_replaceStackAndIncrPC]; rw [hCOres]; exact hCO
+      · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNCres
 
 /-- STATICCALL arm bundle. Identical to CALL except `v = 0` and `perm = false`. -/
 private theorem step_STATICCALL_arm
@@ -2947,10 +3316,50 @@ private theorem step_STATICCALL_arm
   -- Unfold the STATICCALL body.
   simp only [EVM.step, Operation.STATICCALL, bind, Except.bind, pure, Except.pure] at hStep
   set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
-  split at hStep <;> rename_i hpop6 <;>
-    (try (exact absurd hStep (by simp))) <;>
-    (try rfl)
-  sorry
+  -- Split on pop6.
+  split at hStep
+  · exact absurd hStep (by simp)
+  · -- pop6 succeeded.
+    rename_i p hpop6
+    obtain ⟨stack, μ₀, μ₁, μ₃, μ₄, μ₅, μ₆⟩ := p
+    -- Now hStep: let (x, state') ← call f cost₂ ... ⟨0⟩ ⟨0⟩ ... false eS1 = .ok ...
+    -- Split on call's result.
+    split at hStep
+    · exact absurd hStep (by simp)
+    · -- call succeeded.
+      rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      -- Apply call_balanceOf_ge. Value = ⟨0⟩, so h_s and h_vb and h_fs are trivial.
+      have hWFes1 : StateWF eS1.accountMap := hWF
+      have hCOes1 : C ≠ eS1.executionEnv.codeOwner := hCO
+      have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
+      have h_s_call :
+          C ≠ AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner) ∨
+              (⟨0⟩ : UInt256) = ⟨0⟩ := Or.inr rfl
+      have h_vb_call :
+          ∀ acc, (eS1.accountMap).find? (AccountAddress.ofUInt256 μ₁) = some acc →
+            acc.balance.toNat + (⟨0⟩ : UInt256).toNat < UInt256.size := by
+        intro acc _
+        show acc.balance.toNat + 0 < UInt256.size
+        rw [Nat.add_zero]
+        exact acc.balance.val.isLt
+      have h_fs_call :
+          (⟨0⟩ : UInt256) = ⟨0⟩ ∨ ∃ acc, (eS1.accountMap).find?
+                        (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner)) = some acc ∧
+                  (⟨0⟩ : UInt256).toNat ≤ acc.balance.toNat := Or.inl rfl
+      have hFrame_f : ΞFrameAtC C f := ΞFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+      have hBundle :=
+        call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
+          μ₁ μ₁ ⟨0⟩ ⟨0⟩ μ₃ μ₄ μ₅ μ₆ false eS1 state' x
+          hWFes1 hCOes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+      obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
+      refine ⟨?_, ?_, ?_, ?_⟩
+      · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
+      · simp only [accountMap_replaceStackAndIncrPC]; exact hWFres
+      · simp only [executionEnv_replaceStackAndIncrPC]; rw [hCOres]; exact hCO
+      · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNCres
 
 /-- Aggregated system-arm helper for CREATE/CREATE2/CALL-family.
 Dispatches on `op` via `hSys` and delegates to the per-arm helpers above. -/
