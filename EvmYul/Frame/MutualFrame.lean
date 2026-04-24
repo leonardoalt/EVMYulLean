@@ -775,7 +775,7 @@ theorem selfdestruct_preserves_StateWF
             simp only [Except.ok.injEq] at h
             subst h
             refine ⟨?_⟩
-            show totalETH (_ : EVM.State).accountMap < UInt256.size
+            show totalETH (_ : EVM.State).accountMap < UInt256.size / 2
             -- Need: r ≠ Iₐ (used in double_insert_sd_case3). When r = Iₐ?
             -- Actually hBal is `¬σ_Iₐ.balance = 0` (i.e., balance nonzero).
             -- If r = Iₐ, σ.find? r = σ.find? Iₐ = some σ_Iₐ, but hLookR : σ.find? r = none. Contradiction.
@@ -794,7 +794,7 @@ theorem selfdestruct_preserves_StateWF
               exact hLookIₐ
             have hEq := totalETH_double_insert_sd_case3 s.accountMap r Iₐ σ_Iₐ
                 hLookRdom hLookIₐdom hrIₐ
-            show totalETH _ < UInt256.size
+            show totalETH _ < UInt256.size / 2
             refine Nat.lt_of_le_of_lt (Nat.le_of_eq ?_) hWF.boundedTotal
             exact hEq
         case _ σ_r hLookR =>
@@ -810,7 +810,7 @@ theorem selfdestruct_preserves_StateWF
               unfold EvmYul.State.lookupAccount at hLookIₐ; exact hLookIₐ
             have hEq := totalETH_double_insert_sd_case4 s.accountMap r Iₐ σ_r σ_Iₐ
                   hLookRdom hLookIₐdom hrIₐ hWF
-            show totalETH _ < UInt256.size
+            show totalETH _ < UInt256.size / 2
             refine Nat.lt_of_le_of_lt (Nat.le_of_eq ?_) hWF.boundedTotal
             exact hEq
           case isFalse hrIₐ =>
@@ -825,7 +825,7 @@ theorem selfdestruct_preserves_StateWF
               unfold EvmYul.State.lookupAccount at hLookIₐ; exact hLookIₐ
             have hLe := totalETH_double_insert_sd_case5A_le s.accountMap r Iₐ σ_r σ_Iₐ
                   hLookRdom hLookIₐdom hrIₐ'
-            show totalETH _ < UInt256.size
+            show totalETH _ < UInt256.size / 2
             exact Nat.lt_of_le_of_lt hLe hWF.boundedTotal
     case _ hNotCreated =>
       -- Branch B
@@ -858,7 +858,7 @@ theorem selfdestruct_preserves_StateWF
               unfold EvmYul.State.lookupAccount at hLookIₐ; exact hLookIₐ
             have hEq := totalETH_double_insert_sd_case3 s.accountMap r Iₐ σ_Iₐ
                   hLookRdom hLookIₐdom hrIₐ
-            show totalETH _ < UInt256.size
+            show totalETH _ < UInt256.size / 2
             refine Nat.lt_of_le_of_lt (Nat.le_of_eq ?_) hWF.boundedTotal
             exact hEq
         case _ σ_r hLookR =>
@@ -873,7 +873,7 @@ theorem selfdestruct_preserves_StateWF
               unfold EvmYul.State.lookupAccount at hLookIₐ; exact hLookIₐ
             have hEq := totalETH_double_insert_sd_case4 s.accountMap r Iₐ σ_r σ_Iₐ
                   hLookRdom hLookIₐdom hrIₐ hWF
-            show totalETH _ < UInt256.size
+            show totalETH _ < UInt256.size / 2
             refine Nat.lt_of_le_of_lt (Nat.le_of_eq ?_) hWF.boundedTotal
             exact hEq
           case isFalse hrIₐ =>
@@ -1014,7 +1014,7 @@ private theorem stateWF_lambda_σStar_some
     find?_insert_ne σ s a _ (fun h => ha_ne_s h.symm)
   -- Case on σ.find? a.
   refine ⟨?_⟩
-  show totalETH (σ₁.insert a newAccount) < UInt256.size
+  show totalETH (σ₁.insert a newAccount) < UInt256.size / 2
   cases hFaCase : σ.find? a with
   | none =>
     -- σ₁.find? a = none too.
@@ -3195,7 +3195,15 @@ private theorem call_balanceOf_ge
 
 /-- CALL arm bundle. Unfolds `EVM.step (f+1) cost₂ (some (.CALL, arg)) evmState = .ok sstepState`,
 which dispatches to `EVM.call`. Closes via `Θ_balanceOf_ge` (which `call`
-internally invokes) + the `replaceStackAndIncrPC` wrap. -/
+internally invokes) + the `replaceStackAndIncrPC` wrap.
+
+The key obstacle is constructing `h_vb` (the no-wrap at the recipient)
+when `v = μ₂` is a nonzero stack value and the recipient might equal
+`codeOwner` (self-call). We split on the `call` gate: if the gate
+passes, `v ≤ σ[codeOwner].balance` and we construct `h_vb` via
+`no_wrap_pair` (r ≠ codeOwner) or `StateWF.boundedTotalDouble`
+(r = codeOwner, self-call). If the gate fails, `state'.accountMap` is
+unchanged and the bundle is trivial. -/
 private theorem step_CALL_arm
     (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
     (evmState sstepState : EVM.State)
@@ -3212,12 +3220,198 @@ private theorem step_CALL_arm
   -- Unfold the CALL arm body.
   simp only [EVM.step, Operation.CALL, bind, Except.bind, pure, Except.pure] at hStep
   set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
-  split at hStep <;> rename_i hpop7 <;>
-    (try (exact absurd hStep (by simp))) <;>
-    (try rfl)
-  sorry
+  split at hStep
+  · exact absurd hStep (by simp)
+  · rename_i p hpop7
+    obtain ⟨stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆⟩ := p
+    split at hStep
+    · exact absurd hStep (by simp)
+    · rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      -- For CALL: src = codeOwner, rcp = μ₁, v = μ₂.
+      -- The hypotheses to feed `call_balanceOf_ge`:
+      have hWFes1 : StateWF eS1.accountMap := hWF
+      have hCOes1 : C ≠ eS1.executionEnv.codeOwner := hCO
+      have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
+      -- Round-trip: AccountAddress.ofUInt256 (.ofNat codeOwner) = codeOwner.
+      have hRoundtrip :
+          AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner)
+            = eS1.executionEnv.codeOwner := by
+        show Fin.ofNat _ (((Fin.ofNat UInt256.size
+                eS1.executionEnv.codeOwner.val).val) % AccountAddress.size)
+             = eS1.executionEnv.codeOwner
+        have hAddrLtUSize : AccountAddress.size ≤ UInt256.size := by
+          show AccountAddress.size ≤ UInt256.size
+          decide
+        have hCoLtAddr : eS1.executionEnv.codeOwner.val < AccountAddress.size :=
+          eS1.executionEnv.codeOwner.isLt
+        have hCoLtU : eS1.executionEnv.codeOwner.val < UInt256.size :=
+          Nat.lt_of_lt_of_le hCoLtAddr hAddrLtUSize
+        have h1 : (Fin.ofNat UInt256.size eS1.executionEnv.codeOwner.val).val
+                  = eS1.executionEnv.codeOwner.val := by
+          show eS1.executionEnv.codeOwner.val % UInt256.size
+                = eS1.executionEnv.codeOwner.val
+          exact Nat.mod_eq_of_lt hCoLtU
+        rw [h1]
+        show Fin.ofNat _ (eS1.executionEnv.codeOwner.val % AccountAddress.size)
+             = eS1.executionEnv.codeOwner
+        rw [Nat.mod_eq_of_lt hCoLtAddr]
+        show Fin.ofNat _ eS1.executionEnv.codeOwner.val = eS1.executionEnv.codeOwner
+        apply Fin.ext
+        show eS1.executionEnv.codeOwner.val % AccountAddress.size
+             = eS1.executionEnv.codeOwner.val
+        exact Nat.mod_eq_of_lt hCoLtAddr
+      have h_s_call :
+          C ≠ AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner) ∨
+              μ₂ = ⟨0⟩ := by
+        left; rw [hRoundtrip]; exact hCOes1
+      -- For `h_vb`: split on whether the `call` gate passes.
+      -- Gate: `μ₂ ≤ σ[codeOwner].balance ∧ depth < 1024`.
+      -- We recover this by examining the gate-split inside `call` via
+      -- unfolding `hCallRes` when the gate fails.
+      -- Strategy: do a by_cases on the gate and prove the bundle in
+      -- each branch separately.
+      set Iₐ : AccountAddress := eS1.executionEnv.codeOwner
+      by_cases hGate :
+          μ₂ ≤ (eS1.accountMap.find? Iₐ |>.option (⟨0⟩ : UInt256) (·.balance))
+            ∧ eS1.executionEnv.depth < 1024
+      · -- Gate passed: v.toNat ≤ σ[codeOwner].balance.toNat.
+        -- We need `v.toNat ≤ σ[codeOwner].balance.toNat` from `μ₂ ≤ σ[codeOwner].balance`.
+        -- Case on `σ[codeOwner]`:
+        --   none: σ[codeOwner].option 0 (·.balance) = 0; μ₂ ≤ 0 ⇒ μ₂ = 0.
+        --   some acc: σ[codeOwner].balance = acc.balance; μ₂ ≤ acc.balance.
+        have hμle := hGate.1
+        have h_fs_call :
+            μ₂ = ⟨0⟩ ∨ ∃ acc,
+              (eS1.accountMap).find? (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner))
+                = some acc ∧ μ₂.toNat ≤ acc.balance.toNat := by
+          cases hFo : eS1.accountMap.find? Iₐ with
+          | none =>
+            -- `σ.find? Iₐ |>.option 0 (·.balance) = 0`; μ₂ ≤ 0 ⇒ μ₂ = 0.
+            rw [hFo] at hμle
+            -- hμle : μ₂ ≤ ⟨0⟩
+            have hNle : μ₂.toNat ≤ (⟨0⟩ : UInt256).toNat := by
+              show μ₂.val.val ≤ (⟨0⟩ : UInt256).val.val
+              exact hμle
+            have hμ0N : μ₂.toNat = 0 := Nat.le_zero.mp hNle
+            left
+            show μ₂ = ⟨⟨0, by decide⟩⟩
+            cases μ₂ with
+            | mk v =>
+              cases v with
+              | mk x hx =>
+                simp only [UInt256.toNat] at hμ0N
+                subst hμ0N
+                rfl
+          | some acc_Ia =>
+            right
+            have hFo' :
+                eS1.accountMap.find? (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner))
+                  = some acc_Ia := by
+              rw [hRoundtrip]; exact hFo
+            refine ⟨acc_Ia, hFo', ?_⟩
+            rw [hFo] at hμle
+            show μ₂.val.val ≤ acc_Ia.balance.val.val
+            exact hμle
+        -- Construct h_vb using the fund-gate fact.
+        have h_vb_call :
+            ∀ acc, (eS1.accountMap).find? (AccountAddress.ofUInt256 μ₁) = some acc →
+              acc.balance.toNat + μ₂.toNat < UInt256.size := by
+          intro acc h_find_r
+          -- Case on whether rcp = codeOwner (self-call).
+          by_cases hrs : AccountAddress.ofUInt256 μ₁ = Iₐ
+          · -- Self-call: use boundedTotalDouble + fund gate.
+            -- acc = σ[Iₐ], μ₂ ≤ acc.balance.
+            have h_find_Ia : eS1.accountMap.find? Iₐ = some acc := by
+              rw [← hrs]; exact h_find_r
+            have hμle' : μ₂.toNat ≤ acc.balance.toNat := by
+              rw [h_find_Ia] at hμle
+              show μ₂.val.val ≤ acc.balance.val.val
+              exact hμle
+            have hBalLe : acc.balance.toNat ≤ totalETH eS1.accountMap :=
+              balance_toNat_le_totalETH eS1.accountMap Iₐ acc h_find_Ia
+            have hDbl : 2 * totalETH eS1.accountMap < UInt256.size :=
+              hWFes1.boundedTotalDouble
+            calc acc.balance.toNat + μ₂.toNat
+                ≤ acc.balance.toNat + acc.balance.toNat := by omega
+              _ = 2 * acc.balance.toNat := by ring
+              _ ≤ 2 * totalETH eS1.accountMap := by omega
+              _ < UInt256.size := hDbl
+          · -- r ≠ Iₐ: use no_wrap_pair + fund gate.
+            -- Need σ[Iₐ] = some σ_s and μ₂ ≤ σ_s.balance.
+            cases hFo : eS1.accountMap.find? Iₐ with
+            | none =>
+              -- gate gives μ₂ ≤ 0 ⇒ μ₂ = 0; then sum is acc.balance + 0 < 2^256 by no_wrap_one.
+              rw [hFo] at hμle
+              have : μ₂.toNat ≤ (⟨0⟩ : UInt256).toNat := by
+                show μ₂.val.val ≤ (⟨0⟩ : UInt256).val.val
+                exact hμle
+              have hμ0 : μ₂.toNat = 0 := Nat.le_zero.mp this
+              rw [hμ0, Nat.add_zero]
+              exact no_wrap_one eS1.accountMap hWFes1 (AccountAddress.ofUInt256 μ₁) acc h_find_r
+            | some σ_s =>
+              rw [hFo] at hμle
+              have hμle' : μ₂.toNat ≤ σ_s.balance.toNat := by
+                show μ₂.val.val ≤ σ_s.balance.val.val
+                exact hμle
+              have hPair :=
+                no_wrap_pair eS1.accountMap hWFes1 (AccountAddress.ofUInt256 μ₁) Iₐ
+                  acc σ_s h_find_r hFo hrs
+              omega
+        have hFrame_f : ΞFrameAtC C f := ΞFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+        have hBundle :=
+          call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
+            μ₁ μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆ eS1.executionEnv.perm eS1 state' x
+            hWFes1 hCOes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+        obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
+        refine ⟨?_, ?_, ?_, ?_⟩
+        · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
+        · simp only [accountMap_replaceStackAndIncrPC]; exact hWFres
+        · simp only [executionEnv_replaceStackAndIncrPC]; rw [hCOres]; exact hCO
+        · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNCres
+      · -- Gate failed: call returns with accountMap = eS1.accountMap.
+        -- Unfold `call` to compute `state'` directly.
+        unfold EVM.call at hCallRes
+        simp only [bind, Except.bind, pure, Except.pure] at hCallRes
+        -- Case on the f+1 fuel pattern inside call.
+        -- `call` here has fuel = f (from our step context). After unfold,
+        -- the body is `match f with | 0 => .error | succ _ => ...`.
+        -- Check the `hCallRes` structure by case on fuel of `call`.
+        -- Actually `call` receives fuel = `f` here. Case split.
+        cases hf : f with
+        | zero =>
+          rw [hf] at hCallRes
+          -- hCallRes : .error .OutOfFuel = .ok (x, state')
+          exact absurd hCallRes (by simp)
+        | succ f' =>
+          rw [hf] at hCallRes
+          simp only at hCallRes
+          -- Inside, the inner if-gate splits. Our `hGate` = false here.
+          -- The gate in `call` is precisely the same form.
+          rw [if_neg hGate] at hCallRes
+          -- Now hCallRes computes: (cA, σ', g', A', z, o) := (evmState.createdAccounts, σ, callgas, ..., false, .empty)
+          -- Then .ok (x, state') where state' has accountMap := σ = eS1.accountMap.
+          simp only [Except.ok.injEq, Prod.mk.injEq] at hCallRes
+          obtain ⟨_hxEq, hStateEq⟩ := hCallRes
+          -- hStateEq : state' = { {eS1 with ...} with toMachineState := ... }
+          -- The key: state'.accountMap = eS1.accountMap,
+          -- state'.createdAccounts = eS1.createdAccounts,
+          -- state'.executionEnv = eS1.executionEnv.
+          refine ⟨?_, ?_, ?_, ?_⟩
+          · simp only [accountMap_replaceStackAndIncrPC, ← hStateEq]
+            exact Nat.le_refl _
+          · simp only [accountMap_replaceStackAndIncrPC, ← hStateEq]
+            exact hWFes1
+          · simp only [executionEnv_replaceStackAndIncrPC, ← hStateEq]
+            exact hCOes1
+          · simp only [createdAccounts_replaceStackAndIncrPC, ← hStateEq]
+            exact hNCes1
 
-/-- CALLCODE arm bundle. Identical to CALL except `s = r = Iₐ` and `v' = v`. -/
+/-- CALLCODE arm bundle. Identical to CALL except `s = r = Iₐ` and `v' = v`.
+Self-call ALWAYS: the no-wrap at the recipient is via `boundedTotalDouble`
+because r = codeOwner. -/
 private theorem step_CALLCODE_arm
     (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
     (evmState sstepState : EVM.State)
@@ -3234,10 +3428,143 @@ private theorem step_CALLCODE_arm
   -- Unfold the CALLCODE body (structurally parallel to CALL).
   simp only [EVM.step, Operation.CALLCODE, bind, Except.bind, pure, Except.pure] at hStep
   set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
-  split at hStep <;> rename_i hpop7 <;>
-    (try (exact absurd hStep (by simp))) <;>
-    (try rfl)
-  sorry
+  split at hStep
+  · exact absurd hStep (by simp)
+  · rename_i p hpop7
+    obtain ⟨stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆⟩ := p
+    split at hStep
+    · exact absurd hStep (by simp)
+    · rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      -- For CALLCODE: src = codeOwner, rcp = codeOwner (self-call), v = μ₂.
+      have hWFes1 : StateWF eS1.accountMap := hWF
+      have hCOes1 : C ≠ eS1.executionEnv.codeOwner := hCO
+      have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
+      -- Round-trip.
+      have hRoundtrip :
+          AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner)
+            = eS1.executionEnv.codeOwner := by
+        show Fin.ofNat _ (((Fin.ofNat UInt256.size
+                eS1.executionEnv.codeOwner.val).val) % AccountAddress.size)
+             = eS1.executionEnv.codeOwner
+        have hAddrLtUSize : AccountAddress.size ≤ UInt256.size := by
+          show AccountAddress.size ≤ UInt256.size
+          decide
+        have hCoLtAddr : eS1.executionEnv.codeOwner.val < AccountAddress.size :=
+          eS1.executionEnv.codeOwner.isLt
+        have hCoLtU : eS1.executionEnv.codeOwner.val < UInt256.size :=
+          Nat.lt_of_lt_of_le hCoLtAddr hAddrLtUSize
+        have h1 : (Fin.ofNat UInt256.size eS1.executionEnv.codeOwner.val).val
+                  = eS1.executionEnv.codeOwner.val := by
+          show eS1.executionEnv.codeOwner.val % UInt256.size
+                = eS1.executionEnv.codeOwner.val
+          exact Nat.mod_eq_of_lt hCoLtU
+        rw [h1]
+        show Fin.ofNat _ (eS1.executionEnv.codeOwner.val % AccountAddress.size)
+             = eS1.executionEnv.codeOwner
+        rw [Nat.mod_eq_of_lt hCoLtAddr]
+        show Fin.ofNat _ eS1.executionEnv.codeOwner.val = eS1.executionEnv.codeOwner
+        apply Fin.ext
+        show eS1.executionEnv.codeOwner.val % AccountAddress.size
+             = eS1.executionEnv.codeOwner.val
+        exact Nat.mod_eq_of_lt hCoLtAddr
+      have h_s_call :
+          C ≠ AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner) ∨
+              μ₂ = ⟨0⟩ := by
+        left; rw [hRoundtrip]; exact hCOes1
+      set Iₐ : AccountAddress := eS1.executionEnv.codeOwner
+      by_cases hGate :
+          μ₂ ≤ (eS1.accountMap.find? Iₐ |>.option (⟨0⟩ : UInt256) (·.balance))
+            ∧ eS1.executionEnv.depth < 1024
+      · -- Gate passed.
+        have hμle := hGate.1
+        have h_fs_call :
+            μ₂ = ⟨0⟩ ∨ ∃ acc,
+              (eS1.accountMap).find? (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner))
+                = some acc ∧ μ₂.toNat ≤ acc.balance.toNat := by
+          cases hFo : eS1.accountMap.find? Iₐ with
+          | none =>
+            rw [hFo] at hμle
+            have hNle : μ₂.toNat ≤ (⟨0⟩ : UInt256).toNat := by
+              show μ₂.val.val ≤ (⟨0⟩ : UInt256).val.val
+              exact hμle
+            have hμ0N : μ₂.toNat = 0 := Nat.le_zero.mp hNle
+            left
+            show μ₂ = ⟨⟨0, by decide⟩⟩
+            cases μ₂ with
+            | mk v =>
+              cases v with
+              | mk x hx =>
+                simp only [UInt256.toNat] at hμ0N
+                subst hμ0N
+                rfl
+          | some acc_Ia =>
+            right
+            have hFo' :
+                eS1.accountMap.find? (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner))
+                  = some acc_Ia := by
+              rw [hRoundtrip]; exact hFo
+            refine ⟨acc_Ia, hFo', ?_⟩
+            rw [hFo] at hμle
+            show μ₂.val.val ≤ acc_Ia.balance.val.val
+            exact hμle
+        -- h_vb: rcp is .ofNat codeOwner → AccountAddress.ofUInt256 = codeOwner = Iₐ.
+        -- So find? Iₐ = some acc → acc.balance + μ₂ ≤ 2*acc.balance ≤ 2*totalETH.
+        have h_vb_call :
+            ∀ acc, (eS1.accountMap).find? (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner))
+                = some acc →
+              acc.balance.toNat + μ₂.toNat < UInt256.size := by
+          intro acc h_find_r
+          rw [hRoundtrip] at h_find_r
+          have hμle' : μ₂.toNat ≤ acc.balance.toNat := by
+            rw [h_find_r] at hμle
+            show μ₂.val.val ≤ acc.balance.val.val
+            exact hμle
+          have hBalLe : acc.balance.toNat ≤ totalETH eS1.accountMap :=
+            balance_toNat_le_totalETH eS1.accountMap Iₐ acc h_find_r
+          have hDbl : 2 * totalETH eS1.accountMap < UInt256.size :=
+            hWFes1.boundedTotalDouble
+          calc acc.balance.toNat + μ₂.toNat
+              ≤ acc.balance.toNat + acc.balance.toNat := by omega
+            _ = 2 * acc.balance.toNat := by ring
+            _ ≤ 2 * totalETH eS1.accountMap := by omega
+            _ < UInt256.size := hDbl
+        have hFrame_f : ΞFrameAtC C f := ΞFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+        have hBundle :=
+          call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
+            (.ofNat eS1.executionEnv.codeOwner) μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆
+            eS1.executionEnv.perm eS1 state' x
+            hWFes1 hCOes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+        obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
+        refine ⟨?_, ?_, ?_, ?_⟩
+        · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
+        · simp only [accountMap_replaceStackAndIncrPC]; exact hWFres
+        · simp only [executionEnv_replaceStackAndIncrPC]; rw [hCOres]; exact hCO
+        · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNCres
+      · -- Gate failed.
+        unfold EVM.call at hCallRes
+        simp only [bind, Except.bind, pure, Except.pure] at hCallRes
+        cases hf : f with
+        | zero =>
+          rw [hf] at hCallRes
+          exact absurd hCallRes (by simp)
+        | succ f' =>
+          rw [hf] at hCallRes
+          simp only at hCallRes
+          rw [if_neg hGate] at hCallRes
+          simp only [Except.ok.injEq, Prod.mk.injEq] at hCallRes
+          obtain ⟨_hxEq, hStateEq⟩ := hCallRes
+          refine ⟨?_, ?_, ?_, ?_⟩
+          · simp only [accountMap_replaceStackAndIncrPC, ← hStateEq]
+            exact Nat.le_refl _
+          · simp only [accountMap_replaceStackAndIncrPC, ← hStateEq]
+            exact hWFes1
+          · simp only [executionEnv_replaceStackAndIncrPC, ← hStateEq]
+            exact hCOes1
+          · simp only [createdAccounts_replaceStackAndIncrPC, ← hStateEq]
+            exact hNCes1
 
 /-- DELEGATECALL arm bundle. Identical to CALL except `v = 0`, so Θ's
 value-transfer prefix is a no-op at `C`. -/
