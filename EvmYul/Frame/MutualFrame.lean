@@ -519,6 +519,22 @@ theorem StateWF_insert_eq_bal
   rw [totalETH_insert_eq_bal σ k acc acc_old hFind hBal]
   exact hWF.boundedTotal
 
+/-- `StateWF` is preserved across an `insert` at an existing key
+where the new balance is at most the old balance. The total ETH
+weakly decreases, so `StateWF`'s upper bound carries through. -/
+theorem StateWF_insert_le_bal
+    (σ : AccountMap .EVM) (k : AccountAddress)
+    (acc acc_old : Account .EVM) (hFind : σ.find? k = some acc_old)
+    (hBal : acc.balance.toNat ≤ acc_old.balance.toNat) (hWF : StateWF σ) :
+    StateWF (σ.insert k acc) := by
+  refine ⟨?_⟩
+  -- totalETH (σ.insert k acc) + acc_old.balance.toNat = totalETH σ + acc.balance.toNat
+  have h := totalETH_insert_of_mem σ k acc acc_old hFind
+  -- Hence totalETH (σ.insert k acc) = totalETH σ + acc.balance.toNat - acc_old.balance.toNat
+  -- And since acc.balance ≤ acc_old.balance, totalETH (σ.insert k acc) ≤ totalETH σ
+  have hLe : totalETH (σ.insert k acc) ≤ totalETH σ := by omega
+  exact Nat.lt_of_le_of_lt hLe hWF.boundedTotal
+
 /-- `StateWF` is preserved when inserting `{σ.findD k default with code := c}`
 at key `k`. The balance of the inserted account equals the balance stored at
 `k` in `σ` (either the present account's balance, or `0 = default.balance` if
@@ -4056,50 +4072,22 @@ private theorem X_inv_holds
         exact X_inv_succ_content C f' validJumps evmState finalState out
           hWF hCO hNC hWit hFrame_f' IH' hXres
 
-/-- `Ξ_balanceOf_ge` — Ξ (code execution) preserves `balanceOf C` when
-code runs at `I.codeOwner ≠ C`.
-
-Proved by strong induction on `fuel`. The IH supplies `ΞFrameAtC C f`
-for all `f < fuel`, which we thread into `Θ_balanceOf_ge` /
-`Λ_balanceOf_ge` via their new `Ξ_frame` parameter. -/
-theorem Ξ_balanceOf_ge
-    (fuel : ℕ) (createdAccounts : RBSet AccountAddress compare)
-    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
-    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
-    (I : ExecutionEnv .EVM) (C : AccountAddress)
-    (hWF : StateWF σ)
-    (h_codeOwner : C ≠ I.codeOwner)
-    (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
+/-- Bundled form of `Ξ_balanceOf_ge` — also exposes `StateWF` and the
+`createdAccounts ≠ C` invariant. Closed at every fuel, so consumers
+(e.g. Υ) can build a `ΞFrameAtC C maxFuel` witness for any maxFuel. -/
+theorem Ξ_balanceOf_ge_bundled (C : AccountAddress)
     (hWitness : ΞPreservesAtC C) :
-    match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
-    | .ok (.success (_, σ', _, _) _) => balanceOf σ' C ≥ balanceOf σ C
-    | .ok (.revert _ _) => True
-    | .error _ => True := by
-  -- Strong induction on fuel. We prove a bundled form (balance-mono +
-  -- StateWF + createdAccounts) then project the balance-mono half.
-  suffices h : ∀ (n : ℕ),
-      ∀ (cA' : RBSet AccountAddress compare) (gbh' : BlockHeader)
-        (bs' : ProcessedBlocks) (σ' σ₀' : AccountMap .EVM) (g' : UInt256)
-        (A' : Substate) (I' : ExecutionEnv .EVM),
-        StateWF σ' →
-        C ≠ I'.codeOwner →
-        (∀ a ∈ cA', a ≠ C) →
-        match EVM.Ξ n cA' gbh' bs' σ' σ₀' g' A' I' with
-        | .ok (.success (cA_out, σ''final, _, _) _) =>
-            balanceOf σ''final C ≥ balanceOf σ' C ∧ StateWF σ''final ∧
-              (∀ a ∈ cA_out, a ≠ C)
-        | _ => True by
-    have hh := h fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I
-                 hWF h_codeOwner h_newC
-    cases hEqΞ : EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
-    | error _ => trivial
-    | ok er =>
-      cases er with
-      | success data out =>
-        obtain ⟨_, σ''f, _, _⟩ := data
-        rw [hEqΞ] at hh
-        exact hh.1
-      | revert _ _ => trivial
+    ∀ (n : ℕ) (cA' : RBSet AccountAddress compare) (gbh' : BlockHeader)
+      (bs' : ProcessedBlocks) (σ' σ₀' : AccountMap .EVM) (g' : UInt256)
+      (A' : Substate) (I' : ExecutionEnv .EVM),
+      StateWF σ' →
+      C ≠ I'.codeOwner →
+      (∀ a ∈ cA', a ≠ C) →
+      match EVM.Ξ n cA' gbh' bs' σ' σ₀' g' A' I' with
+      | .ok (.success (cA_out, σ''final, _, _) _) =>
+          balanceOf σ''final C ≥ balanceOf σ' C ∧ StateWF σ''final ∧
+            (∀ a ∈ cA_out, a ≠ C)
+      | _ => True := by
   intro n
   induction n using Nat.strong_induction_on with
   | _ n IH =>
@@ -4166,6 +4154,47 @@ theorem Ξ_balanceOf_ge
         | success evmState' out =>
           exact this
         | revert _ _ => trivial
+
+/-- `ΞFrameAtC C maxFuel` for any `maxFuel`, derived from the bundled
+form. Useful for consumers (Υ) that need to feed `Ξ_frame` into
+`Θ_balanceOf_ge` / `Λ_balanceOf_ge`. -/
+theorem ΞFrameAtC_of_witness (C : AccountAddress)
+    (hWitness : ΞPreservesAtC C) (maxFuel : ℕ) :
+    ΞFrameAtC C maxFuel := by
+  intro fuel _hf cA' gbh' bs' σ' σ₀' g' A' I' hWF' hco' hnc'
+  exact Ξ_balanceOf_ge_bundled C hWitness fuel cA' gbh' bs' σ' σ₀' g' A' I'
+    hWF' hco' hnc'
+
+/-- `Ξ_balanceOf_ge` — Ξ (code execution) preserves `balanceOf C` when
+code runs at `I.codeOwner ≠ C`.
+
+Proved by strong induction on `fuel`. The IH supplies `ΞFrameAtC C f`
+for all `f < fuel`, which we thread into `Θ_balanceOf_ge` /
+`Λ_balanceOf_ge` via their new `Ξ_frame` parameter. -/
+theorem Ξ_balanceOf_ge
+    (fuel : ℕ) (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+    (I : ExecutionEnv .EVM) (C : AccountAddress)
+    (hWF : StateWF σ)
+    (h_codeOwner : C ≠ I.codeOwner)
+    (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
+    (hWitness : ΞPreservesAtC C) :
+    match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+    | .ok (.success (_, σ', _, _) _) => balanceOf σ' C ≥ balanceOf σ C
+    | .ok (.revert _ _) => True
+    | .error _ => True := by
+  have hh := Ξ_balanceOf_ge_bundled C hWitness fuel createdAccounts
+                genesisBlockHeader blocks σ σ₀ g A I hWF h_codeOwner h_newC
+  cases hEqΞ : EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+  | error _ => trivial
+  | ok er =>
+    cases er with
+    | success data out =>
+      obtain ⟨_, σ''f, _, _⟩ := data
+      rw [hEqΞ] at hh
+      exact hh.1
+    | revert _ _ => trivial
 
 end Frame
 end EvmYul
