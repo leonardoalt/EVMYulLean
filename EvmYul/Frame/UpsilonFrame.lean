@@ -607,12 +607,10 @@ def TxValid (σ : AccountMap .EVM) (S_T : AccountAddress)
     ∧ (∀ r accR, (Υ_σ₀ σ H_f S_T H tx).find? r = some accR →
          accR.balance.toNat + tx.base.value.toNat < UInt256.size)
 
-/-- **T4** — Υ is only invoked on tx-valid inputs. Real-world axiom
-discharged by node-level validation. -/
-axiom tx_validity
-    (σ : AccountMap .EVM) (S_T : AccountAddress) (tx : Transaction)
-    (H : BlockHeader) (H_f : ℕ) :
-    TxValid σ S_T tx H H_f
+/-! **T4** note: `TxValid` was previously discharged by a global axiom
+`tx_validity`. We removed the axiom and now require consumers (e.g.
+`register_balance_mono`) to take `TxValid` as an explicit hypothesis.
+Real-world Υ invocations satisfy this via node-level validation. -/
 
 /-! ### `RBSet.filter` membership helper
 
