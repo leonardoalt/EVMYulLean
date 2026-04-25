@@ -3424,6 +3424,143 @@ private theorem step_CALL_arm
           · simp only [createdAccounts_replaceStackAndIncrPC, ← hStateEq]
             exact hNCes1
 
+/-- CALL arm bundle at the codeOwner (C = codeOwner) with value 0.
+
+When `C = evmState.executionEnv.codeOwner`, the `step_CALL_arm` hypothesis
+`hCO : C ≠ codeOwner` is unavailable. We require instead `h_v0`:
+the value pushed for the CALL (μ₂, the third stack element) is `⟨0⟩`.
+With value 0, the source-frame discharge `h_s` for `call_balanceOf_ge`
+is satisfied via `Or.inr` (v = 0), and `h_vb`/`h_fs` are trivial.
+
+Because the CALL opcode does NOT change the executionEnv (the call
+returns into the same frame), we conclude `C = sstepState.codeOwner`,
+preserving the `at_C` invariant. -/
+private theorem step_CALL_arm_at_C_v0
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCC : C = evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C (f + 1))
+    (h_v0 : evmState.stack[2]? = some ⟨0⟩)
+    (hStep : EVM.step (f + 1) cost₂ (some (.CALL, arg)) evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C = sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  -- Unfold the CALL arm body, mirroring `step_CALL_arm`.
+  simp only [EVM.step, Operation.CALL, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
+  split at hStep
+  · exact absurd hStep (by simp)
+  · rename_i p hpop7
+    obtain ⟨stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆⟩ := p
+    -- Derive `μ₂ = ⟨0⟩` from `h_v0` and `hpop7`.
+    -- `eS1.stack = evmState.stack` (only execLength changed).
+    have hStackEq : eS1.stack = evmState.stack := rfl
+    -- Convert hpop7 to the bare Option equality form.
+    -- `hpop7 : (eS1.stack.pop7 : Option _).option (.error .StackUnderflow) .ok = .ok ⟨...⟩`.
+    -- Equivalent to `eS1.stack.pop7 = some ⟨...⟩`.
+    have hpop7' : eS1.stack.pop7 = some (stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆) := by
+      cases hP : eS1.stack.pop7 with
+      | none =>
+        rw [hP] at hpop7
+        -- hpop7 : MonadLift.monadLift none = .ok (...)
+        -- monadLift none = .error .StackUnderflow ≠ .ok ...
+        -- The MonadLift instance is `Option.option (.error .StackUnderflow) .ok`.
+        -- So `MonadLift.monadLift none = .error .StackUnderflow`.
+        have hcontra :
+            (Except.error EVM.ExecutionException.StackUnderflow :
+                Except EVM.ExecutionException _)
+              = .ok (stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆) := hpop7
+        cases hcontra
+      | some q =>
+        rw [hP] at hpop7
+        -- hpop7 : MonadLift.monadLift (some q) = .ok (...)
+        -- monadLift (some q) = .ok q
+        have : (Except.ok q : Except EVM.ExecutionException _) =
+               .ok (stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆) := hpop7
+        injection this with h
+        rw [h]
+    -- Invert pop7 to get the list shape and extract μ₂ = ⟨0⟩.
+    have hμ2 : μ₂ = (⟨0⟩ : UInt256) := by
+      -- Case on eS1.stack: pop7 succeeds only if it has at least 7 elements.
+      cases hS : eS1.stack with
+      | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+      | cons a₀ rest =>
+        cases rest with
+        | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+        | cons a₁ rest =>
+          cases rest with
+          | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+          | cons a₂ rest =>
+            cases rest with
+            | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+            | cons a₃ rest =>
+              cases rest with
+              | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+              | cons a₄ rest =>
+                cases rest with
+                | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+                | cons a₅ rest =>
+                  cases rest with
+                  | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+                  | cons a₆ tl =>
+                    rw [hS] at hpop7'
+                    simp only [Stack.pop7] at hpop7'
+                    -- hpop7' : some (tl, a₀, a₁, a₂, a₃, a₄, a₅, a₆)
+                    --        = some (stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆)
+                    injection hpop7' with hpop7''
+                    -- hpop7'' : (tl, a₀, a₁, a₂, ...) = (stack, μ₀, μ₁, μ₂, ...)
+                    -- Use Prod.mk.injEq to split into per-field equalities.
+                    have hμ2_eq : a₂ = μ₂ := by
+                      have := hpop7''
+                      simp only [Prod.mk.injEq] at this
+                      exact this.2.2.2.1
+                    rw [hStackEq] at hS
+                    rw [hS] at h_v0
+                    simp at h_v0
+                    -- h_v0 : a₂ = ⟨0⟩
+                    rw [← hμ2_eq]; exact h_v0
+    split at hStep
+    · exact absurd hStep (by simp)
+    · rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      -- For CALL: src = codeOwner, rcp = μ₁, v = μ₂ = ⟨0⟩.
+      have hWFes1 : StateWF eS1.accountMap := hWF
+      have hCCes1 : C = eS1.executionEnv.codeOwner := hCC
+      have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
+      -- Discharge h_s, h_vb, h_fs trivially via `μ₂ = ⟨0⟩`.
+      have h_s_call :
+          C ≠ AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner) ∨
+              μ₂ = ⟨0⟩ := Or.inr hμ2
+      have h_vb_call :
+          ∀ acc, (eS1.accountMap).find? (AccountAddress.ofUInt256 μ₁) = some acc →
+            acc.balance.toNat + μ₂.toNat < UInt256.size := by
+        intro acc _
+        rw [hμ2]
+        show acc.balance.toNat + 0 < UInt256.size
+        rw [Nat.add_zero]
+        exact acc.balance.val.isLt
+      have h_fs_call :
+          μ₂ = ⟨0⟩ ∨ ∃ acc,
+              (eS1.accountMap).find? (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner))
+                = some acc ∧ μ₂.toNat ≤ acc.balance.toNat := Or.inl hμ2
+      have hFrame_f : ΞFrameAtC C f := ΞFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+      have hBundle :=
+        call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
+          μ₁ μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆ eS1.executionEnv.perm eS1 state' x
+          hWFes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+      obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
+      refine ⟨?_, ?_, ?_, ?_⟩
+      · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
+      · simp only [accountMap_replaceStackAndIncrPC]; exact hWFres
+      · simp only [executionEnv_replaceStackAndIncrPC]; rw [hCOres]; exact hCCes1
+      · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNCres
+
 /-- CALLCODE arm bundle. Identical to CALL except `s = r = Iₐ` and `v' = v`.
 Self-call ALWAYS: the no-wrap at the recipient is via `boundedTotalDouble`
 because r = codeOwner. -/
