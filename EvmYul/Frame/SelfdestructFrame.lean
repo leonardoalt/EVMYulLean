@@ -288,5 +288,143 @@ theorem selfdestruct_preserves_createdAccounts
           all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
   case _ _ => simp at h
 
+/-! ### SELFDESTRUCT and `selfDestructSet` evolution
+
+SELFDESTRUCT only adds `Iₐ` to `selfDestructSet` in branch A —
+when `createdAccounts.contains Iₐ`. In branch B (the contract was
+not created in the same transaction), `selfDestructSet` is
+unchanged. Thus the post-step SD-set is a subset of the input SD-set
+union `{Iₐ}` (with `Iₐ` only contributing in branch A). -/
+
+/-- SELFDESTRUCT step's effect on `selfDestructSet`: every element of
+the post-step SD-set is either in the pre-step SD-set or equals
+`s.executionEnv.codeOwner` (i.e. `Iₐ`).
+
+This is the structural invariant we use to derive C-exclusion of the
+output SD-set: if the input SD-set excludes `C` and `Iₐ ≠ C`, then
+the output SD-set excludes `C`.
+
+In our use site (`X_inv` / `step_bundled_invariant_at_C`), `Iₐ ≠ C`
+follows from `(∀ a ∈ s.createdAccounts, a ≠ C)` — since SELFDESTRUCT
+adding `Iₐ` to the SD-set requires `Iₐ ∈ createdAccounts` (branch A's
+guard). For non-at-C steps, `Iₐ = s.executionEnv.codeOwner ≠ C` is
+the hypothesis directly. -/
+theorem selfdestruct_SDset_subset_or_Iₐ
+    (s s' : EVM.State)
+    (h : EvmYul.step (.SELFDESTRUCT : Operation .EVM) .none s = .ok s') :
+    ∀ k ∈ s'.substate.selfDestructSet.1.toList,
+      k ∈ s.substate.selfDestructSet.1.toList ∨ k = s.executionEnv.codeOwner := by
+  unfold EvmYul.step at h
+  simp only [Id.run] at h
+  set Iₐ := s.executionEnv.codeOwner with hIₐ_def
+  split at h
+  case _ stk μ₁ hPop =>
+    split at h
+    case _ hCreated =>
+      -- Branch A: substate' has selfDestructSet := old.insert Iₐ.
+      -- All sub-cases set substate := A' (with the .insert).
+      have hSub :
+        ∀ k ∈ s'.substate.selfDestructSet.1.toList,
+          k ∈ s.substate.selfDestructSet.1.toList ∨ k = Iₐ := by
+        intro k hk
+        -- We need to show that s'.substate.selfDestructSet =
+        -- s.substate.selfDestructSet.insert Iₐ. Walk the case-tree.
+        have hSDeq :
+            s'.substate.selfDestructSet = s.substate.selfDestructSet.insert Iₐ := by
+          split at h
+          case _ _ =>
+            -- Look up Iₐ failed: substate = original.
+            simp only [Except.ok.injEq] at h; subst h; rfl
+          case _ σ_Iₐ _ =>
+            split at h
+            case _ _ =>
+              split at h
+              all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+            case _ σ_r _ =>
+              split at h
+              all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+        rw [hSDeq] at hk
+        -- Now `k ∈ (s.substate.selfDestructSet.insert Iₐ).1.toList`.
+        -- Use `RBSet.mem_insert`-style reasoning to split.
+        have hMem : k ∈ s.substate.selfDestructSet.insert Iₐ :=
+          Batteries.RBSet.mem_of_mem_toList hk
+        rcases Batteries.RBSet.mem_insert.mp hMem with hOrig | hCmp
+        · left
+          -- hOrig : k ∈ s.substate.selfDestructSet
+          -- We need `k ∈ s.substate.selfDestructSet.1.toList`.
+          -- Convert via the underlying RBNode membership.
+          -- `k ∈ s.substate.selfDestructSet` is `MemP (compare k) ...`.
+          -- We need to reverse: convert to `k ∈ .1.toList`.
+          -- Use the fact that for `compare` on `AccountAddress` (Fin _),
+          -- `MemP (compare k) s ↔ k ∈ s.1.toList`.
+          --
+          -- Simpler: reuse the `Batteries.RBSet.mem_def`-style lemma
+          -- that translates RBSet membership to toList membership.
+          --
+          -- Path: `mem_iff_mem_toList` if available; else we use
+          -- a pragmatic ordering.
+          --
+          -- Concrete approach: AccountAddress = Fin _, with decidable eq.
+          -- `MemP (compare k) s` is `Any (compare k · = .eq) s.1`.
+          -- `compare a b = .eq ↔ a = b` for `LawfulEqCmp compare`.
+          -- So `MemP` collapses to `Any (· = k) ↔ k ∈ s.1.toList`.
+          --
+          -- Empirically we already have access to
+          -- `Batteries.RBSet.mem_of_mem_toList` (the forward direction).
+          -- The reverse is `Batteries.RBSet.mem_toList_of_mem` if it exists.
+          -- Otherwise we go through `RBNode.Any` and `LawfulEqCmp`.
+          --
+          -- For now, we appeal to `Std.LawfulEqCmp` (compare = .eq ↔ =).
+          -- AccountAddress is `Fin _` with `compare = compareOfLessAndEq`.
+          have hRBmem : Batteries.RBSet.MemP (compare k) s.substate.selfDestructSet := hOrig
+          -- hRBmem unfolds via memP_def to ∃ x ∈ s.substate.selfDestructSet.1, compare k x = .eq.
+          rw [show Batteries.RBSet.MemP (compare k) s.substate.selfDestructSet
+                ↔ ∃ x ∈ s.substate.selfDestructSet.1, compare k x = .eq
+                from Batteries.RBNode.memP_def] at hRBmem
+          obtain ⟨x, hxMem, hCmp⟩ := hRBmem
+          have hxk : x = k := (Std.LawfulEqCmp.compare_eq_iff_eq.mp hCmp).symm
+          rw [hxk] at hxMem
+          exact Batteries.RBNode.mem_toList.mpr hxMem
+        · -- compare Iₐ k = .eq → Iₐ = k → k = Iₐ
+          right
+          exact (Std.LawfulEqCmp.compare_eq_iff_eq.mp hCmp).symm
+      exact hSub
+    case _ hNotCreated =>
+      -- Branch B: substate' has same selfDestructSet as s.substate.
+      have hSDeq : s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+        split at h
+        case _ _ =>
+          simp only [Except.ok.injEq] at h; subst h; rfl
+        case _ σ_Iₐ _ =>
+          split at h
+          case _ _ =>
+            split at h
+            all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+          case _ σ_r _ =>
+            split at h
+            all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+      intro k hk
+      rw [hSDeq] at hk
+      exact Or.inl hk
+  case _ _ => simp at h
+
+/-- SELFDESTRUCT step preserves `SubstateSDExclude C` of the substate
+when the executing-frame address `Iₐ ≠ C`.
+
+This is the leaf invariant for SD-set tracking: combined with
+`(∀ a ∈ createdAccounts, a ≠ C)` (which by branch A's guard implies
+`Iₐ ≠ C` whenever the SD-set actually grows), it propagates SD-set
+exclusion of `C` through every SELFDESTRUCT step. -/
+theorem selfdestruct_preserves_SD_exclude_C
+    (s s' : EVM.State) (C : AccountAddress)
+    (hSD_in : ∀ k ∈ s.substate.selfDestructSet.1.toList, k ≠ C)
+    (hIₐne : s.executionEnv.codeOwner ≠ C)
+    (h : EvmYul.step (.SELFDESTRUCT : Operation .EVM) .none s = .ok s') :
+    ∀ k ∈ s'.substate.selfDestructSet.1.toList, k ≠ C := by
+  intro k hk
+  rcases selfdestruct_SDset_subset_or_Iₐ s s' h k hk with hOld | hIₐ
+  · exact hSD_in k hOld
+  · rw [hIₐ]; exact hIₐne
+
 end Frame
 end EvmYul
