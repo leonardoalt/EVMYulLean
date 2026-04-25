@@ -192,10 +192,12 @@ proves it, consumers (e.g. `register_balance_mono`) can derive
 this predicate, without needing a separate structural hypothesis.
 
 NOTE: as of Phase A's first round, the closure proof of
-`ΞPreservesAtCStrong` (via `ΞPreservesAtCStrong_of_Reachable`) is not
-yet wired up — the predicate is defined and ready for downstream use,
-but its main proof obligation requires propagating SD-set tracking
-through the entire mutual closure (Θ/Λ/Ξ/X). -/
+`ΞPreservesAtCStrong` (via a strengthened `ΞPreservesAtC_of_Reachable`
+threaded with SD-set tracking) is not yet wired up — the predicate is
+defined and ready for downstream use, but its main proof obligation
+requires propagating SD-set tracking through the entire mutual closure
+(Θ/Λ/Ξ/X). The leaf SELFDESTRUCT-step preservation is closed in
+`SelfdestructFrame.lean` (`selfdestruct_preserves_SD_exclude_C`). -/
 def ΞPreservesAtCStrong (C : AccountAddress) : Prop :=
   ∀ (fuel : ℕ) (createdAccounts : RBSet AccountAddress compare)
     (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
@@ -211,14 +213,12 @@ def ΞPreservesAtCStrong (C : AccountAddress) : Prop :=
           SubstateSDExclude A' C
     | _ => True
 
-/-- Forgetful map: a strong witness, applied to a substate whose SD-set
-already excludes `C`, yields the unstrengthened predicate's conclusion.
+/-- A `ΞPreservesAtCStrong` witness yields the unstrengthened predicate's
+conclusion when supplied an input substate that already SD-excludes `C`.
 
-Note: this isn't a generic forgetful map (the strong predicate requires
-an input SD-exclusion that the unstrengthened form doesn't know about).
-It's a thin convenience wrapper that returns the first three conjuncts
-of the strong predicate's output, taking the SD-input as an explicit
-hypothesis. -/
+This is a thin convenience wrapper: it returns the first three
+conjuncts of the strong predicate's output, taking the SD-input as
+an explicit hypothesis. -/
 theorem ΞPreservesAtC_of_Strong_with_SD (C : AccountAddress)
     (h : ΞPreservesAtCStrong C)
     (fuel : ℕ) (createdAccounts : RBSet AccountAddress compare)
