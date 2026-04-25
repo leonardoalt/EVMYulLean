@@ -302,6 +302,123 @@ theorem ΞAtCFrame_mono (C : AccountAddress) (a b : ℕ) (hab : b ≤ a)
   intro f hf
   exact hA f (Nat.le_trans hf hab)
 
+/-! ### Strengthened (4-conjunct) frame predicates
+
+These mirror `ΞFrameAtC` and `ΞAtCFrame` but additionally take a
+`SubstateSDExclude A C` precondition and produce
+`SubstateSDExclude A' C` as a 4th conjunct in the success branch.
+
+These are **predicate definitions only** at this point in Phase A.
+The closure proofs that establish them from a `ΞPreservesAtCStrong C`
+witness (the analog of `ΞAtCFrame_of_witness` /
+`ΞFrameAtC_of_witness`) require threading SD-set tracking through
+the entire mutual closure (`X_inv`, `step_bundled_invariant_at_C`,
+the Θ/Λ frames). That work is the bulk of Phase A and is not
+finished in this revision; the leaf SELFDESTRUCT preservation is
+in `SelfdestructFrame.lean`
+(`selfdestruct_preserves_SD_exclude_C`).
+
+`ΞAtCFrameStrong` is derivable from `ΞPreservesAtCStrong` directly,
+since the strong witness is the unbounded form of the same
+4-conjunct invariant in the `I.codeOwner = C` case.
+
+`ΞFrameAtCStrong` (the `C ≠ I.codeOwner` form) is what
+`Ξ_balanceOf_ge_bundled_strong` would produce; deriving it requires
+the heavy fuel-induction strengthening. -/
+
+/-- Strong sibling of `ΞFrameAtC`: 4-conjunct, with SD-input/SD-output
+threading. -/
+def ΞFrameAtCStrong (C : AccountAddress) (maxFuel : ℕ) : Prop :=
+  ∀ (fuel : ℕ), fuel ≤ maxFuel →
+    ∀ (createdAccounts : RBSet AccountAddress compare)
+      (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+      (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+      (I : ExecutionEnv .EVM),
+      StateWF σ →
+      C ≠ I.codeOwner →
+      (∀ a ∈ createdAccounts, a ≠ C) →
+      SubstateSDExclude A C →
+      match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+      | .ok (.success (cA', σ', _, A') _) =>
+          balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C) ∧
+            SubstateSDExclude A' C
+      | _ => True
+
+/-- Strong sibling of `ΞAtCFrame`: 4-conjunct, with SD-input/SD-output
+threading. -/
+def ΞAtCFrameStrong (C : AccountAddress) (maxFuel : ℕ) : Prop :=
+  ∀ (fuel : ℕ), fuel ≤ maxFuel →
+    ∀ (createdAccounts : RBSet AccountAddress compare)
+      (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+      (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+      (I : ExecutionEnv .EVM),
+      StateWF σ →
+      I.codeOwner = C →
+      (∀ a ∈ createdAccounts, a ≠ C) →
+      SubstateSDExclude A C →
+      match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+      | .ok (.success (cA', σ', _, A') _) =>
+          balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C) ∧
+            SubstateSDExclude A' C
+      | _ => True
+
+/-- An unbounded `ΞPreservesAtCStrong C` witness yields
+`ΞAtCFrameStrong C maxFuel` at any `maxFuel`. (Mirror of
+`ΞAtCFrame_of_witness`.) -/
+theorem ΞAtCFrameStrong_of_witness (C : AccountAddress)
+    (hWitness : ΞPreservesAtCStrong C) (maxFuel : ℕ) :
+    ΞAtCFrameStrong C maxFuel := by
+  intro fuel _hf cA gbh bs σ σ₀ g A I hWF hCO hNC hSD
+  exact hWitness fuel cA gbh bs σ σ₀ g A I hWF hCO hNC hSD
+
+/-- Monotonicity of `ΞAtCFrameStrong` in the fuel bound. -/
+theorem ΞAtCFrameStrong_mono (C : AccountAddress) (a b : ℕ) (hab : b ≤ a)
+    (hA : ΞAtCFrameStrong C a) : ΞAtCFrameStrong C b := by
+  intro f hf
+  exact hA f (Nat.le_trans hf hab)
+
+/-- Monotonicity of `ΞFrameAtCStrong` in the fuel bound. -/
+theorem ΞFrameAtCStrong_mono (C : AccountAddress) (a b : ℕ) (hab : b ≤ a)
+    (hA : ΞFrameAtCStrong C a) : ΞFrameAtCStrong C b := by
+  intro f hf
+  exact hA f (Nat.le_trans hf hab)
+
+/-- A strong frame projects to the unstrengthened frame, given the
+input substate is SD-exclusive. (Forgetting the 4th conjunct.) -/
+theorem ΞFrameAtC_of_Strong (C : AccountAddress) (maxFuel : ℕ)
+    (h : ΞFrameAtCStrong C maxFuel)
+    (hSD_default : SubstateSDExclude (default : Substate) C) :
+    -- We can only project pointwise: at each call site that supplies
+    -- an SD-exclusive input substate, the strong frame yields the
+    -- weak conclusion. This is the pointwise form, suitable for
+    -- consumers that already track SD-exclusion at their entry.
+    ∀ (fuel : ℕ), fuel ≤ maxFuel →
+      ∀ (cA : RBSet AccountAddress compare) (gbh : BlockHeader)
+        (bs : ProcessedBlocks) (σ σ₀ : AccountMap .EVM) (g : UInt256)
+        (A : Substate) (I : ExecutionEnv .EVM),
+        StateWF σ →
+        C ≠ I.codeOwner →
+        (∀ a ∈ cA, a ≠ C) →
+        SubstateSDExclude A C →
+        match EVM.Ξ fuel cA gbh bs σ σ₀ g A I with
+        | .ok (.success (cA', σ', _, _) _) =>
+            balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+        | _ => True := by
+  intro fuel hf cA gbh bs σ σ₀ g A I hWF hCO hNC hSD
+  have hh := h fuel hf cA gbh bs σ σ₀ g A I hWF hCO hNC hSD
+  -- The default-SD lemma is unused here (it's part of the API surface);
+  -- silence any linter concern by referencing it explicitly.
+  let _ := hSD_default
+  cases hΞ : EVM.Ξ fuel cA gbh bs σ σ₀ g A I with
+  | error _ => trivial
+  | ok r =>
+    cases r with
+    | success data out =>
+      obtain ⟨cA', σ', _, A'⟩ := data
+      rw [hΞ] at hh
+      exact ⟨hh.1, hh.2.1, hh.2.2.1⟩
+    | revert _ _ => trivial
+
 /-! ## Helper lemmas for Θ's value-transfer prefix
 
 These factor out the purely-map-manipulation content of Θ's body
