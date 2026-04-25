@@ -3108,7 +3108,6 @@ private theorem call_balanceOf_ge
     (gas src rcp t v v' inOff inSize outOff outSize : UInt256)
     (permission : Bool) (evmState state' : EVM.State) (x : UInt256)
     (hWF : StateWF evmState.accountMap)
-    (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hWit : ΞPreservesAtC C)
     (hFrame : ΞFrameAtC C fuel)
@@ -3380,7 +3379,7 @@ private theorem step_CALL_arm
         have hBundle :=
           call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
             μ₁ μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆ eS1.executionEnv.perm eS1 state' x
-            hWFes1 hCOes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+            hWFes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
         obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
         refine ⟨?_, ?_, ?_, ?_⟩
         · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
@@ -3552,7 +3551,7 @@ private theorem step_CALLCODE_arm
           call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
             (.ofNat eS1.executionEnv.codeOwner) μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆
             eS1.executionEnv.perm eS1 state' x
-            hWFes1 hCOes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+            hWFes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
         obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
         refine ⟨?_, ?_, ?_, ?_⟩
         · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
@@ -3634,7 +3633,7 @@ private theorem step_DELEGATECALL_arm
         call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.source)
           (.ofNat eS1.executionEnv.codeOwner) μ₁ ⟨0⟩ eS1.executionEnv.weiValue
           μ₃ μ₄ μ₅ μ₆ eS1.executionEnv.perm eS1 state' x
-          hWFes1 hCOes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+          hWFes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
       obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
       refine ⟨?_, ?_, ?_, ?_⟩
       · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
@@ -3696,7 +3695,7 @@ private theorem step_STATICCALL_arm
       have hBundle :=
         call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
           μ₁ μ₁ ⟨0⟩ ⟨0⟩ μ₃ μ₄ μ₅ μ₆ false eS1 state' x
-          hWFes1 hCOes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+          hWFes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
       obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
       refine ⟨?_, ?_, ?_, ?_⟩
       · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
