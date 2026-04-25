@@ -3275,6 +3275,94 @@ private theorem call_balanceOf_ge
     rw [← hState]
     refine ⟨Nat.le_refl _, hWF, rfl, hNC⟩
 
+/-- **Fuel-bounded variant of `call_balanceOf_ge`.** Takes a bounded
+`ΞAtCFrame C fuel` instead of the unbounded `ΞPreservesAtC C`. Used by
+the at-`C` / value-zero bytecode-frame chain, where the strong-fuel
+induction only provides a bounded witness. -/
+private theorem call_balanceOf_ge_bdd
+    (C : AccountAddress) (fuel : ℕ) (gasCost : ℕ)
+    (gas src rcp t v v' inOff inSize outOff outSize : UInt256)
+    (permission : Bool) (evmState state' : EVM.State) (x : UInt256)
+    (hWF : StateWF evmState.accountMap)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hAtCFrame : ΞAtCFrame C fuel)
+    (hFrame : ΞFrameAtC C fuel)
+    (h_s : C ≠ AccountAddress.ofUInt256 src ∨ v = ⟨0⟩)
+    (h_vb : ∀ acc,
+        (evmState.accountMap).find? (AccountAddress.ofUInt256 rcp) = some acc →
+        acc.balance.toNat + v.toNat < UInt256.size)
+    (h_fs : v = ⟨0⟩ ∨ ∃ acc,
+              (evmState.accountMap).find? (AccountAddress.ofUInt256 src) = some acc ∧
+              v.toNat ≤ acc.balance.toNat)
+    (hCall :
+      EVM.call fuel gasCost evmState.executionEnv.blobVersionedHashes
+        gas src rcp t v v' inOff inSize outOff outSize permission evmState
+      = .ok (x, state')) :
+    balanceOf state'.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF state'.accountMap ∧
+    state'.executionEnv.codeOwner = evmState.executionEnv.codeOwner ∧
+    (∀ a ∈ state'.createdAccounts, a ≠ C) := by
+  -- Mirror of `call_balanceOf_ge`, using `Θ_balanceOf_ge_bdd` instead.
+  unfold EVM.call at hCall
+  simp only [bind, Except.bind, pure, Except.pure] at hCall
+  cases fuel with
+  | zero =>
+    simp only at hCall
+    exact absurd hCall (by simp)
+  | succ f =>
+  simp only at hCall
+  split at hCall
+  · rename_i hGate
+    split at hCall
+    · exact absurd hCall (by simp)
+    · rename_i hΘ_prod hΘ
+      obtain ⟨cA, σ', g', A', z, o⟩ := hΘ_prod
+      injection hCall with hEq
+      have Ξ_frame_f : ∀ f', f' + 1 ≤ f → ΞFrameAtC C f' := by
+        intro f' hf'
+        exact ΞFrameAtC_mono C (f + 1) f'
+          (Nat.le_trans (Nat.le_of_succ_le hf') (Nat.le_succ _)) hFrame
+      have hAtCFrame_f : ΞAtCFrame C f :=
+        ΞAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
+      have hΘFrame :=
+        Θ_balanceOf_ge_bdd f
+          evmState.executionEnv.blobVersionedHashes
+          evmState.createdAccounts
+          evmState.genesisBlockHeader
+          evmState.blocks
+          evmState.accountMap
+          evmState.σ₀
+          ((evmState.addAccessedAccount (AccountAddress.ofUInt256 t)).substate)
+          (AccountAddress.ofUInt256 src)
+          evmState.executionEnv.sender
+          (AccountAddress.ofUInt256 rcp)
+          (toExecute .EVM evmState.accountMap (AccountAddress.ofUInt256 t))
+          (.ofNat <| Ccallgas (AccountAddress.ofUInt256 t)
+                              (AccountAddress.ofUInt256 rcp) v gas
+                              evmState.accountMap evmState.toMachineState
+                              evmState.substate)
+          (.ofNat evmState.executionEnv.gasPrice)
+          v v' (evmState.memory.readWithPadding inOff.toNat inSize.toNat)
+          (evmState.executionEnv.depth + 1)
+          evmState.executionEnv.header permission
+          C hWF h_s hNC h_vb h_fs hAtCFrame_f Ξ_frame_f
+      rw [hΘ] at hΘFrame
+      obtain ⟨hBalGe, hWF', hCA'⟩ := hΘFrame
+      have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
+      obtain ⟨_hx, hState⟩ := hState_eq
+      rw [← hState]
+      refine ⟨?_, ?_, ?_, ?_⟩
+      · show balanceOf σ' C ≥ balanceOf evmState.accountMap C
+        exact hBalGe
+      · exact hWF'
+      · rfl
+      · exact hCA'
+  · injection hCall with hEq
+    have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
+    obtain ⟨_hx, hState⟩ := hState_eq
+    rw [← hState]
+    refine ⟨Nat.le_refl _, hWF, rfl, hNC⟩
+
 /-- CALL arm bundle. Unfolds `EVM.step (f+1) cost₂ (some (.CALL, arg)) evmState = .ok sstepState`,
 which dispatches to `EVM.call`. Closes via `Θ_balanceOf_ge` (which `call`
 internally invokes) + the `replaceStackAndIncrPC` wrap.
@@ -3508,7 +3596,7 @@ private theorem step_CALL_arm_at_C_v0
     (hWF : StateWF evmState.accountMap)
     (hCC : C = evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C (f + 1))
     (hFrame : ΞFrameAtC C (f + 1))
     (h_v0 : evmState.stack[2]? = some ⟨0⟩)
     (hStep : EVM.step (f + 1) cost₂ (some (.CALL, arg)) evmState = .ok sstepState) :
@@ -3617,10 +3705,12 @@ private theorem step_CALL_arm_at_C_v0
               (eS1.accountMap).find? (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner))
                 = some acc ∧ μ₂.toNat ≤ acc.balance.toNat := Or.inl hμ2
       have hFrame_f : ΞFrameAtC C f := ΞFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+      have hAtCFrame_f : ΞAtCFrame C f :=
+        ΞAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
       have hBundle :=
-        call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
+        call_balanceOf_ge_bdd C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
           μ₁ μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆ eS1.executionEnv.perm eS1 state' x
-          hWFes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+          hWFes1 hNCes1 hAtCFrame_f hFrame_f h_s_call h_vb_call h_fs_call hCallRes
       obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
       refine ⟨?_, ?_, ?_, ?_⟩
       · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
@@ -4055,7 +4145,7 @@ private theorem step_bundled_invariant_at_C_v0
     (hWF : StateWF evmState.accountMap)
     (hCC : C = evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C (f + 1))
     (hFrame : ΞFrameAtC C (f + 1))
     (hRegOp : op = .Push .PUSH1 ∨ op = .CALLDATALOAD ∨ op = .CALLER ∨
               op = .SSTORE ∨ op = .GAS ∨ op = .POP ∨ op = .STOP ∨ op = .CALL)
@@ -4101,7 +4191,7 @@ private theorem step_bundled_invariant_at_C_v0
       (by decide) hStep
   -- Case 8: CALL. Dispatch to `step_CALL_arm_at_C_v0`.
   · exact step_CALL_arm_at_C_v0 C f cost₂ arg evmState sstepState
-      hWF hCC hNC hWit hFrame (h_v0 rfl) hStep
+      hWF hCC hNC hAtCFrame hFrame (h_v0 rfl) hStep
 where
   /-- Shared closure for handled (non-CALL/CREATE), non-SELFDESTRUCT
   ops. Reduces `EVM.step` to `EvmYul.step` and applies the three
@@ -4431,7 +4521,7 @@ private def X_inv_at_C_v0 (C : AccountAddress) (f : ℕ) (validJumps : Array UIn
   StateWF evmState.accountMap →
   C = evmState.executionEnv.codeOwner →
   (∀ a ∈ evmState.createdAccounts, a ≠ C) →
-  ΞPreservesAtC C →
+  ΞAtCFrame C f →
   ΞFrameAtC C f →
   Reachable evmState →
   -- Z preserves Reachable (Z only changes gasAvailable).
@@ -4475,7 +4565,7 @@ private theorem X_inv_at_C_v0_holds
     (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
     (Reachable : EVM.State → Prop)
     (evmState : EVM.State)
-    (hWitness : ΞPreservesAtC C)
+    (hAtCFrameAll : ∀ f', f' ≤ f → ΞAtCFrame C f')
     (hFrame : ∀ f', f' ≤ f → ΞFrameAtC C f') :
     X_inv_at_C_v0 C f validJumps Reachable evmState := by
   -- Induct on the X-fuel `f`.
@@ -4485,7 +4575,7 @@ private theorem X_inv_at_C_v0_holds
     rw [show EVM.X 0 validJumps evmState = .error .OutOfFuel from rfl]
     trivial
   | succ f' IH =>
-    intro hWF hCC hNC hWit _hFrameAtSucc
+    intro hWF hCC hNC _hAtCFrameAtSucc _hFrameAtSucc
             hReach hReach_Z hReach_step hReach_decodeSome hRegOpReach h_v0_Reach
     -- Unfold `EVM.X (f' + 1)` to expose its body.
     show match EVM.X (f' + 1) validJumps evmState with
@@ -4572,6 +4662,8 @@ private theorem X_inv_at_C_v0_holds
               -- `_hFrameAtSucc : ΞFrameAtC C ((f''+1)+1)`; monotone-down to `f''+1`.
               have hFrameAtSuccF' : ΞFrameAtC C (f'' + 1) :=
                 ΞFrameAtC_mono C ((f'' + 1) + 1) (f'' + 1) (Nat.le_succ _) _hFrameAtSucc
+              have hAtCFrameAtSuccF' : ΞAtCFrame C (f'' + 1) :=
+                ΞAtCFrame_mono C ((f'' + 1) + 1) (f'' + 1) (Nat.le_succ _) _hAtCFrameAtSucc
               -- Discharge `hRegOp`. Two cases on decode.
               -- If decode = none → instr defaults to (.STOP, .none), hence op = .STOP.
               -- If decode = some (op', arg') → fetchInstr returns .ok (op', arg'), apply hRegOpReach.
@@ -4664,7 +4756,7 @@ private theorem X_inv_at_C_v0_holds
                           = .ok sstepState := hStep
               have hBundle :=
                 step_bundled_invariant_at_C_v0 C f'' cost₂ arg op evmStateZ sstepState
-                  hWFZ hCCZ hNCZ hWit hFrameAtSuccF' hRegOp h_v0 hStep'
+                  hWFZ hCCZ hNCZ hAtCFrameAtSuccF' hFrameAtSuccF' hRegOp h_v0 hStep'
               obtain ⟨hStepGE_Z, hWFsstep, hCCsstep, hNCsstep⟩ := hBundle
               have hStepGE : balanceOf sstepState.accountMap C
                            ≥ balanceOf evmState.accountMap C := by
@@ -4699,14 +4791,18 @@ private theorem X_inv_at_C_v0_holds
               split at hXres
               case h_1 _ hH_none =>
                 -- Recurse via IH at fuel `f''+1`.
-                -- IH : ∀ es, (∀ f' ≤ f''+1, ΞFrameAtC C f') → X_inv_at_C_v0 C (f''+1) ... es.
+                -- IH : ∀ es, (∀ f' ≤ f''+1, ΞAtCFrame C f') → (∀ f' ≤ f''+1, ΞFrameAtC C f') → X_inv_at_C_v0 C (f''+1) ... es.
                 have hFrame' : ∀ f'_1, f'_1 ≤ (f'' + 1) → ΞFrameAtC C f'_1 :=
                   fun f1 h1 =>
                     ΞFrameAtC_mono C ((f'' + 1) + 1) f1
                       (Nat.le_trans h1 (Nat.le_succ _)) _hFrameAtSucc
+                have hAtCFrame' : ∀ f'_1, f'_1 ≤ (f'' + 1) → ΞAtCFrame C f'_1 :=
+                  fun f1 h1 =>
+                    ΞAtCFrame_mono C ((f'' + 1) + 1) f1
+                      (Nat.le_trans h1 (Nat.le_succ _)) _hAtCFrameAtSucc
                 have IH' : ∀ evmState', X_inv_at_C_v0 C (f'' + 1) validJumps Reachable evmState' :=
-                  fun es => IH es hFrame'
-                have hIH := IH' sstepState hWFsstep hCCsstep hNCsstep hWit
+                  fun es => IH es hAtCFrame' hFrame'
+                have hIH := IH' sstepState hWFsstep hCCsstep hNCsstep hAtCFrameAtSuccF'
                                 hFrameAtSuccF' hReachStep hReach_Z hReach_step
                                 hReach_decodeSome hRegOpReach h_v0_Reach
                 rw [hXres] at hIH
