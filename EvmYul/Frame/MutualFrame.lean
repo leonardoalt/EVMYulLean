@@ -190,6 +190,41 @@ def ΞFrameAtC (C : AccountAddress) (maxFuel : ℕ) : Prop :=
           balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
       | _ => True
 
+/-- Fuel-bounded variant of `ΞPreservesAtC C`: at every fuel `≤ maxFuel`,
+the at-`C` (`I.codeOwner = C`) Ξ run preserves balance + StateWF +
+cA-exclusion at C. Mirror of `ΞFrameAtC` but for the `I.codeOwner = C`
+case.
+
+Used by the at-`C` proof chain to support strong-fuel induction: when
+proving `Ξ_*_preserves_balanceOf_at_C` at fuel `n+1`, the inner Ξ runs
+at fuels `≤ n`, all covered by `ΞAtCFrame C n` from the strong IH. -/
+def ΞAtCFrame (C : AccountAddress) (maxFuel : ℕ) : Prop :=
+  ∀ (fuel : ℕ), fuel ≤ maxFuel →
+    ∀ (createdAccounts : RBSet AccountAddress compare)
+      (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+      (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+      (I : ExecutionEnv .EVM),
+      StateWF σ →
+      I.codeOwner = C →
+      (∀ a ∈ createdAccounts, a ≠ C) →
+      match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+      | .ok (.success (cA', σ', _, _) _) =>
+          balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+      | _ => True
+
+/-- An unbounded `ΞPreservesAtC C` witness yields `ΞAtCFrame C maxFuel`
+at any `maxFuel`. -/
+theorem ΞAtCFrame_of_witness (C : AccountAddress)
+    (hWitness : ΞPreservesAtC C) (maxFuel : ℕ) : ΞAtCFrame C maxFuel := by
+  intro fuel _hf cA gbh bs σ σ₀ g A I hWF hCO hNC
+  exact hWitness fuel cA gbh bs σ σ₀ g A I hWF hCO hNC
+
+/-- Monotonicity of `ΞAtCFrame` in the fuel bound. -/
+theorem ΞAtCFrame_mono (C : AccountAddress) (a b : ℕ) (hab : b ≤ a)
+    (hA : ΞAtCFrame C a) : ΞAtCFrame C b := by
+  intro f hf
+  exact hA f (Nat.le_trans hf hab)
+
 /-! ## Helper lemmas for Θ's value-transfer prefix
 
 These factor out the purely-map-manipulation content of Θ's body
@@ -1741,7 +1776,7 @@ private theorem Θ_body_code
     (hWF : StateWF σ)
     (h_WFσ₁ : StateWF σ₁)
     (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
-    (hWitness : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C fuel')
     (Ξ_frame : ΞFrameAtC C fuel')
     (hI_codeOwner : I.codeOwner = r)
     (hΘeq : EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
@@ -1831,7 +1866,7 @@ private theorem Θ_body_code
         -- σ'' = σ_Ξ, cA'' = cA'.
         by_cases hrC : r = C
         · have hIowner : I.codeOwner = C := by rw [hI_codeOwner]; exact hrC
-          have hW := hWitness fuel' createdAccounts genesisBlockHeader blocks
+          have hW := hAtCFrame fuel' (Nat.le_refl _) createdAccounts genesisBlockHeader blocks
               σ₁ σ₀ g A I h_WFσ₁ hIowner h_newC
           rw [hΞ] at hW
           obtain ⟨hW_ge, hW_WF, hW_newC⟩ := hW
@@ -1874,7 +1909,7 @@ either to a precompile (closed by `precompile_preserves_accountMap`
 mutual IH from `Ξ_balanceOf_ge` plus `hWitness` for the `r = C`
 sub-case. Mechanising this last step requires joint fuel induction
 over the `mutual` block in `EVM/Semantics.lean`. -/
-theorem Θ_balanceOf_ge
+private theorem Θ_balanceOf_ge_bdd
     (fuel : Nat) (blobVersionedHashes : List ByteArray)
     (createdAccounts : RBSet AccountAddress compare)
     (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
@@ -1889,7 +1924,7 @@ theorem Θ_balanceOf_ge
         acc.balance.toNat + v.toNat < UInt256.size)
     (h_funds_strict :
         v = ⟨0⟩ ∨ ∃ acc, σ.find? s = some acc ∧ v.toNat ≤ acc.balance.toNat)
-    (hWitness : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C fuel)
     (Ξ_frame : ∀ f, f + 1 ≤ fuel → ΞFrameAtC C f) :
     match EVM.Θ fuel blobVersionedHashes createdAccounts
                   genesisBlockHeader blocks σ σ₀ A s o r c g p v v' d e H w with
@@ -2070,9 +2105,41 @@ theorem Θ_balanceOf_ge
         rfl
       have hI_co : I.codeOwner = r := by rw [hI_def]
       have Ξ_frame' : ΞFrameAtC C fuel' := Ξ_frame fuel' (Nat.le_refl _)
+      have hAtCFrame' : ΞAtCFrame C fuel' :=
+        ΞAtCFrame_mono C (fuel' + 1) fuel' (Nat.le_succ _) hAtCFrame
       exact Θ_body_code σ σ₁ A I C fuel' blobVersionedHashes
         createdAccounts genesisBlockHeader blocks σ₀ s o r c_code g p v v' d e H w
-        h_σ₁_ge hWF h_WFσ₁ h_newC hWitness Ξ_frame' hI_co hΘeq
+        h_σ₁_ge hWF h_WFσ₁ h_newC hAtCFrame' Ξ_frame' hI_co hΘeq
+
+/-- Public wrapper for `Θ_balanceOf_ge_bdd`: takes the unbounded
+`ΞPreservesAtC C` witness, converts to a bounded `ΞAtCFrame C fuel`,
+then dispatches. -/
+theorem Θ_balanceOf_ge
+    (fuel : Nat) (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (A : Substate)
+    (s o r : AccountAddress) (c : ToExecute .EVM)
+    (g p v v' : UInt256) (d : ByteArray) (e : Nat)
+    (H : BlockHeader) (w : Bool) (C : AccountAddress)
+    (hWF : StateWF σ)
+    (h_s : C ≠ s ∨ v = ⟨0⟩)
+    (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
+    (hValBound : ∀ acc, σ.find? r = some acc →
+        acc.balance.toNat + v.toNat < UInt256.size)
+    (h_funds_strict :
+        v = ⟨0⟩ ∨ ∃ acc, σ.find? s = some acc ∧ v.toNat ≤ acc.balance.toNat)
+    (hWitness : ΞPreservesAtC C)
+    (Ξ_frame : ∀ f, f + 1 ≤ fuel → ΞFrameAtC C f) :
+    match EVM.Θ fuel blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o r c g p v v' d e H w with
+    | .ok (cA'_out, σ', _, _, _, _) =>
+        balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
+    | .error _ => True :=
+  Θ_balanceOf_ge_bdd fuel blobVersionedHashes createdAccounts
+    genesisBlockHeader blocks σ σ₀ A s o r c g p v v' d e H w C
+    hWF h_s h_newC hValBound h_funds_strict
+    (ΞAtCFrame_of_witness C hWitness fuel) Ξ_frame
 
 /-- **A4** — Λ (contract creation) returns a derived address `a ≠ C`
 (by Keccak collision-resistance) and preserves `balanceOf C`.
