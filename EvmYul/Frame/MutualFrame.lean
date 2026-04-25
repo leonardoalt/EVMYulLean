@@ -4347,6 +4347,267 @@ private theorem X_inv_holds
         exact X_inv_succ_content C f' validJumps evmState finalState out
           hWF hCO hNC hWit hFrame_f' IH' hXres
 
+/-- At-`C` (C = codeOwner) version of `X_inv`: tracks balance preservation
+across the X-loop when the running code is restricted to Register's
+8-opcode subset and any CALL has value 0 at stack position 2.
+
+The per-step CALL-v=0 obligation is taken as an oracle hypothesis
+quantified over reachable intermediate states; the bytecode walk
+(future work) discharges it by structural induction over Register's
+trace. -/
+private def X_inv_at_C_v0 (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
+    (evmState : EVM.State) : Prop :=
+  StateWF evmState.accountMap →
+  C = evmState.executionEnv.codeOwner →
+  (∀ a ∈ evmState.createdAccounts, a ≠ C) →
+  ΞPreservesAtC C →
+  ΞFrameAtC C f →
+  -- per-step Register-op restriction (the running op at every step is
+  -- one of Register's 8)
+  (∀ s : EVM.State, ∀ op : Operation .EVM, ∀ arg,
+    fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+    op = .Push .PUSH1 ∨ op = .CALLDATALOAD ∨ op = .CALLER ∨
+    op = .SSTORE ∨ op = .GAS ∨ op = .POP ∨ op = .STOP ∨ op = .CALL) →
+  -- per-step CALL-v=0 oracle (every reachable state with op=CALL has stack[2]=0)
+  (∀ s : EVM.State, ∀ arg,
+    fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
+    s.stack[2]? = some ⟨0⟩) →
+  match EVM.X f validJumps evmState with
+  | .ok (.success s' _) =>
+      balanceOf s'.accountMap C ≥ balanceOf evmState.accountMap C ∧
+      StateWF s'.accountMap ∧
+      (∀ a ∈ s'.createdAccounts, a ≠ C)
+  | _ => True
+
+/-- Fuel induction for `X_inv_at_C_v0`. **Mirror of `X_inv_holds`**.
+
+Structurally identical to `X_inv_holds` but dispatching to
+`step_bundled_invariant_at_C_v0` (which discharges the at-`C` /
+value-zero CALL bundle) rather than `step_bundled_invariant_at_C`. The
+per-step Register-op and v=0 hypotheses are universally quantified over
+states, so they thread through the recursion uniformly. -/
+private theorem X_inv_at_C_v0_holds
+    (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
+    (evmState : EVM.State)
+    (hWitness : ΞPreservesAtC C)
+    (hFrame : ∀ f', f' ≤ f → ΞFrameAtC C f') :
+    X_inv_at_C_v0 C f validJumps evmState := by
+  -- Induct on the X-fuel `f`.
+  induction f generalizing evmState with
+  | zero =>
+    intro _ _ _ _ _ _ _
+    rw [show EVM.X 0 validJumps evmState = .error .OutOfFuel from rfl]
+    trivial
+  | succ f' IH =>
+    intro hWF hCC hNC hWit _hFrameAtSucc hRegOpAll h_v0_All
+    -- Unfold `EVM.X (f' + 1)` to expose its body.
+    show match EVM.X (f' + 1) validJumps evmState with
+      | .ok (.success s' _) =>
+          balanceOf s'.accountMap C ≥ balanceOf evmState.accountMap C ∧
+          StateWF s'.accountMap ∧
+          (∀ a ∈ s'.createdAccounts, a ≠ C)
+      | _ => True
+    generalize hXres : EVM.X (f' + 1) validJumps evmState = xRes
+    cases xRes with
+    | error _ => trivial
+    | ok er =>
+      cases er with
+      | revert _ _ => trivial
+      | success finalState out =>
+        -- Mirror of `X_inv_succ_content` but for the at-`C` / v=0 bundle.
+        simp only [EVM.X] at hXres
+        -- Split on the outer Z-match.
+        split at hXres
+        case h_1 _ _ => exact absurd hXres (by simp)
+        case h_2 _ evmStateZ cost₂ hZ =>
+          -- The Z-body only modifies `gasAvailable`; preserve
+          -- accountMap/executionEnv/createdAccounts/pc.
+          have hZ_struct :
+              evmStateZ.accountMap = evmState.accountMap ∧
+              evmStateZ.executionEnv = evmState.executionEnv ∧
+              evmStateZ.createdAccounts = evmState.createdAccounts ∧
+              evmStateZ.pc = evmState.pc := by
+            simp only [bind, Except.bind, pure, Except.pure] at hZ
+            by_cases hc1 : evmState.gasAvailable.toNat < memoryExpansionCost evmState ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1
+            · rw [if_pos hc1] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc1] at hZ
+            set evmState' : EVM.State :=
+              { evmState with gasAvailable := evmState.gasAvailable - UInt256.ofNat (memoryExpansionCost evmState ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1) } with hevmState'
+            have h_accMap : evmState'.accountMap = evmState.accountMap := by rw [hevmState']
+            have h_eEnv   : evmState'.executionEnv = evmState.executionEnv := by rw [hevmState']
+            have h_cA     : evmState'.createdAccounts = evmState.createdAccounts := by rw [hevmState']
+            have h_pc     : evmState'.pc = evmState.pc := by rw [hevmState']
+            by_cases hc2 : evmState'.gasAvailable.toNat < C' evmState' ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1
+            · rw [if_pos hc2] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc2] at hZ
+            by_cases hc3 : δ ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1 = none
+            · rw [if_pos hc3] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc3] at hZ
+            by_cases hc4 : evmState'.stack.length < (δ ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1).getD 0
+            · rw [if_pos hc4] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc4] at hZ
+            split_ifs at hZ <;>
+              first
+              | exact Except.noConfusion hZ
+              | (injection hZ with h_inj
+                 injection h_inj with h_inj1 _
+                 subst h_inj1
+                 exact ⟨h_accMap, h_eEnv, h_cA, h_pc⟩)
+          obtain ⟨hZ_accMap, hZ_eEnv, hZ_cA, hZ_pc⟩ := hZ_struct
+          have hWFZ : StateWF evmStateZ.accountMap := by rw [hZ_accMap]; exact hWF
+          have hCCZ : C = evmStateZ.executionEnv.codeOwner := by
+            rw [hZ_eEnv]; exact hCC
+          have hNCZ : ∀ a ∈ evmStateZ.createdAccounts, a ≠ C := by
+            rw [hZ_cA]; exact hNC
+          have hBalEq : balanceOf evmStateZ.accountMap C = balanceOf evmState.accountMap C := by
+            rw [hZ_accMap]
+          -- The body simplifies to `step >>= (λ s ↦ match H s w with ...)`.
+          simp only [bind, Except.bind] at hXres
+          split at hXres
+          case h_1 _ _ => exact absurd hXres (by simp)
+          case h_2 _ sstepState hStep =>
+            -- `hStep : EVM.step f' cost₂ ((decode ...).getD (.STOP, .none)) evmStateZ = .ok sstepState`.
+            -- `_v0` requires fuel `f''+1`, so we must split on `f'`.
+            -- `f' = 0` means `step` errored → contradiction.
+            -- `f' = f''+1`: we extract `(op, arg)` from the decode.
+            match f' with
+            | 0 =>
+              -- step at fuel 0 returns `.error .OutOfFuel`.
+              simp only [EVM.step] at hStep
+              exact absurd hStep (by simp)
+            | f'' + 1 =>
+              -- Decode the pc to extract (op, arg) for `_v0`.
+              -- Use the `getD` value as the pair.
+              set decRes : Operation .EVM × Option (UInt256 × Nat) :=
+                (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none) with hDecRes
+              -- Establish `instr` shape facts.
+              obtain ⟨op, arg⟩ := decRes
+              -- Frame at `f' = f''+1`.
+              -- `_hFrameAtSucc : ΞFrameAtC C ((f''+1)+1)`; monotone-down to `f''+1`.
+              have hFrameAtSuccF' : ΞFrameAtC C (f'' + 1) :=
+                ΞFrameAtC_mono C ((f'' + 1) + 1) (f'' + 1) (Nat.le_succ _) _hFrameAtSucc
+              -- Discharge `hRegOp`. Two cases on decode.
+              -- If decode = none → instr defaults to (.STOP, .none), hence op = .STOP.
+              -- If decode = some (op', arg') → fetchInstr returns .ok (op', arg'), apply hRegOpAll.
+              have hRegOp : op = .Push .PUSH1 ∨ op = .CALLDATALOAD ∨ op = .CALLER ∨
+                            op = .SSTORE ∨ op = .GAS ∨ op = .POP ∨ op = .STOP ∨ op = .CALL := by
+                cases hDec : decode evmStateZ.executionEnv.code evmStateZ.pc with
+                | none =>
+                  -- instr = (.STOP, .none); but we used `evmState`, not `evmStateZ`. Use Z-eEnv/pc.
+                  have hDec' : decode evmState.executionEnv.code evmState.pc = none := by
+                    rw [← hZ_eEnv, ← hZ_pc]; exact hDec
+                  -- Then decRes = (.STOP, .none) so op = .STOP.
+                  have : (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                       = (.STOP, .none) := by rw [hDec']; rfl
+                  -- decRes was destructured to (op, arg); we need (op, arg) = (.STOP, .none).
+                  have hOp : op = .STOP := by
+                    have heq : ((op, arg) : Operation .EVM × Option (UInt256 × Nat))
+                             = (.STOP, .none) := by
+                      rw [show ((op, arg) : Operation .EVM × Option (UInt256 × Nat))
+                            = (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                          from hDecRes, this]
+                    exact (Prod.mk.inj heq).1
+                  exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl hOp))))))
+                | some pair =>
+                  -- pair = (op', arg'). We have decRes = (op, arg) by destructure.
+                  -- Show op = pair.1 etc.
+                  have hDec' : decode evmState.executionEnv.code evmState.pc = some pair := by
+                    rw [← hZ_eEnv, ← hZ_pc]; exact hDec
+                  have hPair : ((op, arg) : Operation .EVM × Option (UInt256 × Nat)) = pair := by
+                    have : (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                         = pair := by rw [hDec']; rfl
+                    rw [show ((op, arg) : Operation .EVM × Option (UInt256 × Nat))
+                          = (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                        from hDecRes]
+                    exact this
+                  -- fetchInstr at evmStateZ returns .ok pair.
+                  have hFetch : fetchInstr evmStateZ.executionEnv evmStateZ.pc = .ok pair := by
+                    unfold fetchInstr
+                    rw [hDec]; rfl
+                  obtain ⟨op', arg'⟩ := pair
+                  have hOpEq : op = op' := (Prod.mk.inj hPair).1
+                  have hArgEq : arg = arg' := (Prod.mk.inj hPair).2
+                  have hFetch' : fetchInstr evmStateZ.executionEnv evmStateZ.pc = .ok (op, arg) := by
+                    rw [hFetch, hOpEq, hArgEq]
+                  exact hRegOpAll evmStateZ op arg hFetch'
+              -- Discharge `h_v0`: if op = CALL, then stack[2]? = some 0 at evmStateZ.
+              have h_v0 : op = .CALL → evmStateZ.stack[2]? = some ⟨0⟩ := by
+                intro hOpCall
+                -- decode must give some (.CALL, _). Apply h_v0_All.
+                cases hDec : decode evmStateZ.executionEnv.code evmStateZ.pc with
+                | none =>
+                  -- Then op = .STOP, contradicting op = .CALL.
+                  have hDec' : decode evmState.executionEnv.code evmState.pc = none := by
+                    rw [← hZ_eEnv, ← hZ_pc]; exact hDec
+                  have : (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                       = (.STOP, .none) := by rw [hDec']; rfl
+                  have hOp : op = .STOP := by
+                    have heq : ((op, arg) : Operation .EVM × Option (UInt256 × Nat))
+                             = (.STOP, .none) := by
+                      rw [show ((op, arg) : Operation .EVM × Option (UInt256 × Nat))
+                            = (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                          from hDecRes, this]
+                    exact (Prod.mk.inj heq).1
+                  rw [hOp] at hOpCall; exact absurd hOpCall (by decide)
+                | some pair =>
+                  have hDec' : decode evmState.executionEnv.code evmState.pc = some pair := by
+                    rw [← hZ_eEnv, ← hZ_pc]; exact hDec
+                  have hPair : ((op, arg) : Operation .EVM × Option (UInt256 × Nat)) = pair := by
+                    have : (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                         = pair := by rw [hDec']; rfl
+                    rw [show ((op, arg) : Operation .EVM × Option (UInt256 × Nat))
+                          = (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                        from hDecRes]
+                    exact this
+                  obtain ⟨op', arg'⟩ := pair
+                  have hOpEq : op = op' := (Prod.mk.inj hPair).1
+                  have hArgEq : arg = arg' := (Prod.mk.inj hPair).2
+                  have hFetch : fetchInstr evmStateZ.executionEnv evmStateZ.pc
+                              = .ok (.CALL, arg') := by
+                    unfold fetchInstr
+                    rw [hDec]
+                    rw [hOpEq] at hOpCall
+                    rw [hOpCall]
+                    rfl
+                  exact h_v0_All evmStateZ arg' hFetch
+              -- Now we can invoke `step_bundled_invariant_at_C_v0`. We need
+              -- `hStep` in the form `EVM.step (f''+1) cost₂ (some (op, arg)) evmStateZ`.
+              -- After `obtain` destructured `decRes`, hStep already has `(op, arg)`
+              -- in place of the decoded pair (Lean auto-coerces to `some`).
+              have hStep' : EVM.step (f'' + 1) cost₂ (some (op, arg)) evmStateZ
+                          = .ok sstepState := hStep
+              have hBundle :=
+                step_bundled_invariant_at_C_v0 C f'' cost₂ arg op evmStateZ sstepState
+                  hWFZ hCCZ hNCZ hWit hFrameAtSuccF' hRegOp h_v0 hStep'
+              obtain ⟨hStepGE_Z, hWFsstep, hCCsstep, hNCsstep⟩ := hBundle
+              have hStepGE : balanceOf sstepState.accountMap C
+                           ≥ balanceOf evmState.accountMap C := by
+                rw [← hBalEq]; exact hStepGE_Z
+              -- Split on H's result.
+              split at hXres
+              case h_1 _ hH_none =>
+                -- Recurse via IH at fuel `f''+1`.
+                -- IH : ∀ es, (∀ f' ≤ f''+1, ΞFrameAtC C f') → X_inv_at_C_v0 C (f''+1) ... es.
+                have hFrame' : ∀ f'_1, f'_1 ≤ (f'' + 1) → ΞFrameAtC C f'_1 :=
+                  fun f1 h1 =>
+                    ΞFrameAtC_mono C ((f'' + 1) + 1) f1
+                      (Nat.le_trans h1 (Nat.le_succ _)) _hFrameAtSucc
+                have IH' : ∀ evmState', X_inv_at_C_v0 C (f'' + 1) validJumps evmState' :=
+                  fun es => IH es hFrame'
+                have hIH := IH' sstepState hWFsstep hCCsstep hNCsstep hWit
+                                hFrameAtSuccF' hRegOpAll h_v0_All
+                rw [hXres] at hIH
+                refine ⟨?_, hIH.2.1, hIH.2.2⟩
+                exact Nat.le_trans hStepGE hIH.1
+              case h_2 _ o hH_some =>
+                split at hXres
+                case isTrue _ => exact absurd hXres (by simp)
+                case isFalse _ =>
+                  injection hXres with hXres_inj
+                  injection hXres_inj with hfin _
+                  subst hfin
+                  exact ⟨hStepGE, hWFsstep, hNCsstep⟩
+
 /-- Bundled form of `Ξ_balanceOf_ge` — also exposes `StateWF` and the
 `createdAccounts ≠ C` invariant. Closed at every fuel, so consumers
 (e.g. Υ) can build a `ΞFrameAtC C maxFuel` witness for any maxFuel. -/
