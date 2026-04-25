@@ -4757,6 +4757,160 @@ private theorem X_inv_at_C_v0_holds
                   subst hfin
                   exact ⟨hStepGE, hWFsstep, hNCsstep⟩
 
+/-- **Bounded variant of `Ξ_balanceOf_ge_bundled`.** Takes per-fuel
+`ΞAtCFrame C f` witnesses (one per fuel level less than `n`) instead
+of the unbounded `ΞPreservesAtC C`. Used by `ΞPreservesAtC_of_Reachable`
+to bootstrap the at-`C` chain without requiring a pre-existing
+`ΞPreservesAtC C` witness. -/
+theorem Ξ_balanceOf_ge_bundled_bdd (C : AccountAddress)
+    (n : ℕ)
+    (hAtCBdd : ∀ f', f' < n → ΞAtCFrame C f') :
+    ∀ (cA' : RBSet AccountAddress compare) (gbh' : BlockHeader)
+      (bs' : ProcessedBlocks) (σ' σ₀' : AccountMap .EVM) (g' : UInt256)
+      (A' : Substate) (I' : ExecutionEnv .EVM),
+      StateWF σ' →
+      C ≠ I'.codeOwner →
+      (∀ a ∈ cA', a ≠ C) →
+      match EVM.Ξ n cA' gbh' bs' σ' σ₀' g' A' I' with
+      | .ok (.success (cA_out, σ''final, _, _) _) =>
+          balanceOf σ''final C ≥ balanceOf σ' C ∧ StateWF σ''final ∧
+            (∀ a ∈ cA_out, a ≠ C)
+      | _ => True := by
+  intro cA' gbh' bs' σ' σ₀' g' A' I' hWF' hco' hnc'
+  match n with
+  | 0 =>
+    rw [show EVM.Ξ 0 cA' gbh' bs' σ' σ₀' g' A' I' = .error .OutOfFuel from rfl]
+    trivial
+  | f + 1 =>
+    -- Build the Ξ_frame witness via inner induction on fuel m.
+    have Ξ_frame_at : ∀ m, m ≤ f → ΞFrameAtC C m := by
+      intro m
+      induction m using Nat.strong_induction_on with
+      | _ m IHm =>
+        intro hm
+        intro f'' hf'' cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hco'' hnc''
+        -- f'' ≤ m ≤ f.
+        match f'' with
+        | 0 =>
+          rw [show EVM.Ξ 0 cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I''
+                = .error .OutOfFuel from rfl]
+          trivial
+        | k + 1 =>
+          have hkLeF : k + 1 ≤ f := Nat.le_trans hf'' hm
+          have hAtCSubst : ∀ k', k' ≤ k → ΞAtCFrame C k' := by
+            intro k' hk'
+            have hk'LtSucc : k' < f + 1 := by omega
+            exact hAtCBdd k' hk'LtSucc
+          have hFrameSubst : ∀ k', k' ≤ k → ΞFrameAtC C k' := by
+            intro k' hk'
+            have hkLtM : k < m := by
+              have : k + 1 ≤ m := hf''
+              omega
+            have hk'LtM : k' < m := Nat.lt_of_le_of_lt hk' hkLtM
+            -- Apply IHm at fuel k', which is < m. Need to provide the hm-fact for k': k' ≤ f.
+            have hk'LeF : k' ≤ f := by omega
+            exact IHm k' hk'LtM hk'LeF
+          -- Now reduce Ξ (k+1) via X at fuel k, using bounded witnesses.
+          have hΞ_eq :
+              EVM.Ξ (k + 1) cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I''
+                = (do
+                    let defState : EVM.State := default
+                    let freshEvmState : EVM.State :=
+                      { defState with
+                          accountMap := σ''
+                          σ₀ := σ₀''
+                          executionEnv := I''
+                          substate := A''
+                          createdAccounts := cA''
+                          gasAvailable := g''
+                          blocks := bs''
+                          genesisBlockHeader := gbh'' }
+                    let result ← EVM.X k (D_J I''.code ⟨0⟩) freshEvmState
+                    match result with
+                    | .success evmState' o =>
+                      let finalGas := evmState'.gasAvailable
+                      .ok (ExecutionResult.success
+                        (evmState'.createdAccounts, evmState'.accountMap,
+                         finalGas, evmState'.substate) o)
+                    | .revert g' o => .ok (ExecutionResult.revert g' o)) := rfl
+          rw [hΞ_eq]
+          simp only [bind, Except.bind]
+          generalize hXres : EVM.X k (D_J I''.code ⟨0⟩) _ = xRes
+          have hXinv : X_inv C k (D_J I''.code ⟨0⟩)
+            { (default : EVM.State) with
+                accountMap := σ''
+                σ₀ := σ₀''
+                executionEnv := I''
+                substate := A''
+                createdAccounts := cA''
+                gasAvailable := g''
+                blocks := bs''
+                genesisBlockHeader := gbh'' } :=
+            X_inv_holds C k (D_J I''.code ⟨0⟩) _ hAtCSubst hFrameSubst
+          unfold X_inv at hXinv
+          have := hXinv hWF'' hco'' hnc''
+                  (hAtCSubst k (Nat.le_refl _)) (hFrameSubst k (Nat.le_refl _))
+          rw [hXres] at this
+          cases xRes with
+          | error _ => trivial
+          | ok er =>
+            cases er with
+            | success evmState' out => exact this
+            | revert _ _ => trivial
+    -- Build hAtCBdd_outer for fuels ≤ f.
+    have hAtCAll : ∀ f', f' ≤ f → ΞAtCFrame C f' := by
+      intro f' hf'
+      exact hAtCBdd f' (Nat.lt_succ_of_le hf')
+    have hΞ_eq :
+        EVM.Ξ (f + 1) cA' gbh' bs' σ' σ₀' g' A' I'
+          = (do
+              let defState : EVM.State := default
+              let freshEvmState : EVM.State :=
+                { defState with
+                    accountMap := σ'
+                    σ₀ := σ₀'
+                    executionEnv := I'
+                    substate := A'
+                    createdAccounts := cA'
+                    gasAvailable := g'
+                    blocks := bs'
+                    genesisBlockHeader := gbh' }
+              let result ← EVM.X f (D_J I'.code ⟨0⟩) freshEvmState
+              match result with
+              | .success evmState' o =>
+                let finalGas := evmState'.gasAvailable
+                .ok (ExecutionResult.success
+                  (evmState'.createdAccounts, evmState'.accountMap,
+                   finalGas, evmState'.substate) o)
+              | .revert g' o => .ok (ExecutionResult.revert g' o)) := rfl
+    rw [hΞ_eq]
+    simp only [bind, Except.bind]
+    generalize hXres : EVM.X f (D_J I'.code ⟨0⟩) _ = xRes
+    have hXinv : X_inv C f (D_J I'.code ⟨0⟩)
+      { (default : EVM.State) with
+          accountMap := σ'
+          σ₀ := σ₀'
+          executionEnv := I'
+          substate := A'
+          createdAccounts := cA'
+          gasAvailable := g'
+          blocks := bs'
+          genesisBlockHeader := gbh' } :=
+      X_inv_holds C f (D_J I'.code ⟨0⟩) _ hAtCAll Ξ_frame_at
+    unfold X_inv at hXinv
+    have hWFF : StateWF σ' := hWF'
+    have hCOF : C ≠ I'.codeOwner := hco'
+    have hNCF : ∀ a ∈ cA', a ≠ C := hnc'
+    have := hXinv hWFF hCOF hNCF (hAtCAll f (Nat.le_refl _)) (Ξ_frame_at f (Nat.le_refl _))
+    rw [hXres] at this
+    cases xRes with
+    | error _ => trivial
+    | ok er =>
+      cases er with
+      | success evmState' out =>
+        exact this
+      | revert _ _ => trivial
+
 /-- Bundled form of `Ξ_balanceOf_ge` — also exposes `StateWF` and the
 `createdAccounts ≠ C` invariant. Closed at every fuel, so consumers
 (e.g. Υ) can build a `ΞFrameAtC C maxFuel` witness for any maxFuel. -/
@@ -4773,75 +4927,10 @@ theorem Ξ_balanceOf_ge_bundled (C : AccountAddress)
           balanceOf σ''final C ≥ balanceOf σ' C ∧ StateWF σ''final ∧
             (∀ a ∈ cA_out, a ≠ C)
       | _ => True := by
-  intro n
-  induction n using Nat.strong_induction_on with
-  | _ n IH =>
-    intro cA' gbh' bs' σ' σ₀' g' A' I' hWF' hco' hnc'
-    match n with
-    | 0 =>
-      rw [show EVM.Ξ 0 cA' gbh' bs' σ' σ₀' g' A' I' = .error .OutOfFuel from rfl]
-      trivial
-    | f + 1 =>
-      -- Build the Ξ_frame witness from IH: for any f' ≤ f, IH gives us
-      -- the bundled monotonicity at fuel f' (since f' < f + 1).
-      have Ξ_frame_at : ∀ f', f' ≤ f → ΞFrameAtC C f' := by
-        intro f' hf'
-        intro f'' hf'' cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hco'' hnc''
-        have hlt : f'' < f + 1 := Nat.lt_succ_of_le (Nat.le_trans hf'' hf')
-        exact IH f'' hlt cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hco'' hnc''
-      -- Reduce Ξ (f+1) via X.
-      have hΞ_eq :
-          EVM.Ξ (f + 1) cA' gbh' bs' σ' σ₀' g' A' I'
-            = (do
-                let defState : EVM.State := default
-                let freshEvmState : EVM.State :=
-                  { defState with
-                      accountMap := σ'
-                      σ₀ := σ₀'
-                      executionEnv := I'
-                      substate := A'
-                      createdAccounts := cA'
-                      gasAvailable := g'
-                      blocks := bs'
-                      genesisBlockHeader := gbh' }
-                let result ← EVM.X f (D_J I'.code ⟨0⟩) freshEvmState
-                match result with
-                | .success evmState' o =>
-                  let finalGas := evmState'.gasAvailable
-                  .ok (ExecutionResult.success
-                    (evmState'.createdAccounts, evmState'.accountMap,
-                     finalGas, evmState'.substate) o)
-                | .revert g' o => .ok (ExecutionResult.revert g' o)) := rfl
-      rw [hΞ_eq]
-      simp only [bind, Except.bind]
-      generalize hXres : EVM.X f (D_J I'.code ⟨0⟩) _ = xRes
-      -- Convert hWitness to ΞAtCFrame at all fuels ≤ f.
-      have hAtCAll : ∀ f', f' ≤ f → ΞAtCFrame C f' :=
-        fun f' _ => ΞAtCFrame_of_witness C hWitness f'
-      have hXinv : X_inv C f (D_J I'.code ⟨0⟩)
-        { (default : EVM.State) with
-            accountMap := σ'
-            σ₀ := σ₀'
-            executionEnv := I'
-            substate := A'
-            createdAccounts := cA'
-            gasAvailable := g'
-            blocks := bs'
-            genesisBlockHeader := gbh' } :=
-        X_inv_holds C f (D_J I'.code ⟨0⟩) _ hAtCAll Ξ_frame_at
-      unfold X_inv at hXinv
-      have hWFF : StateWF σ' := hWF'
-      have hCOF : C ≠ I'.codeOwner := hco'
-      have hNCF : ∀ a ∈ cA', a ≠ C := hnc'
-      have := hXinv hWFF hCOF hNCF (hAtCAll f (Nat.le_refl _)) (Ξ_frame_at f (Nat.le_refl _))
-      rw [hXres] at this
-      cases xRes with
-      | error _ => trivial
-      | ok er =>
-        cases er with
-        | success evmState' out =>
-          exact this
-        | revert _ _ => trivial
+  intro n cA' gbh' bs' σ' σ₀' g' A' I' hWF' hco' hnc'
+  exact Ξ_balanceOf_ge_bundled_bdd C n
+    (fun f' _ => ΞAtCFrame_of_witness C hWitness f')
+    cA' gbh' bs' σ' σ₀' g' A' I' hWF' hco' hnc'
 
 /-- `ΞFrameAtC C maxFuel` for any `maxFuel`, derived from the bundled
 form. Useful for consumers (Υ) that need to feed `Ξ_frame` into
@@ -4853,6 +4942,145 @@ theorem ΞFrameAtC_of_witness (C : AccountAddress)
   exact Ξ_balanceOf_ge_bundled C hWitness fuel cA' gbh' bs' σ' σ₀' g' A' I'
     hWF' hco' hnc'
 
+/-- **`ΞPreservesAtC` from a consumer-supplied `Reachable` predicate.**
+
+Per-bytecode entry point: a consumer (e.g. Register) supplies a
+`Reachable` predicate witnessing that the bytecode trace at `C` stays
+inside the 8-opcode subset {PUSH1, CALLDATALOAD, CALLER, SSTORE, GAS,
+POP, STOP, CALL} and only emits CALL with `stack[2] = 0`, plus closure
+proofs that the predicate is preserved by Z, step, and yields per-state
+`decode-some`, `op-in-8`, and `v0-at-CALL` facts.
+
+Implementation: strong fuel induction. At fuel `n+1`, the IH on `n`
+gives `ΞAtCFrame C f` at all `f ≤ n` (the bounded-witness form). We
+also derive `ΞFrameAtC C f` (the C ≠ I.codeOwner case) at all `f ≤ n`
+via `Ξ_balanceOf_ge_bundled`-style inner induction using the same IH
+packaged as a "bounded-witness wrapper". `X_inv_at_C_v0_holds` then
+discharges the at-`C` conclusion at fuel `n+1`. -/
+theorem ΞPreservesAtC_of_Reachable
+    (C : AccountAddress)
+    (Reachable : EVM.State → Prop)
+    (hReach_Z : ∀ s : EVM.State, ∀ g : UInt256, Reachable s →
+        Reachable { s with gasAvailable := g })
+    (hReach_step : ∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
+        Reachable s')
+    (hReach_decodeSome : ∀ s : EVM.State, Reachable s →
+        ∃ pair, decode s.executionEnv.code s.pc = some pair)
+    (hReach_op : ∀ s : EVM.State, ∀ op : Operation .EVM, ∀ arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        op = .Push .PUSH1 ∨ op = .CALLDATALOAD ∨ op = .CALLER ∨
+        op = .SSTORE ∨ op = .GAS ∨ op = .POP ∨ op = .STOP ∨ op = .CALL)
+    (hReach_v0 : ∀ s : EVM.State, ∀ arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
+        s.stack[2]? = some ⟨0⟩)
+    (hReachInit : ∀ (cA : RBSet AccountAddress compare)
+                    (gbh : BlockHeader) (bs : ProcessedBlocks)
+                    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+                    (I : ExecutionEnv .EVM),
+        I.codeOwner = C →
+        Reachable
+          { (default : EVM.State) with
+              accountMap := σ
+              σ₀ := σ₀
+              executionEnv := I
+              substate := A
+              createdAccounts := cA
+              gasAvailable := g
+              blocks := bs
+              genesisBlockHeader := gbh }) :
+    ΞPreservesAtC C := by
+  -- Strong induction on `fuel`. The conclusion `ΞPreservesAtC C` says: at
+  -- every fuel and every (cA, gbh, bs, σ, σ₀, g, A, I) with I.codeOwner = C
+  -- and the StateWF/cA-exclusion preconditions, Ξ preserves balance at C.
+  intro fuel
+  induction fuel using Nat.strong_induction_on with
+  | _ n IH =>
+    intro cA gbh bs σ σ₀ g A I hWF hCO hNC
+    match n with
+    | 0 =>
+      rw [show EVM.Ξ 0 cA gbh bs σ σ₀ g A I = .error .OutOfFuel from rfl]
+      trivial
+    | f + 1 =>
+      -- Strong IH gives `ΞAtCFrame C f'` at all f' ≤ f via the per-fuel form.
+      have hAtCBdd : ∀ f', f' ≤ f → ΞAtCFrame C f' := by
+        intro f' hf'
+        intro f'' hf'' cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hCO'' hNC''
+        have hlt : f'' < f + 1 := Nat.lt_succ_of_le (Nat.le_trans hf'' hf')
+        exact IH f'' hlt cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hCO'' hNC''
+      -- Derive `ΞFrameAtC C f'` for f' ≤ f via the bounded form of
+      -- `Ξ_balanceOf_ge_bundled` (`Ξ_balanceOf_ge_bundled_bdd`), supplied
+      -- with the `hAtCBdd` witnesses for fuels < f' ≤ f.
+      have Ξ_frame_at : ∀ f', f' ≤ f → ΞFrameAtC C f' := by
+        intro f' hf'
+        intro f'' hf'' cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hCO_ne'' hNC''
+        -- f'' ≤ f' ≤ f, so f'' ≤ f.
+        have hf''_le_f : f'' ≤ f := Nat.le_trans hf'' hf'
+        -- Build the bounded witnesses for fuels < f''.
+        have hAtCSub : ∀ k, k < f'' → ΞAtCFrame C k := by
+          intro k hk
+          have : k ≤ f := by omega
+          exact hAtCBdd k this
+        exact Ξ_balanceOf_ge_bundled_bdd C f'' hAtCSub
+          cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hCO_ne'' hNC''
+      -- Reduce Ξ (f+1) via X.
+      have hΞ_eq :
+          EVM.Ξ (f + 1) cA gbh bs σ σ₀ g A I
+            = (do
+                let defState : EVM.State := default
+                let freshEvmState : EVM.State :=
+                  { defState with
+                      accountMap := σ
+                      σ₀ := σ₀
+                      executionEnv := I
+                      substate := A
+                      createdAccounts := cA
+                      gasAvailable := g
+                      blocks := bs
+                      genesisBlockHeader := gbh }
+                let result ← EVM.X f (D_J I.code ⟨0⟩) freshEvmState
+                match result with
+                | .success evmState' o =>
+                  let finalGas := evmState'.gasAvailable
+                  .ok (ExecutionResult.success
+                    (evmState'.createdAccounts, evmState'.accountMap,
+                     finalGas, evmState'.substate) o)
+                | .revert g' o => .ok (ExecutionResult.revert g' o)) := rfl
+      rw [hΞ_eq]
+      simp only [bind, Except.bind]
+      generalize hXres : EVM.X f (D_J I.code ⟨0⟩) _ = xRes
+      set freshState : EVM.State :=
+        { (default : EVM.State) with
+            accountMap := σ
+            σ₀ := σ₀
+            executionEnv := I
+            substate := A
+            createdAccounts := cA
+            gasAvailable := g
+            blocks := bs
+            genesisBlockHeader := gbh } with hFresh_def
+      have hWFFresh : StateWF freshState.accountMap := hWF
+      have hCCFresh : C = freshState.executionEnv.codeOwner := hCO.symm
+      have hNCFresh : ∀ a ∈ freshState.createdAccounts, a ≠ C := hNC
+      have hReachFresh : Reachable freshState :=
+        hReachInit cA gbh bs σ σ₀ g A I hCO
+      have hAtCBddF : ΞAtCFrame C f := hAtCBdd f (Nat.le_refl _)
+      have Ξ_frame_atF : ΞFrameAtC C f := Ξ_frame_at f (Nat.le_refl _)
+      have hXinv : X_inv_at_C_v0 C f (D_J I.code ⟨0⟩) Reachable freshState :=
+        X_inv_at_C_v0_holds C f (D_J I.code ⟨0⟩) Reachable freshState
+          hAtCBdd Ξ_frame_at
+      unfold X_inv_at_C_v0 at hXinv
+      have hRes := hXinv hWFFresh hCCFresh hNCFresh hAtCBddF Ξ_frame_atF
+        hReachFresh hReach_Z hReach_step hReach_decodeSome hReach_op hReach_v0
+      rw [hXres] at hRes
+      cases xRes with
+      | error _ => trivial
+      | ok er =>
+        cases er with
+        | success evmState' out =>
+          exact hRes
+        | revert _ _ => trivial
 
 /-- `Ξ_balanceOf_ge` — Ξ (code execution) preserves `balanceOf C` when
 code runs at `I.codeOwner ≠ C`.
