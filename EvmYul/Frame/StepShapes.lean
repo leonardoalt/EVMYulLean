@@ -1182,6 +1182,74 @@ theorem step_DUP1_shape
   show [hd].getLast! :: (hd :: tl) = hd :: s.stack
   rw [hStk]; rfl
 
+/-- DUP2: duplicates the second-from-top, `pc += 1`. -/
+theorem step_DUP2_shape
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.DUP2, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd2 :: s.stack ∧
+    s'.executionEnv = s.executionEnv := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dup at hStep
+  rw [hStk] at hStep
+  simp only [show List.take 2 (hd1 :: hd2 :: tl) = [hd1, hd2] from rfl,
+             show ([hd1, hd2] : List UInt256).length = 2 from rfl,
+             ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, ?_, rfl⟩
+  show [hd1, hd2].getLast! :: (hd1 :: hd2 :: tl) = hd2 :: s.stack
+  rw [hStk]; rfl
+
+/-- DUP3: duplicates the third-from-top, `pc += 1`. -/
+theorem step_DUP3_shape
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.DUP3, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd3 :: s.stack ∧
+    s'.executionEnv = s.executionEnv := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dup at hStep
+  rw [hStk] at hStep
+  simp only [show List.take 3 (hd1 :: hd2 :: hd3 :: tl) = [hd1, hd2, hd3] from rfl,
+             show ([hd1, hd2, hd3] : List UInt256).length = 3 from rfl,
+             ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, ?_, rfl⟩
+  show [hd1, hd2, hd3].getLast! :: (hd1 :: hd2 :: hd3 :: tl) = hd3 :: s.stack
+  rw [hStk]; rfl
+
+/-- DUP4: duplicates the fourth-from-top, `pc += 1`. -/
+theorem step_DUP4_shape
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 hd4 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: hd4 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.DUP4, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd4 :: s.stack ∧
+    s'.executionEnv = s.executionEnv := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dup at hStep
+  rw [hStk] at hStep
+  simp only [show List.take 4 (hd1 :: hd2 :: hd3 :: hd4 :: tl) = [hd1, hd2, hd3, hd4] from rfl,
+             show ([hd1, hd2, hd3, hd4] : List UInt256).length = 4 from rfl,
+             ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, ?_, rfl⟩
+  show [hd1, hd2, hd3, hd4].getLast! :: (hd1 :: hd2 :: hd3 :: hd4 :: tl) = hd4 :: s.stack
+  rw [hStk]; rfl
+
 /-- SWAP1: swaps the top two stack elements, `pc += 1`. -/
 theorem step_SWAP1_shape
     (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
@@ -1199,6 +1267,50 @@ theorem step_SWAP1_shape
   simp only [show List.take (1 + 1) (hd1 :: hd2 :: tl) = [hd1, hd2] from rfl,
              show List.drop (1 + 1) (hd1 :: hd2 :: tl) = tl from rfl,
              show ([hd1, hd2] : List UInt256).length = 1 + 1 from rfl,
+             ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl⟩
+
+/-- SWAP2: swaps element 1 (top) with element 3 (count from 1), `pc += 1`. -/
+theorem step_SWAP2_shape
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.SWAP2, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd3 :: hd2 :: hd1 :: tl ∧
+    s'.executionEnv = s.executionEnv := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold swap at hStep
+  rw [hStk] at hStep
+  simp only [show List.take (2 + 1) (hd1 :: hd2 :: hd3 :: tl) = [hd1, hd2, hd3] from rfl,
+             show List.drop (2 + 1) (hd1 :: hd2 :: hd3 :: tl) = tl from rfl,
+             show ([hd1, hd2, hd3] : List UInt256).length = 2 + 1 from rfl,
+             ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl⟩
+
+/-- SWAP3: swaps top with the 4th element, `pc += 1`. -/
+theorem step_SWAP3_shape
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 hd4 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: hd4 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.SWAP3, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd4 :: hd2 :: hd3 :: hd1 :: tl ∧
+    s'.executionEnv = s.executionEnv := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold swap at hStep
+  rw [hStk] at hStep
+  simp only [show List.take (3 + 1) (hd1 :: hd2 :: hd3 :: hd4 :: tl) = [hd1, hd2, hd3, hd4] from rfl,
+             show List.drop (3 + 1) (hd1 :: hd2 :: hd3 :: hd4 :: tl) = tl from rfl,
+             show ([hd1, hd2, hd3, hd4] : List UInt256).length = 3 + 1 from rfl,
              ↓reduceIte, Except.ok.injEq] at hStep
   subst hStep
   refine ⟨rfl, rfl, rfl⟩
