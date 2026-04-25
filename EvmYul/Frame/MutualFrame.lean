@@ -3965,6 +3965,145 @@ private theorem step_bundled_invariant_at_C
       exact step_bundled_handled_case C f cost₂ op arg evmState sstepState
         hWF hCO hNC hHandled hStep'
 
+/-- **At-`C`, value-zero CALL variant of `step_bundled_invariant_at_C`.**
+
+Same shape as `step_bundled_invariant_at_C`, except:
+* The `codeOwner` hypothesis is the **equality** form `C = codeOwner`
+  (instead of `≠`), and is preserved in the conclusion.
+* The op is restricted to the 8-opcode subset that appears in
+  `Register`'s bytecode: `PUSH1`, `CALLDATALOAD`, `CALLER`, `SSTORE`,
+  `GAS`, `POP`, `STOP`, and `CALL`.
+* For the `CALL` arm, we additionally require `stack[2] = 0`
+  (zero-value outbound call), which is the `at_C_v0` discipline.
+
+Used by the `Register`-balance-monotonicity proof at the codeOwner
+itself: as long as every CALL emitted by `Register` carries value 0,
+the contract's own balance is preserved (or grows, if it reflects
+inbound CALLs not modelled here) across each step at the contract's
+own address. -/
+private theorem step_bundled_invariant_at_C_v0
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (op : Operation .EVM)
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCC : C = evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hWit : ΞPreservesAtC C)
+    (hFrame : ΞFrameAtC C (f + 1))
+    (hRegOp : op = .Push .PUSH1 ∨ op = .CALLDATALOAD ∨ op = .CALLER ∨
+              op = .SSTORE ∨ op = .GAS ∨ op = .POP ∨ op = .STOP ∨ op = .CALL)
+    (h_v0 : op = .CALL → evmState.stack[2]? = some ⟨0⟩)
+    (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C = sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  -- A single shared closure for the seven non-CALL ops. Each branch
+  -- reduces `EVM.step (f+1) cost₂ (some (op, arg)) evmState`
+  -- to `EvmYul.step op arg s_pre = .ok sstepState`, then invokes
+  -- `EvmYul.step_preserves_balanceOf`, `EvmYul_step_preserves_StateWF`,
+  -- and `EvmYul.step_preserves_eEnv_cA`.
+  rcases hRegOp with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  -- Case 1: PUSH1.
+  · exact handledHelper (.Push .PUSH1) C cost₂ arg evmState sstepState
+      hWF hCC hNC (by refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide)
+      (by decide) hStep
+  -- Case 2: CALLDATALOAD.
+  · exact handledHelper (.CALLDATALOAD) C cost₂ arg evmState sstepState
+      hWF hCC hNC (by refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide)
+      (by decide) hStep
+  -- Case 3: CALLER.
+  · exact handledHelper (.CALLER) C cost₂ arg evmState sstepState
+      hWF hCC hNC (by refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide)
+      (by decide) hStep
+  -- Case 4: SSTORE.
+  · exact handledHelper (.SSTORE) C cost₂ arg evmState sstepState
+      hWF hCC hNC (by refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide)
+      (by decide) hStep
+  -- Case 5: GAS.
+  · exact handledHelper (.GAS) C cost₂ arg evmState sstepState
+      hWF hCC hNC (by refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide)
+      (by decide) hStep
+  -- Case 6: POP.
+  · exact handledHelper (.POP) C cost₂ arg evmState sstepState
+      hWF hCC hNC (by refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide)
+      (by decide) hStep
+  -- Case 7: STOP.
+  · exact handledHelper (.STOP) C cost₂ arg evmState sstepState
+      hWF hCC hNC (by refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide)
+      (by decide) hStep
+  -- Case 8: CALL. Dispatch to `step_CALL_arm_at_C_v0`.
+  · exact step_CALL_arm_at_C_v0 C f cost₂ arg evmState sstepState
+      hWF hCC hNC hWit hFrame (h_v0 rfl) hStep
+where
+  /-- Shared closure for handled (non-CALL/CREATE), non-SELFDESTRUCT
+  ops. Reduces `EVM.step` to `EvmYul.step` and applies the three
+  preservation lemmas. -/
+  handledHelper (op : Operation .EVM) (C : AccountAddress) (cost₂ : ℕ)
+      (arg : Option (UInt256 × Nat))
+      (evmState sstepState : EVM.State)
+      (hWF : StateWF evmState.accountMap)
+      (hCC : C = evmState.executionEnv.codeOwner)
+      (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+      (hHandled : handledByEvmYulStep op)
+      (hSDne : op ≠ .SELFDESTRUCT)
+      (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
+      balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+      StateWF sstepState.accountMap ∧
+      (C = sstepState.executionEnv.codeOwner) ∧
+      (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+    set s_pre : EVM.State :=
+      { evmState with
+          execLength := evmState.execLength + 1,
+          gasAvailable := evmState.gasAvailable - UInt256.ofNat cost₂ }
+      with hs_pre_def
+    have hAM : s_pre.accountMap = evmState.accountMap := rfl
+    have hCOEq : s_pre.executionEnv = evmState.executionEnv := rfl
+    have hCAEq : s_pre.createdAccounts = evmState.createdAccounts := rfl
+    have hWF_pre : StateWF s_pre.accountMap := by rw [hAM]; exact hWF
+    have hStep' : EvmYul.step op arg s_pre = .ok sstepState := by
+      unfold EVM.step at hStep
+      simp only [bind, Except.bind, pure, Except.pure] at hStep
+      obtain ⟨hne1, hne2, hne3, hne4, hne5, hne6⟩ := hHandled
+      cases op with
+      | StopArith _ => exact hStep
+      | CompBit _ => exact hStep
+      | Keccak _ => exact hStep
+      | Env _ => exact hStep
+      | Block _ => exact hStep
+      | StackMemFlow _ => exact hStep
+      | Push _ => exact hStep
+      | Dup _ => exact hStep
+      | Exchange _ => exact hStep
+      | Log _ => exact hStep
+      | System o =>
+        cases o with
+        | CREATE => exact absurd rfl hne1
+        | CALL => exact absurd rfl hne3
+        | CALLCODE => exact absurd rfl hne4
+        | RETURN => exact hStep
+        | DELEGATECALL => exact absurd rfl hne5
+        | CREATE2 => exact absurd rfl hne2
+        | STATICCALL => exact absurd rfl hne6
+        | REVERT => exact hStep
+        | INVALID => exact hStep
+        | SELFDESTRUCT => exact hStep
+    have hBalEq :=
+      EvmYul.step_preserves_balanceOf op arg s_pre sstepState C hHandled hSDne hStep'
+    have hWFres :=
+      EvmYul_step_preserves_StateWF op arg s_pre sstepState hHandled hSDne hStep' hWF_pre
+    have hEnvCA :=
+      EvmYul.step_preserves_eEnv_cA op arg s_pre sstepState hHandled hStep'
+    refine ⟨?_, hWFres, ?_, ?_⟩
+    · -- balance: equality, gives ≥.
+      rw [hBalEq, hAM]
+    · -- codeOwner: rewrite via hEnvCA.1 and hCOEq.
+      rw [hEnvCA.1, hCOEq]; exact hCC
+    · -- createdAccounts: rewrite via hEnvCA.2 and hCAEq.
+      intro a haIn
+      rw [hEnvCA.2, hCAEq] at haIn
+      exact hNC a haIn
+
 /-- Balance monotonicity across a single step. -/
 private theorem step_balance_mono_at_C
     (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
