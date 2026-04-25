@@ -4370,10 +4370,14 @@ private def X_inv_at_C_v0 (C : AccountAddress) (f : ℕ) (validJumps : Array UIn
   -- Z preserves Reachable (Z only changes gasAvailable).
   (∀ s : EVM.State, ∀ g : UInt256, Reachable s →
       Reachable { s with gasAvailable := g }) →
-  -- step preserves Reachable.
+  -- step preserves Reachable (when op is the decoded op at s.pc).
   (∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
+      fetchInstr s.executionEnv s.pc = .ok (op, arg) →
       EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
       Reachable s') →
+  -- A reachable state's decode is non-none.
+  (∀ s : EVM.State, Reachable s →
+      ∃ pair, decode s.executionEnv.code s.pc = some pair) →
   -- A reachable state's decoded op is one of Register's 8.
   (∀ s : EVM.State, ∀ op : Operation .EVM, ∀ arg,
     Reachable s →
@@ -4410,12 +4414,12 @@ private theorem X_inv_at_C_v0_holds
   -- Induct on the X-fuel `f`.
   induction f generalizing evmState with
   | zero =>
-    intro _ _ _ _ _ _ _ _ _ _
+    intro _ _ _ _ _ _ _ _ _ _ _
     rw [show EVM.X 0 validJumps evmState = .error .OutOfFuel from rfl]
     trivial
   | succ f' IH =>
     intro hWF hCC hNC hWit _hFrameAtSucc
-            hReach hReach_Z hReach_step hRegOpReach h_v0_Reach
+            hReach hReach_Z hReach_step hReach_decodeSome hRegOpReach h_v0_Reach
     -- Unfold `EVM.X (f' + 1)` to expose its body.
     show match EVM.X (f' + 1) validJumps evmState with
       | .ok (.success s' _) =>
@@ -4598,9 +4602,32 @@ private theorem X_inv_at_C_v0_holds
               have hStepGE : balanceOf sstepState.accountMap C
                            ≥ balanceOf evmState.accountMap C := by
                 rw [← hBalEq]; exact hStepGE_Z
-              -- Reachable preservation under step.
+              -- Reachable preservation under step. We need
+              -- fetchInstr evmStateZ.executionEnv evmStateZ.pc = .ok (op, arg).
+              -- Re-derive it (mirroring the derivation in `hRegOp` above).
+              have hFetchOK : fetchInstr evmStateZ.executionEnv evmStateZ.pc = .ok (op, arg) := by
+                cases hDec : decode evmStateZ.executionEnv.code evmStateZ.pc with
+                | none =>
+                  -- Decode = none contradicts Reachable evmStateZ via `hReach_decodeSome`.
+                  obtain ⟨_, hSome⟩ := hReach_decodeSome evmStateZ hReachZ
+                  rw [hDec] at hSome
+                  exact absurd hSome (by simp)
+                | some pair =>
+                  have hDec' : decode evmState.executionEnv.code evmState.pc = some pair := by
+                    rw [← hZ_eEnv, ← hZ_pc]; exact hDec
+                  have hPair : ((op, arg) : Operation .EVM × Option (UInt256 × Nat)) = pair := by
+                    have : (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                         = pair := by rw [hDec']; rfl
+                    rw [show ((op, arg) : Operation .EVM × Option (UInt256 × Nat))
+                          = (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                        from hDecRes]
+                    exact this
+                  obtain ⟨op', arg'⟩ := pair
+                  have hOpEq : op = op' := (Prod.mk.inj hPair).1
+                  have hArgEq : arg = arg' := (Prod.mk.inj hPair).2
+                  unfold fetchInstr; rw [hDec, hOpEq, hArgEq]; rfl
               have hReachStep : Reachable sstepState :=
-                hReach_step evmStateZ sstepState f'' cost₂ op arg hReachZ hStep'
+                hReach_step evmStateZ sstepState f'' cost₂ op arg hReachZ hFetchOK hStep'
               -- Split on H's result.
               split at hXres
               case h_1 _ hH_none =>
@@ -4614,7 +4641,7 @@ private theorem X_inv_at_C_v0_holds
                   fun es => IH es hFrame'
                 have hIH := IH' sstepState hWFsstep hCCsstep hNCsstep hWit
                                 hFrameAtSuccF' hReachStep hReach_Z hReach_step
-                                hRegOpReach h_v0_Reach
+                                hReach_decodeSome hRegOpReach h_v0_Reach
                 rw [hXres] at hIH
                 refine ⟨?_, hIH.2.1, hIH.2.2⟩
                 exact Nat.le_trans hStepGE hIH.1
