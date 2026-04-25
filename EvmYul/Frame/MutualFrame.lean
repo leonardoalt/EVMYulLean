@@ -2185,7 +2185,7 @@ interaction between Lean's `split` tactic and the
 monad-lift-via-`local instance` in the body produces a
 plumbing-heavy tree of ~15 sub-goals. Closed pending a dedicated
 proof pass. -/
-theorem Λ_balanceOf_ge
+private theorem Λ_balanceOf_ge_bdd
     (fuel : Nat) (blobVersionedHashes : List ByteArray)
     (createdAccounts : RBSet AccountAddress compare)
     (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
@@ -2197,7 +2197,6 @@ theorem Λ_balanceOf_ge
     (h_s : C ≠ s)
     (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
     (h_funds : ∀ acc, σ.find? s = some acc → v.toNat ≤ acc.balance.toNat)
-    (hWitness : ΞPreservesAtC C)
     (Ξ_frame : ∀ f, f + 1 ≤ fuel → ΞFrameAtC C f) :
     match EVM.Lambda fuel blobVersionedHashes createdAccounts
                   genesisBlockHeader blocks σ σ₀ A s o g p v i e ζ H w with
@@ -2470,6 +2469,33 @@ theorem Λ_balanceOf_ge
               · -- σ_final = σ_Ξ.insert a { σ_Ξ.findD a default with code := returnedData }.
                 exact StateWF_insert_findD_code σ_Ξ a returnedData hWFσ_Ξ
 
+/-- Public wrapper for `Λ_balanceOf_ge_bdd`. The `hWitness : ΞPreservesAtC C`
+parameter is unused inside Λ (Λ's body only takes Ξ at `I.codeOwner = a ≠ C`,
+which is covered by `Ξ_frame`), but is kept in the signature for API
+compatibility with consumers (e.g. `BalanceMono.lean`). -/
+theorem Λ_balanceOf_ge
+    (fuel : Nat) (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (A : Substate)
+    (s o : AccountAddress) (g p v : UInt256) (i : ByteArray) (e : UInt256)
+    (ζ : Option ByteArray) (H : BlockHeader) (w : Bool)
+    (C : AccountAddress)
+    (hWF : StateWF σ)
+    (h_s : C ≠ s)
+    (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
+    (h_funds : ∀ acc, σ.find? s = some acc → v.toNat ≤ acc.balance.toNat)
+    (_hWitness : ΞPreservesAtC C)
+    (Ξ_frame : ∀ f, f + 1 ≤ fuel → ΞFrameAtC C f) :
+    match EVM.Lambda fuel blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o g p v i e ζ H w with
+    | .ok (a, cA', σ', _, _, _, _) =>
+        a ≠ C ∧ balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a' ∈ cA', a' ≠ C)
+    | .error _ => True :=
+  Λ_balanceOf_ge_bdd fuel blobVersionedHashes createdAccounts
+    genesisBlockHeader blocks σ σ₀ A s o g p v i e ζ H w
+    C hWF h_s h_newC h_funds Ξ_frame
+
 /-! ## Closing `Ξ_balanceOf_ge` via strong induction on fuel
 
 The closing step: we declare `Ξ_balanceOf_ge` AFTER `Θ_balanceOf_ge` and
@@ -2503,7 +2529,7 @@ private def X_inv (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
   StateWF evmState.accountMap →
   C ≠ evmState.executionEnv.codeOwner →
   (∀ a ∈ evmState.createdAccounts, a ≠ C) →
-  ΞPreservesAtC C →
+  ΞAtCFrame C f →
   ΞFrameAtC C f →
   match EVM.X f validJumps evmState with
   | .ok (.success s' _) =>
@@ -2672,7 +2698,6 @@ private theorem lambda_arm_tuple_preserves
     (hWFσStar : StateWF σStar)
     (h_funds : ∀ acc, σStar.find? evmStateBase.executionEnv.codeOwner = some acc →
         μ₀.toNat ≤ acc.balance.toNat)
-    (hWit : ΞPreservesAtC C)
     (Ξ_frame : ∀ f', f' + 1 ≤ f → ΞFrameAtC C f')
     (hCO : C ≠ evmStateBase.executionEnv.codeOwner)
     (hNCbase : ∀ a ∈ evmStateBase.createdAccounts, a ≠ C)
@@ -2720,7 +2745,7 @@ private theorem lambda_arm_tuple_preserves
   · -- Lambda-success path. Use `Λ_balanceOf_ge` at σStar.
     have hs_ne : C ≠ evmStateBase.executionEnv.codeOwner := hCO
     have hΛFrame :=
-      Λ_balanceOf_ge f
+      Λ_balanceOf_ge_bdd f
         evmStateBase.executionEnv.blobVersionedHashes
         evmStateBase.createdAccounts
         evmStateBase.genesisBlockHeader
@@ -2737,7 +2762,7 @@ private theorem lambda_arm_tuple_preserves
         ζ
         evmStateBase.executionEnv.header
         evmStateBase.executionEnv.perm
-        C hWFσStar hs_ne hNCbase h_funds hWit Ξ_frame
+        C hWFσStar hs_ne hNCbase h_funds Ξ_frame
     rw [hΛ] at hΛFrame
     obtain ⟨_ha_ne_C, hBalσ', hWFσ', hNCcA⟩ := hΛFrame
     subst hEq
@@ -2773,7 +2798,7 @@ private theorem step_CREATE_arm
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C (f + 1))
     (hFrame : ΞFrameAtC C (f + 1))
     (hStep : EVM.step (f + 1) cost₂ (some (.CREATE, arg)) evmState = .ok sstepState) :
     balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
@@ -2931,7 +2956,7 @@ private theorem step_CREATE_arm
             -- They differ by cost₂ subtraction.
             -- Rather than reconcile, we just instantiate Λ_balanceOf_ge at eS2's values.
             have hΛFrame :=
-              Λ_balanceOf_ge f
+              Λ_balanceOf_ge_bdd f
                 eS2.executionEnv.blobVersionedHashes
                 eS2.createdAccounts
                 eS2.genesisBlockHeader
@@ -2950,7 +2975,7 @@ private theorem step_CREATE_arm
                 eS2.executionEnv.perm
                 C hWFσStar hCO2
                 (by rw [hCA2]; exact hNC)
-                h_funds_at_σStar hWit Ξ_frame_f
+                h_funds_at_σStar Ξ_frame_f
             rw [hΛ] at hΛFrame
             obtain ⟨_ha_ne_C, hBalσ', hWFσ', hNCcA⟩ := hΛFrame
             refine ⟨?_, hWFσ', ?_, ?_⟩
@@ -2998,7 +3023,7 @@ private theorem step_CREATE2_arm
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C (f + 1))
     (hFrame : ΞFrameAtC C (f + 1))
     (hStep : EVM.step (f + 1) cost₂ (some (.CREATE2, arg)) evmState = .ok sstepState) :
     balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
@@ -3104,7 +3129,7 @@ private theorem step_CREATE2_arm
               exact ΞFrameAtC_mono C (f + 1) f'
                 (Nat.le_trans (Nat.le_of_succ_le hf') (Nat.le_succ _)) hFrame
             have hΛFrame :=
-              Λ_balanceOf_ge f
+              Λ_balanceOf_ge_bdd f
                 eS2.executionEnv.blobVersionedHashes
                 eS2.createdAccounts
                 eS2.genesisBlockHeader
@@ -3123,7 +3148,7 @@ private theorem step_CREATE2_arm
                 eS2.executionEnv.perm
                 C hWFσStar hCO2
                 (by rw [hCA2]; exact hNC)
-                h_funds_at_σStar hWit Ξ_frame_f
+                h_funds_at_σStar Ξ_frame_f
             rw [hΛ] at hΛFrame
             obtain ⟨_ha_ne_C, hBalσ', hWFσ', hNCcA⟩ := hΛFrame
             refine ⟨?_, hWFσ', ?_, ?_⟩
@@ -3176,7 +3201,7 @@ private theorem call_balanceOf_ge
     (permission : Bool) (evmState state' : EVM.State) (x : UInt256)
     (hWF : StateWF evmState.accountMap)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C fuel)
     (hFrame : ΞFrameAtC C fuel)
     (h_s : C ≠ AccountAddress.ofUInt256 src ∨ v = ⟨0⟩)
     (h_vb : ∀ acc,
@@ -3218,112 +3243,14 @@ private theorem call_balanceOf_ge
       obtain ⟨cA, σ', g', A', z, o⟩ := hΘ_prod
       injection hCall with hEq
       -- hEq : (x_computed, result_state) = (x, state')
-      -- Apply Θ_balanceOf_ge at fuel = f.
-      have Ξ_frame_f : ∀ f', f' + 1 ≤ f → ΞFrameAtC C f' := by
-        intro f' hf'
-        exact ΞFrameAtC_mono C (f + 1) f'
-          (Nat.le_trans (Nat.le_of_succ_le hf') (Nat.le_succ _)) hFrame
-      -- The σ passed to Θ is evmState.accountMap (unchanged by pre-Θ let).
-      -- Rewrite hΘ using the fact that the Θ invocation uses a state with
-      -- only gasAvailable adjusted — but all accountMap-like fields are
-      -- the same as evmState's. By definitional equality.
-      -- Apply Θ_balanceOf_ge.
-      have hΘFrame :=
-        Θ_balanceOf_ge f
-          evmState.executionEnv.blobVersionedHashes
-          evmState.createdAccounts
-          evmState.genesisBlockHeader
-          evmState.blocks
-          evmState.accountMap
-          evmState.σ₀
-          ((evmState.addAccessedAccount (AccountAddress.ofUInt256 t)).substate)
-          (AccountAddress.ofUInt256 src)
-          evmState.executionEnv.sender
-          (AccountAddress.ofUInt256 rcp)
-          (toExecute .EVM evmState.accountMap (AccountAddress.ofUInt256 t))
-          (.ofNat <| Ccallgas (AccountAddress.ofUInt256 t)
-                              (AccountAddress.ofUInt256 rcp) v gas
-                              evmState.accountMap evmState.toMachineState
-                              evmState.substate)
-          (.ofNat evmState.executionEnv.gasPrice)
-          v v' (evmState.memory.readWithPadding inOff.toNat inSize.toNat)
-          (evmState.executionEnv.depth + 1)
-          evmState.executionEnv.header permission
-          C hWF h_s hNC h_vb h_fs hWit Ξ_frame_f
-      rw [hΘ] at hΘFrame
-      obtain ⟨hBalGe, hWF', hCA'⟩ := hΘFrame
-      -- The final state' in call is:
-      --   { { evmState with accountMap := σ', substate := A', createdAccounts := cA }
-      --       with toMachineState := μ'incomplete }
-      -- Its accountMap = σ', createdAccounts = cA, executionEnv = evmState.executionEnv.
-      -- Pair equality hEq gives state' equals this record.
-      -- Use the second component of hEq.
-      have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
-      obtain ⟨_hx, hState⟩ := hState_eq
-      rw [← hState]
-      refine ⟨?_, ?_, ?_, ?_⟩
-      · show balanceOf σ' C ≥ balanceOf evmState.accountMap C
-        exact hBalGe
-      · exact hWF'
-      · rfl
-      · exact hCA'
-  · -- Gate failed. Inner tuple is (createdAccounts, accountMap, callgas, A', false, .empty).
-    -- σ' = accountMap unchanged, cA = createdAccounts unchanged.
-    injection hCall with hEq
-    have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
-    obtain ⟨_hx, hState⟩ := hState_eq
-    rw [← hState]
-    refine ⟨Nat.le_refl _, hWF, rfl, hNC⟩
-
-/-- **Fuel-bounded variant of `call_balanceOf_ge`.** Takes a bounded
-`ΞAtCFrame C fuel` instead of the unbounded `ΞPreservesAtC C`. Used by
-the at-`C` / value-zero bytecode-frame chain, where the strong-fuel
-induction only provides a bounded witness. -/
-private theorem call_balanceOf_ge_bdd
-    (C : AccountAddress) (fuel : ℕ) (gasCost : ℕ)
-    (gas src rcp t v v' inOff inSize outOff outSize : UInt256)
-    (permission : Bool) (evmState state' : EVM.State) (x : UInt256)
-    (hWF : StateWF evmState.accountMap)
-    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hAtCFrame : ΞAtCFrame C fuel)
-    (hFrame : ΞFrameAtC C fuel)
-    (h_s : C ≠ AccountAddress.ofUInt256 src ∨ v = ⟨0⟩)
-    (h_vb : ∀ acc,
-        (evmState.accountMap).find? (AccountAddress.ofUInt256 rcp) = some acc →
-        acc.balance.toNat + v.toNat < UInt256.size)
-    (h_fs : v = ⟨0⟩ ∨ ∃ acc,
-              (evmState.accountMap).find? (AccountAddress.ofUInt256 src) = some acc ∧
-              v.toNat ≤ acc.balance.toNat)
-    (hCall :
-      EVM.call fuel gasCost evmState.executionEnv.blobVersionedHashes
-        gas src rcp t v v' inOff inSize outOff outSize permission evmState
-      = .ok (x, state')) :
-    balanceOf state'.accountMap C ≥ balanceOf evmState.accountMap C ∧
-    StateWF state'.accountMap ∧
-    state'.executionEnv.codeOwner = evmState.executionEnv.codeOwner ∧
-    (∀ a ∈ state'.createdAccounts, a ≠ C) := by
-  -- Mirror of `call_balanceOf_ge`, using `Θ_balanceOf_ge_bdd` instead.
-  unfold EVM.call at hCall
-  simp only [bind, Except.bind, pure, Except.pure] at hCall
-  cases fuel with
-  | zero =>
-    simp only at hCall
-    exact absurd hCall (by simp)
-  | succ f =>
-  simp only at hCall
-  split at hCall
-  · rename_i hGate
-    split at hCall
-    · exact absurd hCall (by simp)
-    · rename_i hΘ_prod hΘ
-      obtain ⟨cA, σ', g', A', z, o⟩ := hΘ_prod
-      injection hCall with hEq
+      -- Apply Θ_balanceOf_ge_bdd at fuel = f.
       have Ξ_frame_f : ∀ f', f' + 1 ≤ f → ΞFrameAtC C f' := by
         intro f' hf'
         exact ΞFrameAtC_mono C (f + 1) f'
           (Nat.le_trans (Nat.le_of_succ_le hf') (Nat.le_succ _)) hFrame
       have hAtCFrame_f : ΞAtCFrame C f :=
         ΞAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
+      -- Apply Θ_balanceOf_ge_bdd.
       have hΘFrame :=
         Θ_balanceOf_ge_bdd f
           evmState.executionEnv.blobVersionedHashes
@@ -3357,7 +3284,9 @@ private theorem call_balanceOf_ge_bdd
       · exact hWF'
       · rfl
       · exact hCA'
-  · injection hCall with hEq
+  · -- Gate failed. Inner tuple is (createdAccounts, accountMap, callgas, A', false, .empty).
+    -- σ' = accountMap unchanged, cA = createdAccounts unchanged.
+    injection hCall with hEq
     have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
     obtain ⟨_hx, hState⟩ := hState_eq
     rw [← hState]
@@ -3380,7 +3309,7 @@ private theorem step_CALL_arm
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C (f + 1))
     (hFrame : ΞFrameAtC C (f + 1))
     (hStep : EVM.step (f + 1) cost₂ (some (.CALL, arg)) evmState = .ok sstepState) :
     balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
@@ -3531,10 +3460,12 @@ private theorem step_CALL_arm
                   acc σ_s h_find_r hFo hrs
               omega
         have hFrame_f : ΞFrameAtC C f := ΞFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+        have hAtCFrame_f : ΞAtCFrame C f :=
+          ΞAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
         have hBundle :=
           call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
             μ₁ μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆ eS1.executionEnv.perm eS1 state' x
-            hWFes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+            hWFes1 hNCes1 hAtCFrame_f hFrame_f h_s_call h_vb_call h_fs_call hCallRes
         obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
         refine ⟨?_, ?_, ?_, ?_⟩
         · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
@@ -3708,7 +3639,7 @@ private theorem step_CALL_arm_at_C_v0
       have hAtCFrame_f : ΞAtCFrame C f :=
         ΞAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
       have hBundle :=
-        call_balanceOf_ge_bdd C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
+        call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
           μ₁ μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆ eS1.executionEnv.perm eS1 state' x
           hWFes1 hNCes1 hAtCFrame_f hFrame_f h_s_call h_vb_call h_fs_call hCallRes
       obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
@@ -3727,7 +3658,7 @@ private theorem step_CALLCODE_arm
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C (f + 1))
     (hFrame : ΞFrameAtC C (f + 1))
     (hStep : EVM.step (f + 1) cost₂ (some (.CALLCODE, arg)) evmState = .ok sstepState) :
     balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
@@ -3841,11 +3772,13 @@ private theorem step_CALLCODE_arm
             _ ≤ 2 * totalETH eS1.accountMap := by omega
             _ < UInt256.size := hDbl
         have hFrame_f : ΞFrameAtC C f := ΞFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+        have hAtCFrame_f : ΞAtCFrame C f :=
+          ΞAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
         have hBundle :=
           call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
             (.ofNat eS1.executionEnv.codeOwner) μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆
             eS1.executionEnv.perm eS1 state' x
-            hWFes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+            hWFes1 hNCes1 hAtCFrame_f hFrame_f h_s_call h_vb_call h_fs_call hCallRes
         obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
         refine ⟨?_, ?_, ?_, ?_⟩
         · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
@@ -3883,7 +3816,7 @@ private theorem step_DELEGATECALL_arm
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C (f + 1))
     (hFrame : ΞFrameAtC C (f + 1))
     (hStep : EVM.step (f + 1) cost₂ (some (.DELEGATECALL, arg)) evmState = .ok sstepState) :
     balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
@@ -3923,11 +3856,13 @@ private theorem step_DELEGATECALL_arm
                         (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.source)) = some acc ∧
                   (⟨0⟩ : UInt256).toNat ≤ acc.balance.toNat := Or.inl rfl
       have hFrame_f : ΞFrameAtC C f := ΞFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+      have hAtCFrame_f : ΞAtCFrame C f :=
+        ΞAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
       have hBundle :=
         call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.source)
           (.ofNat eS1.executionEnv.codeOwner) μ₁ ⟨0⟩ eS1.executionEnv.weiValue
           μ₃ μ₄ μ₅ μ₆ eS1.executionEnv.perm eS1 state' x
-          hWFes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+          hWFes1 hNCes1 hAtCFrame_f hFrame_f h_s_call h_vb_call h_fs_call hCallRes
       obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
       refine ⟨?_, ?_, ?_, ?_⟩
       · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
@@ -3942,7 +3877,7 @@ private theorem step_STATICCALL_arm
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C (f + 1))
     (hFrame : ΞFrameAtC C (f + 1))
     (hStep : EVM.step (f + 1) cost₂ (some (.STATICCALL, arg)) evmState = .ok sstepState) :
     balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
@@ -3986,10 +3921,12 @@ private theorem step_STATICCALL_arm
                         (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner)) = some acc ∧
                   (⟨0⟩ : UInt256).toNat ≤ acc.balance.toNat := Or.inl rfl
       have hFrame_f : ΞFrameAtC C f := ΞFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+      have hAtCFrame_f : ΞAtCFrame C f :=
+        ΞAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
       have hBundle :=
         call_balanceOf_ge C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
           μ₁ μ₁ ⟨0⟩ ⟨0⟩ μ₃ μ₄ μ₅ μ₆ false eS1 state' x
-          hWFes1 hNCes1 hWit hFrame_f h_s_call h_vb_call h_fs_call hCallRes
+          hWFes1 hNCes1 hAtCFrame_f hFrame_f h_s_call h_vb_call h_fs_call hCallRes
       obtain ⟨hBalGe, hWFres, hCOres, hNCres⟩ := hBundle
       refine ⟨?_, ?_, ?_, ?_⟩
       · simp only [accountMap_replaceStackAndIncrPC]; exact hBalGe
@@ -4006,7 +3943,7 @@ private theorem step_bundled_system_arm
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C (f + 1))
     (hFrame : ΞFrameAtC C (f + 1))
     (hSys : opIsSystemCallOrCreate op)
     (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
@@ -4015,12 +3952,12 @@ private theorem step_bundled_system_arm
     (C ≠ sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
   rcases hSys with h1 | h2 | h3 | h4 | h5 | h6
-  · subst h1; exact step_CREATE_arm     C f cost₂ arg evmState sstepState hWF hCO hNC hWit hFrame hStep
-  · subst h2; exact step_CREATE2_arm    C f cost₂ arg evmState sstepState hWF hCO hNC hWit hFrame hStep
-  · subst h3; exact step_CALL_arm       C f cost₂ arg evmState sstepState hWF hCO hNC hWit hFrame hStep
-  · subst h4; exact step_CALLCODE_arm   C f cost₂ arg evmState sstepState hWF hCO hNC hWit hFrame hStep
-  · subst h5; exact step_DELEGATECALL_arm C f cost₂ arg evmState sstepState hWF hCO hNC hWit hFrame hStep
-  · subst h6; exact step_STATICCALL_arm C f cost₂ arg evmState sstepState hWF hCO hNC hWit hFrame hStep
+  · subst h1; exact step_CREATE_arm     C f cost₂ arg evmState sstepState hWF hCO hNC hAtCFrame hFrame hStep
+  · subst h2; exact step_CREATE2_arm    C f cost₂ arg evmState sstepState hWF hCO hNC hAtCFrame hFrame hStep
+  · subst h3; exact step_CALL_arm       C f cost₂ arg evmState sstepState hWF hCO hNC hAtCFrame hFrame hStep
+  · subst h4; exact step_CALLCODE_arm   C f cost₂ arg evmState sstepState hWF hCO hNC hAtCFrame hFrame hStep
+  · subst h5; exact step_DELEGATECALL_arm C f cost₂ arg evmState sstepState hWF hCO hNC hAtCFrame hFrame hStep
+  · subst h6; exact step_STATICCALL_arm C f cost₂ arg evmState sstepState hWF hCO hNC hAtCFrame hFrame hStep
 
 /-- **Step-level bundled invariant.** For any successful `EVM.step`
 at a non-codeOwner target, balance is monotone at `C`, StateWF
@@ -4039,7 +3976,7 @@ private theorem step_bundled_invariant_at_C
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C f')
     (hFrame : ΞFrameAtC C f')
     (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
     balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
@@ -4081,7 +4018,7 @@ private theorem step_bundled_invariant_at_C
     · -- CREATE/CREATE2/CALL/CALLCODE/DELEGATECALL/STATICCALL.
       -- Delegate to the aggregated system-arm helper.
       exact step_bundled_system_arm C f cost₂ op arg evmState sstepState
-        hWF hCO hNC hWit hFrame hSysCall hStep
+        hWF hCO hNC hAtCFrame hFrame hSysCall hStep
     · -- Non-CALL/CREATE: fallthrough via EvmYul.step.
       -- Unfold EVM.step to expose the fallthrough body.
       have hStep' :
@@ -4269,12 +4206,12 @@ private theorem step_balance_mono_at_C
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C f')
     (hFrame : ΞFrameAtC C f')
     (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
     balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C :=
   (step_bundled_invariant_at_C C f' cost₂ instr evmState sstepState
-    hWF hCO hNC hWit hFrame hStep).1
+    hWF hCO hNC hAtCFrame hFrame hStep).1
 
 /-- StateWF preserved across a step. -/
 private theorem step_StateWF_preserved
@@ -4284,12 +4221,12 @@ private theorem step_StateWF_preserved
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C f')
     (hFrame : ΞFrameAtC C f')
     (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
     StateWF sstepState.accountMap :=
   (step_bundled_invariant_at_C C f' cost₂ instr evmState sstepState
-    hWF hCO hNC hWit hFrame hStep).2.1
+    hWF hCO hNC hAtCFrame hFrame hStep).2.1
 
 /-- codeOwner preserved across a step. -/
 private theorem step_codeOwner_preserved
@@ -4299,12 +4236,12 @@ private theorem step_codeOwner_preserved
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C f')
     (hFrame : ΞFrameAtC C f')
     (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
     C ≠ sstepState.executionEnv.codeOwner :=
   (step_bundled_invariant_at_C C f' cost₂ instr evmState sstepState
-    hWF hCO hNC hWit hFrame hStep).2.2.1
+    hWF hCO hNC hAtCFrame hFrame hStep).2.2.1
 
 /-- createdAccounts preserves `≠ C`. -/
 private theorem step_createdAccounts_preserved
@@ -4314,12 +4251,12 @@ private theorem step_createdAccounts_preserved
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hWit : ΞPreservesAtC C)
+    (hAtCFrame : ΞAtCFrame C f')
     (hFrame : ΞFrameAtC C f')
     (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
     ∀ a ∈ sstepState.createdAccounts, a ≠ C :=
   (step_bundled_invariant_at_C C f' cost₂ instr evmState sstepState
-    hWF hCO hNC hWit hFrame hStep).2.2.2
+    hWF hCO hNC hAtCFrame hFrame hStep).2.2.2
 
 /-- **Helper.** The content-carrying `.succ` closure of `X_inv_holds`.
 Given `EVM.X (f' + 1) validJumps evmState = .ok (.success finalState out)`,
@@ -4335,7 +4272,7 @@ private theorem X_inv_succ_content
     (_hWF : StateWF evmState.accountMap)
     (_hCO : C ≠ evmState.executionEnv.codeOwner)
     (_hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (_hWit : ΞPreservesAtC C)
+    (_hAtCFrame : ΞAtCFrame C f')
     (hFrame : ΞFrameAtC C f')
     (_IH : ∀ evmState', X_inv C f' validJumps evmState')
     (hXres : EVM.X (f' + 1) validJumps evmState
@@ -4415,20 +4352,20 @@ private theorem X_inv_succ_content
         -- H = none → recurse branch: hXres : X f' validJumps sstepState = .ok (.success finalState _out).
         have hStepGE_Z : balanceOf sstepState.accountMap C ≥ balanceOf evmStateZ.accountMap C :=
           step_balance_mono_at_C C f' cost₂ _ evmStateZ sstepState
-            hWFZ hCOZ hNCZ _hWit hFrame hStep
+            hWFZ hCOZ hNCZ _hAtCFrame hFrame hStep
         have hStepGE : balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C := by
           rw [← hBalEq]; exact hStepGE_Z
         have hWFsstep : StateWF sstepState.accountMap :=
           step_StateWF_preserved C f' cost₂ _ evmStateZ sstepState
-            hWFZ hCOZ hNCZ _hWit hFrame hStep
+            hWFZ hCOZ hNCZ _hAtCFrame hFrame hStep
         have hCOsstep : C ≠ sstepState.executionEnv.codeOwner :=
           step_codeOwner_preserved C f' cost₂ _ evmStateZ sstepState
-            hWFZ hCOZ hNCZ _hWit hFrame hStep
+            hWFZ hCOZ hNCZ _hAtCFrame hFrame hStep
         have hNCsstep : ∀ a ∈ sstepState.createdAccounts, a ≠ C :=
           step_createdAccounts_preserved C f' cost₂ _ evmStateZ sstepState
-            hWFZ hCOZ hNCZ _hWit hFrame hStep
+            hWFZ hCOZ hNCZ _hAtCFrame hFrame hStep
         -- Apply IH at sstepState. Thread hFrame : ΞFrameAtC C f' through.
-        have hIH := _IH sstepState hWFsstep hCOsstep hNCsstep _hWit hFrame
+        have hIH := _IH sstepState hWFsstep hCOsstep hNCsstep _hAtCFrame hFrame
         rw [hXres] at hIH
         -- hIH now produces the bundled triple at finalState.
         refine ⟨?_, hIH.2.1, hIH.2.2⟩
@@ -4444,13 +4381,13 @@ private theorem X_inv_succ_content
           subst hfin
           have hStepGE_Z : balanceOf sstepState.accountMap C ≥ balanceOf evmStateZ.accountMap C :=
             step_balance_mono_at_C C f' cost₂ _ evmStateZ sstepState
-              hWFZ hCOZ hNCZ _hWit hFrame hStep
+              hWFZ hCOZ hNCZ _hAtCFrame hFrame hStep
           have hWFsstep : StateWF sstepState.accountMap :=
             step_StateWF_preserved C f' cost₂ _ evmStateZ sstepState
-              hWFZ hCOZ hNCZ _hWit hFrame hStep
+              hWFZ hCOZ hNCZ _hAtCFrame hFrame hStep
           have hNCsstep : ∀ a ∈ sstepState.createdAccounts, a ≠ C :=
             step_createdAccounts_preserved C f' cost₂ _ evmStateZ sstepState
-              hWFZ hCOZ hNCZ _hWit hFrame hStep
+              hWFZ hCOZ hNCZ _hAtCFrame hFrame hStep
           refine ⟨?_, hWFsstep, hNCsstep⟩
           rw [← hBalEq]; exact hStepGE_Z
 
@@ -4471,7 +4408,7 @@ by induction on `f`, the `X`-fuel:
 private theorem X_inv_holds
     (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
     (evmState : EVM.State)
-    (hWitness : ΞPreservesAtC C)
+    (hAtCFrameAll : ∀ f', f' ≤ f → ΞAtCFrame C f')
     (hFrame : ∀ f', f' ≤ f → ΞFrameAtC C f') :
     X_inv C f validJumps evmState := by
   -- Induct on the X-fuel `f`.
@@ -4481,7 +4418,7 @@ private theorem X_inv_holds
     rw [show EVM.X 0 validJumps evmState = .error .OutOfFuel from rfl]
     trivial
   | succ f' IH =>
-    intro hWF hCO hNC hWit _hFrameAtSucc
+    intro hWF hCO hNC _hAtCFrameAtSucc _hFrameAtSucc
     -- Unfold `EVM.X (f' + 1)` to expose its body.
     show match EVM.X (f' + 1) validJumps evmState with
       | .ok (.success s' _) =>
@@ -4497,12 +4434,15 @@ private theorem X_inv_holds
       | revert _ _ => trivial
       | success finalState out =>
         have hFrame_f' : ΞFrameAtC C f' := hFrame f' (Nat.le_succ f')
+        have hAtCFrame_f' : ΞAtCFrame C f' := hAtCFrameAll f' (Nat.le_succ f')
         have hFrame' : ∀ f'_1, f'_1 ≤ f' → ΞFrameAtC C f'_1 :=
           fun f1 h1 => hFrame f1 (Nat.le_trans h1 (Nat.le_succ f'))
+        have hAtCFrame' : ∀ f'_1, f'_1 ≤ f' → ΞAtCFrame C f'_1 :=
+          fun f1 h1 => hAtCFrameAll f1 (Nat.le_trans h1 (Nat.le_succ f'))
         have IH' : ∀ evmState', X_inv C f' validJumps evmState' :=
-          fun es => IH es hFrame'
+          fun es => IH es hAtCFrame' hFrame'
         exact X_inv_succ_content C f' validJumps evmState finalState out
-          hWF hCO hNC hWit hFrame_f' IH' hXres
+          hWF hCO hNC hAtCFrame_f' hFrame_f' IH' hXres
 
 /-- At-`C` (C = codeOwner) version of `X_inv`: tracks balance preservation
 across the X-loop when the running code is restricted to Register's
@@ -4875,6 +4815,9 @@ theorem Ξ_balanceOf_ge_bundled (C : AccountAddress)
       rw [hΞ_eq]
       simp only [bind, Except.bind]
       generalize hXres : EVM.X f (D_J I'.code ⟨0⟩) _ = xRes
+      -- Convert hWitness to ΞAtCFrame at all fuels ≤ f.
+      have hAtCAll : ∀ f', f' ≤ f → ΞAtCFrame C f' :=
+        fun f' _ => ΞAtCFrame_of_witness C hWitness f'
       have hXinv : X_inv C f (D_J I'.code ⟨0⟩)
         { (default : EVM.State) with
             accountMap := σ'
@@ -4885,12 +4828,12 @@ theorem Ξ_balanceOf_ge_bundled (C : AccountAddress)
             gasAvailable := g'
             blocks := bs'
             genesisBlockHeader := gbh' } :=
-        X_inv_holds C f (D_J I'.code ⟨0⟩) _ hWitness Ξ_frame_at
+        X_inv_holds C f (D_J I'.code ⟨0⟩) _ hAtCAll Ξ_frame_at
       unfold X_inv at hXinv
       have hWFF : StateWF σ' := hWF'
       have hCOF : C ≠ I'.codeOwner := hco'
       have hNCF : ∀ a ∈ cA', a ≠ C := hnc'
-      have := hXinv hWFF hCOF hNCF hWitness (Ξ_frame_at f (Nat.le_refl _))
+      have := hXinv hWFF hCOF hNCF (hAtCAll f (Nat.le_refl _)) (Ξ_frame_at f (Nat.le_refl _))
       rw [hXres] at this
       cases xRes with
       | error _ => trivial
@@ -4909,6 +4852,7 @@ theorem ΞFrameAtC_of_witness (C : AccountAddress)
   intro fuel _hf cA' gbh' bs' σ' σ₀' g' A' I' hWF' hco' hnc'
   exact Ξ_balanceOf_ge_bundled C hWitness fuel cA' gbh' bs' σ' σ₀' g' A' I'
     hWF' hco' hnc'
+
 
 /-- `Ξ_balanceOf_ge` — Ξ (code execution) preserves `balanceOf C` when
 code runs at `I.codeOwner ≠ C`.
