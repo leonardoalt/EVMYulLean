@@ -1081,4 +1081,126 @@ theorem step_REVERT_shape
   subst hStep
   refine ⟨rfl, rfl, rfl⟩
 
+/-! ## Copy ops (CALLDATACOPY, CODECOPY, RETURNDATACOPY, EXTCODECOPY) -/
+
+/-- CALLDATACOPY: pops 3, no push, `pc += 1`. -/
+theorem step_CALLDATACOPY_shape
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.CALLDATACOPY, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = tl ∧
+    s'.executionEnv = s.executionEnv := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dispatchTernaryCopyOp EVM.ternaryCopyOp at hStep
+  rw [hStk] at hStep
+  simp only [Stack.pop3, Id_run_ok, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl⟩
+
+/-- CODECOPY: pops 3, no push, `pc += 1`. -/
+theorem step_CODECOPY_shape
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.CODECOPY, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = tl ∧
+    s'.executionEnv = s.executionEnv := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dispatchTernaryCopyOp EVM.ternaryCopyOp at hStep
+  rw [hStk] at hStep
+  simp only [Stack.pop3, Id_run_ok, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl⟩
+
+/-- RETURNDATACOPY: pops 3, no push, `pc += 1`. Implemented inline in
+`EvmYul.step` (does not go through a generic dispatcher). -/
+theorem step_RETURNDATACOPY_shape
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.RETURNDATACOPY, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = tl ∧
+    s'.executionEnv = s.executionEnv := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  rw [hStk] at hStep
+  simp only [Stack.pop3, Id_run_ok, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl⟩
+
+/-- EXTCODECOPY: pops 4, no push, `pc += 1`. -/
+theorem step_EXTCODECOPY_shape
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 hd4 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: hd4 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.EXTCODECOPY, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = tl ∧
+    s'.executionEnv = s.executionEnv := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dispatchQuaternaryCopyOp EVM.quaternaryCopyOp at hStep
+  rw [hStk] at hStep
+  simp only [Stack.pop4, Id_run_ok, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl⟩
+
+/-! ## DUP1 / SWAP1 -/
+
+/-- DUP1: pops 0, pushes a copy of the top, `pc += 1`. -/
+theorem step_DUP1_shape
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.DUP1, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd :: s.stack ∧
+    s'.executionEnv = s.executionEnv := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dup at hStep
+  rw [hStk] at hStep
+  simp only [show List.take 1 (hd :: tl) = [hd] from rfl,
+             List.length_singleton, ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, ?_, rfl⟩
+  show [hd].getLast! :: (hd :: tl) = hd :: s.stack
+  rw [hStk]; rfl
+
+/-- SWAP1: swaps the top two stack elements, `pc += 1`. -/
+theorem step_SWAP1_shape
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.SWAP1, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd2 :: hd1 :: tl ∧
+    s'.executionEnv = s.executionEnv := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold swap at hStep
+  rw [hStk] at hStep
+  simp only [show List.take (1 + 1) (hd1 :: hd2 :: tl) = [hd1, hd2] from rfl,
+             show List.drop (1 + 1) (hd1 :: hd2 :: tl) = tl from rfl,
+             show ([hd1, hd2] : List UInt256).length = 1 + 1 from rfl,
+             ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl⟩
+
 end EvmYul.Frame
