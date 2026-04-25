@@ -6,6 +6,7 @@ import EvmYul.Frame.StepSystemFrame
 import EvmYul.Frame.UpsilonFrame
 import EvmYul.Frame.XFrame
 import EvmYul.Frame.StepShapes
+import EvmYul.Frame.PcWalk
 
 /-!
 # Frame library (upstream A1–A6)
