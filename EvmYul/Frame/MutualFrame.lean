@@ -4351,25 +4351,38 @@ private theorem X_inv_holds
 across the X-loop when the running code is restricted to Register's
 8-opcode subset and any CALL has value 0 at stack position 2.
 
-The per-step CALL-v=0 obligation is taken as an oracle hypothesis
-quantified over reachable intermediate states; the bytecode walk
-(future work) discharges it by structural induction over Register's
-trace. -/
+This version is parameterised by a `Reachable : EVM.State → Prop`
+predicate (the consumer-supplied bytecode-trace witness) plus its
+closure properties: stability under Z (gas-only update) and step,
+plus the two implied per-state facts (op ∈ Register's 8, and CALL ⇒
+stack[2]? = 0). Together with `Reachable evmState`, these are
+discharge-able by the consumer (see `RegisterTrace` in
+`EvmSmith/Demos/Register/BytecodeFrame.lean`). -/
 private def X_inv_at_C_v0 (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
+    (Reachable : EVM.State → Prop)
     (evmState : EVM.State) : Prop :=
   StateWF evmState.accountMap →
   C = evmState.executionEnv.codeOwner →
   (∀ a ∈ evmState.createdAccounts, a ≠ C) →
   ΞPreservesAtC C →
   ΞFrameAtC C f →
-  -- per-step Register-op restriction (the running op at every step is
-  -- one of Register's 8)
+  Reachable evmState →
+  -- Z preserves Reachable (Z only changes gasAvailable).
+  (∀ s : EVM.State, ∀ g : UInt256, Reachable s →
+      Reachable { s with gasAvailable := g }) →
+  -- step preserves Reachable.
+  (∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
+      EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
+      Reachable s') →
+  -- A reachable state's decoded op is one of Register's 8.
   (∀ s : EVM.State, ∀ op : Operation .EVM, ∀ arg,
+    Reachable s →
     fetchInstr s.executionEnv s.pc = .ok (op, arg) →
     op = .Push .PUSH1 ∨ op = .CALLDATALOAD ∨ op = .CALLER ∨
     op = .SSTORE ∨ op = .GAS ∨ op = .POP ∨ op = .STOP ∨ op = .CALL) →
-  -- per-step CALL-v=0 oracle (every reachable state with op=CALL has stack[2]=0)
+  -- A reachable state with op = CALL has stack[2]? = 0.
   (∀ s : EVM.State, ∀ arg,
+    Reachable s →
     fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
     s.stack[2]? = some ⟨0⟩) →
   match EVM.X f validJumps evmState with
@@ -4384,22 +4397,25 @@ private def X_inv_at_C_v0 (C : AccountAddress) (f : ℕ) (validJumps : Array UIn
 Structurally identical to `X_inv_holds` but dispatching to
 `step_bundled_invariant_at_C_v0` (which discharges the at-`C` /
 value-zero CALL bundle) rather than `step_bundled_invariant_at_C`. The
-per-step Register-op and v=0 hypotheses are universally quantified over
-states, so they thread through the recursion uniformly. -/
+per-step Register-op and v=0 facts are now derived from the
+`Reachable` predicate (consumer-supplied) and threaded through the
+recursion via Z- and step-preservation. -/
 private theorem X_inv_at_C_v0_holds
     (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
+    (Reachable : EVM.State → Prop)
     (evmState : EVM.State)
     (hWitness : ΞPreservesAtC C)
     (hFrame : ∀ f', f' ≤ f → ΞFrameAtC C f') :
-    X_inv_at_C_v0 C f validJumps evmState := by
+    X_inv_at_C_v0 C f validJumps Reachable evmState := by
   -- Induct on the X-fuel `f`.
   induction f generalizing evmState with
   | zero =>
-    intro _ _ _ _ _ _ _
+    intro _ _ _ _ _ _ _ _ _ _
     rw [show EVM.X 0 validJumps evmState = .error .OutOfFuel from rfl]
     trivial
   | succ f' IH =>
-    intro hWF hCC hNC hWit _hFrameAtSucc hRegOpAll h_v0_All
+    intro hWF hCC hNC hWit _hFrameAtSucc
+            hReach hReach_Z hReach_step hRegOpReach h_v0_Reach
     -- Unfold `EVM.X (f' + 1)` to expose its body.
     show match EVM.X (f' + 1) validJumps evmState with
       | .ok (.success s' _) =>
@@ -4420,23 +4436,15 @@ private theorem X_inv_at_C_v0_holds
         split at hXres
         case h_1 _ _ => exact absurd hXres (by simp)
         case h_2 _ evmStateZ cost₂ hZ =>
-          -- The Z-body only modifies `gasAvailable`; preserve
-          -- accountMap/executionEnv/createdAccounts/pc.
-          have hZ_struct :
-              evmStateZ.accountMap = evmState.accountMap ∧
-              evmStateZ.executionEnv = evmState.executionEnv ∧
-              evmStateZ.createdAccounts = evmState.createdAccounts ∧
-              evmStateZ.pc = evmState.pc := by
+          -- The Z-body only modifies `gasAvailable`; everything else preserved.
+          have hZ_full :
+              evmStateZ = { evmState with gasAvailable := evmStateZ.gasAvailable } := by
             simp only [bind, Except.bind, pure, Except.pure] at hZ
             by_cases hc1 : evmState.gasAvailable.toNat < memoryExpansionCost evmState ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1
             · rw [if_pos hc1] at hZ; exact Except.noConfusion hZ
             rw [if_neg hc1] at hZ
             set evmState' : EVM.State :=
               { evmState with gasAvailable := evmState.gasAvailable - UInt256.ofNat (memoryExpansionCost evmState ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1) } with hevmState'
-            have h_accMap : evmState'.accountMap = evmState.accountMap := by rw [hevmState']
-            have h_eEnv   : evmState'.executionEnv = evmState.executionEnv := by rw [hevmState']
-            have h_cA     : evmState'.createdAccounts = evmState.createdAccounts := by rw [hevmState']
-            have h_pc     : evmState'.pc = evmState.pc := by rw [hevmState']
             by_cases hc2 : evmState'.gasAvailable.toNat < C' evmState' ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1
             · rw [if_pos hc2] at hZ; exact Except.noConfusion hZ
             rw [if_neg hc2] at hZ
@@ -4452,8 +4460,11 @@ private theorem X_inv_at_C_v0_holds
               | (injection hZ with h_inj
                  injection h_inj with h_inj1 _
                  subst h_inj1
-                 exact ⟨h_accMap, h_eEnv, h_cA, h_pc⟩)
-          obtain ⟨hZ_accMap, hZ_eEnv, hZ_cA, hZ_pc⟩ := hZ_struct
+                 rfl)
+          have hZ_accMap : evmStateZ.accountMap = evmState.accountMap := by rw [hZ_full]
+          have hZ_eEnv : evmStateZ.executionEnv = evmState.executionEnv := by rw [hZ_full]
+          have hZ_cA : evmStateZ.createdAccounts = evmState.createdAccounts := by rw [hZ_full]
+          have hZ_pc : evmStateZ.pc = evmState.pc := by rw [hZ_full]
           have hWFZ : StateWF evmStateZ.accountMap := by rw [hZ_accMap]; exact hWF
           have hCCZ : C = evmStateZ.executionEnv.codeOwner := by
             rw [hZ_eEnv]; exact hCC
@@ -4461,6 +4472,10 @@ private theorem X_inv_at_C_v0_holds
             rw [hZ_cA]; exact hNC
           have hBalEq : balanceOf evmStateZ.accountMap C = balanceOf evmState.accountMap C := by
             rw [hZ_accMap]
+          -- Reachable preservation under Z: Z only changes gasAvailable.
+          have hReachZ : Reachable evmStateZ := by
+            rw [hZ_full]
+            exact hReach_Z evmState evmStateZ.gasAvailable hReach
           -- The body simplifies to `step >>= (λ s ↦ match H s w with ...)`.
           simp only [bind, Except.bind] at hXres
           split at hXres
@@ -4488,7 +4503,7 @@ private theorem X_inv_at_C_v0_holds
                 ΞFrameAtC_mono C ((f'' + 1) + 1) (f'' + 1) (Nat.le_succ _) _hFrameAtSucc
               -- Discharge `hRegOp`. Two cases on decode.
               -- If decode = none → instr defaults to (.STOP, .none), hence op = .STOP.
-              -- If decode = some (op', arg') → fetchInstr returns .ok (op', arg'), apply hRegOpAll.
+              -- If decode = some (op', arg') → fetchInstr returns .ok (op', arg'), apply hRegOpReach.
               have hRegOp : op = .Push .PUSH1 ∨ op = .CALLDATALOAD ∨ op = .CALLER ∨
                             op = .SSTORE ∨ op = .GAS ∨ op = .POP ∨ op = .STOP ∨ op = .CALL := by
                 cases hDec : decode evmStateZ.executionEnv.code evmStateZ.pc with
@@ -4529,11 +4544,11 @@ private theorem X_inv_at_C_v0_holds
                   have hArgEq : arg = arg' := (Prod.mk.inj hPair).2
                   have hFetch' : fetchInstr evmStateZ.executionEnv evmStateZ.pc = .ok (op, arg) := by
                     rw [hFetch, hOpEq, hArgEq]
-                  exact hRegOpAll evmStateZ op arg hFetch'
+                  exact hRegOpReach evmStateZ op arg hReachZ hFetch'
               -- Discharge `h_v0`: if op = CALL, then stack[2]? = some 0 at evmStateZ.
               have h_v0 : op = .CALL → evmStateZ.stack[2]? = some ⟨0⟩ := by
                 intro hOpCall
-                -- decode must give some (.CALL, _). Apply h_v0_All.
+                -- decode must give some (.CALL, _). Apply h_v0_Reach.
                 cases hDec : decode evmStateZ.executionEnv.code evmStateZ.pc with
                 | none =>
                   -- Then op = .STOP, contradicting op = .CALL.
@@ -4569,7 +4584,7 @@ private theorem X_inv_at_C_v0_holds
                     rw [hOpEq] at hOpCall
                     rw [hOpCall]
                     rfl
-                  exact h_v0_All evmStateZ arg' hFetch
+                  exact h_v0_Reach evmStateZ arg' hReachZ hFetch
               -- Now we can invoke `step_bundled_invariant_at_C_v0`. We need
               -- `hStep` in the form `EVM.step (f''+1) cost₂ (some (op, arg)) evmStateZ`.
               -- After `obtain` destructured `decRes`, hStep already has `(op, arg)`
@@ -4583,6 +4598,9 @@ private theorem X_inv_at_C_v0_holds
               have hStepGE : balanceOf sstepState.accountMap C
                            ≥ balanceOf evmState.accountMap C := by
                 rw [← hBalEq]; exact hStepGE_Z
+              -- Reachable preservation under step.
+              have hReachStep : Reachable sstepState :=
+                hReach_step evmStateZ sstepState f'' cost₂ op arg hReachZ hStep'
               -- Split on H's result.
               split at hXres
               case h_1 _ hH_none =>
@@ -4592,10 +4610,11 @@ private theorem X_inv_at_C_v0_holds
                   fun f1 h1 =>
                     ΞFrameAtC_mono C ((f'' + 1) + 1) f1
                       (Nat.le_trans h1 (Nat.le_succ _)) _hFrameAtSucc
-                have IH' : ∀ evmState', X_inv_at_C_v0 C (f'' + 1) validJumps evmState' :=
+                have IH' : ∀ evmState', X_inv_at_C_v0 C (f'' + 1) validJumps Reachable evmState' :=
                   fun es => IH es hFrame'
                 have hIH := IH' sstepState hWFsstep hCCsstep hNCsstep hWit
-                                hFrameAtSuccF' hRegOpAll h_v0_All
+                                hFrameAtSuccF' hReachStep hReach_Z hReach_step
+                                hRegOpReach h_v0_Reach
                 rw [hXres] at hIH
                 refine ⟨?_, hIH.2.1, hIH.2.2⟩
                 exact Nat.le_trans hStepGE hIH.1
