@@ -147,6 +147,19 @@ axiom lambda_derived_address_ne_C
     let a : AccountAddress := Fin.ofNat _ aNat
     a ≠ C
 
+/-! ### Substate self-destruct exclusion at `C`
+
+`SubstateSDExclude A C` says all entries in `A.selfDestructSet` are
+distinct from `C`. This is preserved through every Ξ/Θ/Λ run when both
+the input substate satisfies it and `(∀ a ∈ createdAccounts, a ≠ C)`.
+
+Reason: SELFDESTRUCT is the only step that adds to `selfDestructSet`,
+and it adds `Iₐ` only in the "created in same tx" branch — i.e. when
+`Iₐ ∈ createdAccounts`. Under `(∀ a ∈ createdAccounts, a ≠ C)`, this
+gives `Iₐ ≠ C`. Thus the resulting SD-set still excludes `C`. -/
+def SubstateSDExclude (A : Substate) (C : AccountAddress) : Prop :=
+  ∀ k ∈ A.selfDestructSet.1.toList, k ≠ C
+
 /-- Code-specific Ξ preservation witness.
 
 When the Ξ interpreter runs at `I.codeOwner = C` — i.e. we're
@@ -167,6 +180,70 @@ def ΞPreservesAtC (C : AccountAddress) : Prop :=
     | .ok (.success (cA', σ', _, _) _) =>
         balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
     | _ => True
+
+/-- **Strengthened sibling** to `ΞPreservesAtC`: in addition to balance
+≥, StateWF, and cA-exclusion, this predicate exposes the post-frame
+substate's `selfDestructSet` exclusion of `C`. Threaded with the input
+substate's SD-exclusion (`SubstateSDExclude A C`) as a hypothesis.
+
+This is the Phase A target for SD-set tracking. Once the closure
+proves it, consumers (e.g. `register_balance_mono`) can derive
+`RegSDExclusion` directly from `bytecodePreservesBalance C` plus
+this predicate, without needing a separate structural hypothesis.
+
+NOTE: as of Phase A's first round, the closure proof of
+`ΞPreservesAtCStrong` (via `ΞPreservesAtCStrong_of_Reachable`) is not
+yet wired up — the predicate is defined and ready for downstream use,
+but its main proof obligation requires propagating SD-set tracking
+through the entire mutual closure (Θ/Λ/Ξ/X). -/
+def ΞPreservesAtCStrong (C : AccountAddress) : Prop :=
+  ∀ (fuel : ℕ) (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+    (I : ExecutionEnv .EVM),
+    StateWF σ →
+    I.codeOwner = C →
+    (∀ a ∈ createdAccounts, a ≠ C) →
+    SubstateSDExclude A C →
+    match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+    | .ok (.success (cA', σ', _, A') _) =>
+        balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C) ∧
+          SubstateSDExclude A' C
+    | _ => True
+
+/-- Forgetful map: a strong witness, applied to a substate whose SD-set
+already excludes `C`, yields the unstrengthened predicate's conclusion.
+
+Note: this isn't a generic forgetful map (the strong predicate requires
+an input SD-exclusion that the unstrengthened form doesn't know about).
+It's a thin convenience wrapper that returns the first three conjuncts
+of the strong predicate's output, taking the SD-input as an explicit
+hypothesis. -/
+theorem ΞPreservesAtC_of_Strong_with_SD (C : AccountAddress)
+    (h : ΞPreservesAtCStrong C)
+    (fuel : ℕ) (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+    (I : ExecutionEnv .EVM)
+    (hWF : StateWF σ)
+    (hCO : I.codeOwner = C)
+    (hNC : ∀ a ∈ createdAccounts, a ≠ C)
+    (hSD : SubstateSDExclude A C) :
+    match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+    | .ok (.success (cA', σ', _, _) _) =>
+        balanceOf σ' C ≥ balanceOf σ C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+    | _ => True := by
+  have hh := h fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I
+                hWF hCO hNC hSD
+  cases hΞ : EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+  | error _ => trivial
+  | ok r =>
+    cases r with
+    | success data out =>
+      obtain ⟨cA', σ', _, A'⟩ := data
+      rw [hΞ] at hh
+      exact ⟨hh.1, hh.2.1, hh.2.2.1⟩
+    | revert _ _ => trivial
 
 /-- The `Ξ_balanceOf_ge` statement as a `Prop`, parameterised over the
 maximum fuel. Used as an induction witness in the mutual closure: the
