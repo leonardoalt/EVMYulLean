@@ -90,7 +90,7 @@ decreased). So the fallthrough preserves `balanceOf` under the usual
 side-conditions. -/
 
 theorem EVM_step_fallthrough_ge
-    (f : ℕ) (gasCost : ℕ)
+    (_f : ℕ) (gasCost : ℕ)
     (instr : Operation .EVM × Option (UInt256 × Nat))
     (s s' : EVM.State) (C : AccountAddress)
     (hWF : StateWF s.accountMap)
