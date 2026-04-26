@@ -1296,6 +1296,10 @@ private theorem stateWF_lambda_σStar_some
     rw [this]
     exact hWF.boundedTotal
 
+section StateWFThetaSigma1
+
+set_option linter.unusedSimpArgs false
+
 /-- `StateWF` for Θ's transfer state `σ₁`.
 
 Θ's sender/recipient update is `σ'₁ = credit r by v`, `σ₁ = debit s by v`.
@@ -1305,7 +1309,12 @@ balance ≥ v), the transfer is value-conserving (sender loses ≤ v,
 recipient gains ≤ v) so `totalETH σ₁ ≤ totalETH σ` and `StateWF σ₁`.
 
 If `r = s`, the credit and the subsequent debit cancel (modulo UInt256
-round-trip) so `totalETH σ₁ = totalETH σ` directly.  -/
+round-trip) so `totalETH σ₁ = totalETH σ` directly.
+
+The `set_option linter.unusedSimpArgs false` above suppresses a false
+positive at line 1501: `simp only [hFr]` is needed for contextual
+match-binder reduction; replacing with `rw [hFr]` fails because the
+rewrite target appears inside a binder simp can see through. -/
 private theorem stateWF_theta_σ₁
     (σ : AccountMap .EVM) (hWF : StateWF σ)
     (s r : AccountAddress) (v : UInt256)
@@ -1604,6 +1613,8 @@ private theorem stateWF_theta_σ₁
             = totalETH σ := by omega
         rw [h_tot]
         exact hWF.boundedTotal
+
+end StateWFThetaSigma1
 
 /-- **Θ precompile helper** — For any precompile `f` that satisfies
 `precompile_preserves_accountMap`, the combined `(∅, f σ₁ g A I).2.1`

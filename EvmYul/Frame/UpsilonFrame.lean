@@ -179,7 +179,16 @@ termination_by l r => l.size + r.size
 decreasing_by
   all_goals (simp only [RBNode.size]; omega)
 
-/-- RBNode-level lemma: `del cut` removes exactly the entries with `cut = .eq`. -/
+section DelToListFilter
+
+set_option linter.unusedSimpArgs false
+
+/-- RBNode-level lemma: `del cut` removes exactly the entries with `cut = .eq`.
+
+The `set_option linter.unusedSimpArgs false` above suppresses two
+false positives at lines 218 and 232: `simp only [hcy]` performs
+contextual reduction in a match-binder where `rw` fails to find the
+pattern. -/
 private theorem del_toList_filter
     {α : Type*} {cmp : α → α → Ordering} {cut : α → Ordering}
     [Std.TransCmp cmp] [RBNode.IsStrictCut cmp cut]
@@ -256,6 +265,8 @@ private theorem del_toList_filter
       have hy : decide (cut y ≠ .eq) = false := by simp [hcy]
       simp only [append_toList, haFilter, hbFilter]
       simp
+
+end DelToListFilter
 
 /-- RBNode erase ↔ toList-filter. -/
 private theorem erase_toList_filter
