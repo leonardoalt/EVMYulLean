@@ -100,7 +100,7 @@ private theorem filter_eq_self_of_all {α} {L : List α} {Q : α → Bool}
   | cons a L ih =>
     have ha : Q a = true := h a (by simp)
     have ih' := ih fun x hx => h x (by simp [hx])
-    simp [List.filter_cons, ha, ih']
+    simp [ha, ih']
 
 /-- `append` on RBNodes preserves the concatenation of `toList`. -/
 private theorem append_toList {α : Type*} :
@@ -219,8 +219,8 @@ private theorem del_toList_filter
       split
       all_goals
         simp only [RBNode.balLeft_toList, RBNode.toList_node,
-                   hy, hbFilter, iha']
-        simp [if_true]
+                   hbFilter, iha']
+        simp
     | .gt =>
       have haFilter : a.toList.filter (fun p => decide (cut p ≠ .eq)) = a.toList := by
         apply filter_eq_self_of_all
@@ -233,8 +233,8 @@ private theorem del_toList_filter
       split
       all_goals
         simp only [RBNode.balRight_toList, RBNode.toList_node,
-                   hy, haFilter, ihb']
-        simp [if_true]
+                   haFilter, ihb']
+        simp
     | .eq =>
       have haFilter : a.toList.filter (fun p => decide (cut p ≠ .eq)) = a.toList := by
         apply filter_eq_self_of_all
@@ -254,7 +254,7 @@ private theorem del_toList_filter
           rw [hyz] at hE; exact hE.symm
         simp [hcz]
       have hy : decide (cut y ≠ .eq) = false := by simp [hcy]
-      simp only [hcy, append_toList, haFilter, hbFilter, hy]
+      simp only [append_toList, haFilter, hbFilter]
       simp
 
 /-- RBNode erase ↔ toList-filter. -/
