@@ -44,7 +44,7 @@ theorem step_PUSH1_shape
   unfold EVM.step at hStep
   simp only [bind, Except.bind, pure, Except.pure] at hStep
   unfold EvmYul.step at hStep
-  simp only [Id.run, Option.some_bind] at hStep
+  simp only [Id.run] at hStep
   injection hStep with hStep
   subst hStep
   refine ⟨rfl, rfl, rfl⟩
@@ -80,7 +80,7 @@ theorem step_PUSH_shape
   cases op
   · exact absurd rfl hOpNeq
   all_goals (
-    simp only [Id.run, Option.some_bind] at hStep
+    simp only [Id.run] at hStep
     injection hStep with hStep
     subst hStep
     refine ⟨rfl, rfl, rfl⟩)
