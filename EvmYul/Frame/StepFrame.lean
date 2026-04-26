@@ -447,9 +447,9 @@ theorem sstore_preserves_balanceOf
   unfold EvmYul.State.sstore
   simp only [EvmYul.State.lookupAccount]
   match hFind : self.accountMap.find? self.executionEnv.codeOwner with
-  | none => simp [Option.option, hFind]
+  | none => simp [Option.option]
   | some acc =>
-    simp only [Option.option, hFind]
+    simp only [Option.option]
     change balanceOf (self.accountMap.insert self.executionEnv.codeOwner
                        (acc.updateStorage spos sval)) a
          = balanceOf self.accountMap a
@@ -464,9 +464,9 @@ theorem sstore_preserves_codeOf
   unfold EvmYul.State.sstore
   simp only [EvmYul.State.lookupAccount]
   match hFind : self.accountMap.find? self.executionEnv.codeOwner with
-  | none => simp [Option.option, hFind]
+  | none => simp [Option.option]
   | some acc =>
-    simp only [Option.option, hFind]
+    simp only [Option.option]
     change codeOf (self.accountMap.insert self.executionEnv.codeOwner
                      (acc.updateStorage spos sval)) a
          = codeOf self.accountMap a
@@ -481,9 +481,9 @@ theorem tstore_preserves_balanceOf
   unfold EvmYul.State.tstore
   simp only [EvmYul.State.lookupAccount]
   match hFind : self.accountMap.find? self.executionEnv.codeOwner with
-  | none => simp [Option.option, hFind]
+  | none => simp [Option.option]
   | some acc =>
-    simp only [Option.option, hFind]
+    simp only [Option.option]
     change balanceOf (self.accountMap.insert self.executionEnv.codeOwner
                        (acc.updateTransientStorage spos sval)) a
          = balanceOf self.accountMap a
@@ -498,9 +498,9 @@ theorem tstore_preserves_codeOf
   unfold EvmYul.State.tstore
   simp only [EvmYul.State.lookupAccount]
   match hFind : self.accountMap.find? self.executionEnv.codeOwner with
-  | none => simp [Option.option, hFind]
+  | none => simp [Option.option]
   | some acc =>
-    simp only [Option.option, hFind]
+    simp only [Option.option]
     change codeOf (self.accountMap.insert self.executionEnv.codeOwner
                      (acc.updateTransientStorage spos sval)) a
          = codeOf self.accountMap a
@@ -674,7 +674,7 @@ theorem EvmYul.step_opRow_Env
   · exact machineStateOp_preserves_accountMap h       -- RETURNDATASIZE
   · -- RETURNDATACOPY — inline
     split at h
-    · simp only [Id_run_ok, Except.ok.injEq] at h
+    · simp only [Except.ok.injEq] at h
       subst h; rfl
     · exact absurd h (by simp)
   · exact unaryStateOp_preserves_accountMap
@@ -721,7 +721,7 @@ theorem EvmYul.step_opRow_StackMemFlow
   · -- MLOAD inline
     apply opRow_of_accountMap_eq
     split at h
-    · simp only [Id_run_ok, Except.ok.injEq] at h
+    · simp only [Except.ok.injEq] at h
       subst h; rfl
     · exact absurd h (by simp)
   · -- MSTORE
@@ -1237,9 +1237,9 @@ theorem sstore_preserves_createdAccounts
   unfold EvmYul.State.sstore
   simp only [EvmYul.State.lookupAccount]
   match hFind : self.accountMap.find? self.executionEnv.codeOwner with
-  | none => simp [Option.option, hFind]
+  | none => simp [Option.option]
   | some acc =>
-    simp only [Option.option, hFind]
+    simp only [Option.option]
     show (_ : EvmYul.State .EVM).createdAccounts = self.createdAccounts
     rfl
 
@@ -1249,9 +1249,9 @@ theorem tstore_preserves_createdAccounts
   unfold EvmYul.State.tstore
   simp only [EvmYul.State.lookupAccount]
   match hFind : self.accountMap.find? self.executionEnv.codeOwner with
-  | none => simp [Option.option, hFind]
+  | none => simp [Option.option]
   | some acc =>
-    simp only [Option.option, hFind]
+    simp only [Option.option]
     unfold EvmYul.State.updateAccount; rfl
 
 theorem sstore_preserves_executionEnv
@@ -1260,9 +1260,9 @@ theorem sstore_preserves_executionEnv
   unfold EvmYul.State.sstore
   simp only [EvmYul.State.lookupAccount]
   match hFind : self.accountMap.find? self.executionEnv.codeOwner with
-  | none => simp [Option.option, hFind]
+  | none => simp [Option.option]
   | some acc =>
-    simp only [Option.option, hFind]
+    simp only [Option.option]
     show (_ : EvmYul.State .EVM).executionEnv = self.executionEnv
     rfl
 
@@ -1272,9 +1272,9 @@ theorem tstore_preserves_executionEnv
   unfold EvmYul.State.tstore
   simp only [EvmYul.State.lookupAccount]
   match hFind : self.accountMap.find? self.executionEnv.codeOwner with
-  | none => simp [Option.option, hFind]
+  | none => simp [Option.option]
   | some acc =>
-    simp only [Option.option, hFind]
+    simp only [Option.option]
     unfold EvmYul.State.updateAccount; rfl
 
 /-! ## opRow-analog for executionEnv/createdAccounts preservation -/
@@ -1354,7 +1354,7 @@ theorem EvmYul.step_eECARow_Env
   · exact machineStateOp_preserves_eEnv_cA h       -- RETURNDATASIZE
   · -- RETURNDATACOPY
     split at h
-    · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+    · simp only [Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
     · exact absurd h (by simp)
   · exact unaryStateOp_preserves_eEnv_cA
       (fun st v => extCodeHash_preserves_executionEnv st v)
@@ -1392,7 +1392,7 @@ theorem EvmYul.step_eECARow_StackMemFlow
     · exact absurd h (by simp)
   · -- MLOAD inline
     split at h
-    · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+    · simp only [Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
     · exact absurd h (by simp)
   · exact binaryMachineStateOp_preserves_eEnv_cA h    -- MSTORE
   · exact unaryStateOp_preserves_eEnv_cA
@@ -1598,7 +1598,7 @@ theorem EvmYul.step_accountMap_eq_of_strict
         (fun ss a b c d => extCodeCopy'_preserves_accountMap ss a b c d) h
     · exact machineStateOp_preserves_accountMap h
     · split at h
-      · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+      · simp only [Except.ok.injEq] at h; subst h; rfl
       · exact absurd h (by simp)
     · exact unaryStateOp_preserves_accountMap
         (fun st v => extCodeHash_preserves_accountMap st v) h
@@ -1623,7 +1623,7 @@ theorem EvmYul.step_accountMap_eq_of_strict
       · injection h with h; subst h; rfl
       · exact absurd h (by simp)
     · split at h
-      · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+      · simp only [Except.ok.injEq] at h; subst h; rfl
       · exact absurd h (by simp)
     · exact binaryMachineStateOp_preserves_accountMap h
     · exact unaryStateOp_preserves_accountMap
