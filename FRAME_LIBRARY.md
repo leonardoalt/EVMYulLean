@@ -206,3 +206,39 @@ declared at the top of `MutualFrame.lean` with full motivation.
 
 The previously-extant `tx_validity` global axiom was **removed**;
 it is now an explicit hypothesis on consumer theorems.
+
+## Partial Phase A: substate / SD-set tracking (paused)
+
+A follow-up effort to derive the consumer-side `*SDExclusion` and
+`*DeadAtσP` boundary hypotheses inside Lean (eliminating them from
+the API surface of consumer theorems like `register_balance_mono`)
+landed leaf infrastructure but **paused** before the full closure
+rewrite. What's available today:
+
+* `SubstateSDExclude A C : Prop` — substate-level SD-set exclusion.
+* `ΞPreservesAtCStrong C` — 4-conjunct sibling of `ΞPreservesAtC`
+  including SD-exclusion in the post-condition.
+* `ΞFrameAtCStrong C maxFuel` and `ΞAtCFrameStrong C maxFuel` —
+  fuel-bounded variants of the strong predicates (parallels of
+  `ΞFrameAtC` / `ΞAtCFrame`).
+* `ΞAtCFrameStrong_of_witness`, `ΞFrameAtC_of_Strong`,
+  monotonicity lemmas — projections / fuel-bound monotonicity.
+* `selfdestruct_preserves_SD_exclude_C` (in `SelfdestructFrame.lean`)
+  — leaf step lemma: SELFDESTRUCT at `Iₐ ≠ C` preserves SD-exclusion
+  at C.
+* Nine per-precompile substate-purity lemmas + bundled
+  `applyPrecompile_substate_eq_when_in_range` — for the precompile
+  branch of Θ.
+
+What's open: the parallel rewrite of `Θ_body_*`, `Θ_balanceOf_ge_bdd`,
+`Λ_balanceOf_ge_bdd`, the six `step_*_arm` helpers,
+`step_bundled_invariant_at_C`, `X_inv_succ_content` / `X_inv_holds`,
+`X_inv_at_C_v0_holds`, and the closing
+`Ξ_balanceOf_ge_bundled_strong` + `ΞPreservesAtC_of_Reachable_strong`
+— roughly 1500 LoC of cross-referencing tactic proof that needs to
+land in lockstep. See evm-smith's `GENERALIZATION_PLAN.md` Step 5
+for the full plan.
+
+Until that lands, downstream consumers (e.g. `register_balance_mono`)
+still take `*SDExclusion` and `*DeadAtσP` as caller-supplied
+hypotheses (not axioms).
