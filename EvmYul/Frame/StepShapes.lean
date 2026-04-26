@@ -32,6 +32,105 @@ namespace EvmYul.Frame
 
 open EvmYul EvmYul.EVM
 
+/-! ## Reusable proof-body macros
+
+These macros capture the four shape-proof patterns that recur across
+~50 of the per-opcode lemmas. Each lemma below that uses one is a
+one-liner; the dispatcher identifier is the only thing that varies. -/
+
+/-- Shape-proof body for an opcode that pushes one value (with no popped
+input) via a "dispatch op" of the form `dispatchD EVM.d`. Closes goals
+of shape `pc=pc+1 ∧ (∃ v, stack=v::stack) ∧ executionEnv=executionEnv`. -/
+local macro "step_push_via_dispatch" disp:ident op:ident hStep:ident : tactic => `(tactic| (
+  unfold EVM.step at $hStep:ident
+  simp only [bind, Except.bind, pure, Except.pure] at $hStep:ident
+  unfold EvmYul.step at $hStep:ident
+  simp only [Id.run] at $hStep:ident
+  unfold $disp:ident $op:ident at $hStep:ident
+  simp only [Id_run_ok, Except.ok.injEq] at $hStep:ident
+  subst $hStep:ident
+  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩))
+
+/-- Shape-proof body for a unary state op (pops 1, pushes 1) of the
+form `dispatchUnaryStateOp EVM.unaryStateOp`. Closes goals of shape
+`pc=pc+1 ∧ (∃ v, stack=v::tl) ∧ executionEnv=executionEnv`. -/
+local macro "step_pop1_push1_unaryStateOp" hStk:ident hStep:ident : tactic => `(tactic| (
+  unfold EVM.step at $hStep:ident
+  simp only [bind, Except.bind, pure, Except.pure] at $hStep:ident
+  unfold EvmYul.step at $hStep:ident
+  simp only [Id.run] at $hStep:ident
+  unfold dispatchUnaryStateOp EVM.unaryStateOp at $hStep:ident
+  rw [$hStk:ident] at $hStep:ident
+  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at $hStep:ident
+  subst $hStep:ident
+  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩))
+
+/-- Shape-proof body for a unary primop (pops 1, pushes 1) of the form
+`dispatchUnary EVM.execUnOp`. -/
+local macro "step_pop1_push1_unary" hStk:ident hStep:ident : tactic => `(tactic| (
+  unfold EVM.step at $hStep:ident
+  simp only [bind, Except.bind, pure, Except.pure] at $hStep:ident
+  unfold EvmYul.step at $hStep:ident
+  simp only [Id.run] at $hStep:ident
+  unfold dispatchUnary EVM.execUnOp at $hStep:ident
+  rw [$hStk:ident] at $hStep:ident
+  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at $hStep:ident
+  subst $hStep:ident
+  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩))
+
+/-- Shape-proof body for a binary primop (pops 2, pushes 1) of the form
+`dispatchBinary EVM.execBinOp`. -/
+local macro "step_pop2_push1_binary" hStk:ident hStep:ident : tactic => `(tactic| (
+  unfold EVM.step at $hStep:ident
+  simp only [bind, Except.bind, pure, Except.pure] at $hStep:ident
+  unfold EvmYul.step at $hStep:ident
+  simp only [Id.run] at $hStep:ident
+  unfold dispatchBinary EVM.execBinOp at $hStep:ident
+  rw [$hStk:ident] at $hStep:ident
+  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at $hStep:ident
+  subst $hStep:ident
+  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩))
+
+/-- Shape-proof body for a ternary primop (pops 3, pushes 1) of the form
+`dispatchTernary EVM.execTriOp`. -/
+local macro "step_pop3_push1_ternary" hStk:ident hStep:ident : tactic => `(tactic| (
+  unfold EVM.step at $hStep:ident
+  simp only [bind, Except.bind, pure, Except.pure] at $hStep:ident
+  unfold EvmYul.step at $hStep:ident
+  simp only [Id.run] at $hStep:ident
+  unfold dispatchTernary EVM.execTriOp at $hStep:ident
+  rw [$hStk:ident] at $hStep:ident
+  simp only [Stack.pop3, Id_run_ok, Except.ok.injEq] at $hStep:ident
+  subst $hStep:ident
+  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩))
+
+/-- Shape-proof body for a binary machine-state op (pops 2, no push) of
+the form `dispatchBinaryMachineStateOp EVM.binaryMachineStateOp`.
+Closes goals of shape `pc=pc+1 ∧ stack=tl ∧ executionEnv=executionEnv`. -/
+local macro "step_pop2_nopush_binaryMSOp" hStk:ident hStep:ident : tactic => `(tactic| (
+  unfold EVM.step at $hStep:ident
+  simp only [bind, Except.bind, pure, Except.pure] at $hStep:ident
+  unfold EvmYul.step at $hStep:ident
+  simp only [Id.run] at $hStep:ident
+  unfold dispatchBinaryMachineStateOp EVM.binaryMachineStateOp at $hStep:ident
+  rw [$hStk:ident] at $hStep:ident
+  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at $hStep:ident
+  subst $hStep:ident
+  refine ⟨rfl, rfl, rfl⟩))
+
+/-- Shape-proof body for a ternary copy op (pops 3, no push) of the form
+`dispatchTernaryCopyOp EVM.ternaryCopyOp`. -/
+local macro "step_pop3_nopush_ternaryCopy" hStk:ident hStep:ident : tactic => `(tactic| (
+  unfold EVM.step at $hStep:ident
+  simp only [bind, Except.bind, pure, Except.pure] at $hStep:ident
+  unfold EvmYul.step at $hStep:ident
+  simp only [Id.run] at $hStep:ident
+  unfold dispatchTernaryCopyOp EVM.ternaryCopyOp at $hStep:ident
+  rw [$hStk:ident] at $hStep:ident
+  simp only [Stack.pop3, Id_run_ok, Except.ok.injEq] at $hStep:ident
+  subst $hStep:ident
+  refine ⟨rfl, rfl, rfl⟩))
+
 /-! ## Push / arithmetic-stack opcodes -/
 
 /-- PUSH1 with arg `(v, 1)`: pushes `v`, advances `pc` by 2. -/
@@ -126,15 +225,7 @@ theorem step_CALLDATALOAD_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchUnaryStateOp EVM.unaryStateOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop1_push1_unaryStateOp hStk hStep
 
 /-- CALLER: pushes 1 (the caller address), `pc += 1`. -/
 theorem step_CALLER_shape
@@ -143,14 +234,7 @@ theorem step_CALLER_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchExecutionEnvOp EVM.executionEnvOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchExecutionEnvOp EVM.executionEnvOp hStep
 
 /-- GAS: pushes 1 (the remaining gas), `pc += 1`. -/
 theorem step_GAS_shape
@@ -159,14 +243,7 @@ theorem step_GAS_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchMachineStateOp EVM.machineStateOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchMachineStateOp EVM.machineStateOp hStep
 
 /-- ADDRESS: pushes 1 (the contract's address), `pc += 1`. -/
 theorem step_ADDRESS_shape
@@ -175,14 +252,7 @@ theorem step_ADDRESS_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchExecutionEnvOp EVM.executionEnvOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchExecutionEnvOp EVM.executionEnvOp hStep
 
 /-- ORIGIN: pushes 1 (the tx origin), `pc += 1`. -/
 theorem step_ORIGIN_shape
@@ -191,14 +261,7 @@ theorem step_ORIGIN_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchExecutionEnvOp EVM.executionEnvOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchExecutionEnvOp EVM.executionEnvOp hStep
 
 /-- CALLVALUE: pushes 1 (the call's wei value), `pc += 1`. -/
 theorem step_CALLVALUE_shape
@@ -207,14 +270,7 @@ theorem step_CALLVALUE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchExecutionEnvOp EVM.executionEnvOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchExecutionEnvOp EVM.executionEnvOp hStep
 
 /-- CALLDATASIZE: pushes 1 (the calldata size), `pc += 1`. -/
 theorem step_CALLDATASIZE_shape
@@ -223,14 +279,7 @@ theorem step_CALLDATASIZE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchExecutionEnvOp EVM.executionEnvOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchExecutionEnvOp EVM.executionEnvOp hStep
 
 /-- CODESIZE: pushes 1 (the code size), `pc += 1`. -/
 theorem step_CODESIZE_shape
@@ -239,14 +288,7 @@ theorem step_CODESIZE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchExecutionEnvOp EVM.executionEnvOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchExecutionEnvOp EVM.executionEnvOp hStep
 
 /-- GASPRICE: pushes 1 (the gas price), `pc += 1`. -/
 theorem step_GASPRICE_shape
@@ -255,14 +297,7 @@ theorem step_GASPRICE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchExecutionEnvOp EVM.executionEnvOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchExecutionEnvOp EVM.executionEnvOp hStep
 
 /-- BASEFEE: pushes 1 (the basefee), `pc += 1`. -/
 theorem step_BASEFEE_shape
@@ -271,14 +306,7 @@ theorem step_BASEFEE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchExecutionEnvOp EVM.executionEnvOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchExecutionEnvOp EVM.executionEnvOp hStep
 
 /-- RETURNDATASIZE: pushes 1, `pc += 1`. -/
 theorem step_RETURNDATASIZE_shape
@@ -287,14 +315,7 @@ theorem step_RETURNDATASIZE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchMachineStateOp EVM.machineStateOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchMachineStateOp EVM.machineStateOp hStep
 
 /-- MSIZE: pushes 1, `pc += 1`. -/
 theorem step_MSIZE_shape
@@ -303,14 +324,7 @@ theorem step_MSIZE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchMachineStateOp EVM.machineStateOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchMachineStateOp EVM.machineStateOp hStep
 
 /-- COINBASE: pushes 1, `pc += 1`. -/
 theorem step_COINBASE_shape
@@ -319,14 +333,7 @@ theorem step_COINBASE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchStateOp EVM.stateOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchStateOp EVM.stateOp hStep
 
 /-- TIMESTAMP: pushes 1, `pc += 1`. -/
 theorem step_TIMESTAMP_shape
@@ -335,14 +342,7 @@ theorem step_TIMESTAMP_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchStateOp EVM.stateOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchStateOp EVM.stateOp hStep
 
 /-- NUMBER: pushes 1, `pc += 1`. -/
 theorem step_NUMBER_shape
@@ -351,14 +351,7 @@ theorem step_NUMBER_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchStateOp EVM.stateOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchStateOp EVM.stateOp hStep
 
 /-- GASLIMIT: pushes 1, `pc += 1`. -/
 theorem step_GASLIMIT_shape
@@ -367,14 +360,7 @@ theorem step_GASLIMIT_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchStateOp EVM.stateOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchStateOp EVM.stateOp hStep
 
 /-- CHAINID: pushes 1, `pc += 1`. -/
 theorem step_CHAINID_shape
@@ -383,14 +369,7 @@ theorem step_CHAINID_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchStateOp EVM.stateOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchStateOp EVM.stateOp hStep
 
 /-- SELFBALANCE: pushes 1, `pc += 1`. -/
 theorem step_SELFBALANCE_shape
@@ -399,14 +378,7 @@ theorem step_SELFBALANCE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchStateOp EVM.stateOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchStateOp EVM.stateOp hStep
 
 /-- POP: pops 1, no push, `pc += 1`. -/
 theorem step_POP_shape
@@ -435,15 +407,7 @@ theorem step_ISZERO_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchUnary EVM.execUnOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop1_push1_unary hStk hStep
 
 /-- NOT: pops 1, pushes 1, `pc += 1`. -/
 theorem step_NOT_shape
@@ -453,15 +417,7 @@ theorem step_NOT_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchUnary EVM.execUnOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop1_push1_unary hStk hStep
 
 /-- BALANCE: pops 1, pushes 1, `pc += 1`. -/
 theorem step_BALANCE_shape
@@ -471,15 +427,7 @@ theorem step_BALANCE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchUnaryStateOp EVM.unaryStateOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop1_push1_unaryStateOp hStk hStep
 
 /-- BLOCKHASH: pops 1, pushes 1, `pc += 1`. -/
 theorem step_BLOCKHASH_shape
@@ -489,15 +437,7 @@ theorem step_BLOCKHASH_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchUnaryStateOp EVM.unaryStateOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop1_push1_unaryStateOp hStk hStep
 
 /-- EXTCODESIZE: pops 1, pushes 1, `pc += 1`. -/
 theorem step_EXTCODESIZE_shape
@@ -507,15 +447,7 @@ theorem step_EXTCODESIZE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchUnaryStateOp EVM.unaryStateOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop1_push1_unaryStateOp hStk hStep
 
 /-- EXTCODEHASH: pops 1, pushes 1, `pc += 1`. -/
 theorem step_EXTCODEHASH_shape
@@ -545,15 +477,7 @@ theorem step_SLOAD_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchUnaryStateOp EVM.unaryStateOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop1_push1_unaryStateOp hStk hStep
 
 /-- MLOAD: pops 1, pushes 1, `pc += 1`. -/
 theorem step_MLOAD_shape
@@ -687,15 +611,7 @@ theorem step_ADD_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- SUB: pops 2, pushes 1, `pc += 1`. -/
 theorem step_SUB_shape
@@ -705,15 +621,7 @@ theorem step_SUB_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- MUL: pops 2, pushes 1, `pc += 1`. -/
 theorem step_MUL_shape
@@ -723,15 +631,7 @@ theorem step_MUL_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- DIV: pops 2, pushes 1, `pc += 1`. -/
 theorem step_DIV_shape
@@ -741,15 +641,7 @@ theorem step_DIV_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- MOD: pops 2, pushes 1, `pc += 1`. -/
 theorem step_MOD_shape
@@ -759,15 +651,7 @@ theorem step_MOD_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- LT: pops 2, pushes 1, `pc += 1`. -/
 theorem step_LT_shape
@@ -777,15 +661,7 @@ theorem step_LT_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- GT: pops 2, pushes 1, `pc += 1`. -/
 theorem step_GT_shape
@@ -795,15 +671,7 @@ theorem step_GT_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- SLT: pops 2, pushes 1, `pc += 1`. -/
 theorem step_SLT_shape
@@ -813,15 +681,7 @@ theorem step_SLT_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- SGT: pops 2, pushes 1, `pc += 1`. -/
 theorem step_SGT_shape
@@ -831,15 +691,7 @@ theorem step_SGT_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- EQ: pops 2, pushes 1, `pc += 1`. -/
 theorem step_EQ_shape
@@ -849,15 +701,7 @@ theorem step_EQ_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- AND: pops 2, pushes 1, `pc += 1`. -/
 theorem step_AND_shape
@@ -867,15 +711,7 @@ theorem step_AND_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- OR: pops 2, pushes 1, `pc += 1`. -/
 theorem step_OR_shape
@@ -885,15 +721,7 @@ theorem step_OR_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- XOR: pops 2, pushes 1, `pc += 1`. -/
 theorem step_XOR_shape
@@ -903,15 +731,7 @@ theorem step_XOR_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- SHL: pops 2, pushes 1, `pc += 1`. -/
 theorem step_SHL_shape
@@ -921,15 +741,7 @@ theorem step_SHL_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- SHR: pops 2, pushes 1, `pc += 1`. -/
 theorem step_SHR_shape
@@ -939,15 +751,7 @@ theorem step_SHR_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- SDIV: pops 2, pushes 1, `pc += 1`. -/
 theorem step_SDIV_shape
@@ -957,15 +761,7 @@ theorem step_SDIV_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- SMOD: pops 2, pushes 1, `pc += 1`. -/
 theorem step_SMOD_shape
@@ -975,15 +771,7 @@ theorem step_SMOD_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- EXP: pops 2, pushes 1, `pc += 1`. -/
 theorem step_EXP_shape
@@ -993,15 +781,7 @@ theorem step_EXP_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- SIGNEXTEND: pops 2, pushes 1, `pc += 1`. -/
 theorem step_SIGNEXTEND_shape
@@ -1011,15 +791,7 @@ theorem step_SIGNEXTEND_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- BYTE: pops 2, pushes 1, `pc += 1`. -/
 theorem step_BYTE_shape
@@ -1029,15 +801,7 @@ theorem step_BYTE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-- SAR: pops 2, pushes 1, `pc += 1`. -/
 theorem step_SAR_shape
@@ -1047,15 +811,7 @@ theorem step_SAR_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinary EVM.execBinOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop2_push1_binary hStk hStep
 
 /-! ## Ternary primops -/
 
@@ -1068,15 +824,7 @@ theorem step_ADDMOD_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchTernary EVM.execTriOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop3, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop3_push1_ternary hStk hStep
 
 /-- MULMOD: pops 3, pushes 1, `pc += 1`. -/
 theorem step_MULMOD_shape
@@ -1087,15 +835,7 @@ theorem step_MULMOD_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchTernary EVM.execTriOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop3, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop3_push1_ternary hStk hStep
 
 /-! ## Transient storage / extra env opcodes -/
 
@@ -1107,15 +847,7 @@ theorem step_TLOAD_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchUnaryStateOp EVM.unaryStateOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_pop1_push1_unaryStateOp hStk hStep
 
 /-- TSTORE: pops 2, no push, `pc += 1`. -/
 theorem step_TSTORE_shape
@@ -1144,14 +876,7 @@ theorem step_PREVRANDAO_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchExecutionEnvOp EVM.executionEnvOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchExecutionEnvOp EVM.executionEnvOp hStep
 
 /-- BLOBBASEFEE: pushes 1, `pc += 1`. -/
 theorem step_BLOBBASEFEE_shape
@@ -1160,14 +885,7 @@ theorem step_BLOBBASEFEE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchExecutionEnvOp EVM.executionEnvOp at hStep
-  simp only [Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
+  step_push_via_dispatch dispatchExecutionEnvOp EVM.executionEnvOp hStep
 
 /-! ## Memory / hashing two-pop opcodes -/
 
@@ -1197,15 +915,7 @@ theorem step_MSTORE_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinaryMachineStateOp EVM.binaryMachineStateOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, rfl, rfl⟩
+  step_pop2_nopush_binaryMSOp hStk hStep
 
 /-- MSTORE8: pops 2, no push, `pc += 1`. -/
 theorem step_MSTORE8_shape
@@ -1215,15 +925,7 @@ theorem step_MSTORE8_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinaryMachineStateOp EVM.binaryMachineStateOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, rfl, rfl⟩
+  step_pop2_nopush_binaryMSOp hStk hStep
 
 /-! ## JUMP family -/
 
@@ -1272,15 +974,7 @@ theorem step_RETURN_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinaryMachineStateOp EVM.binaryMachineStateOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, rfl, rfl⟩
+  step_pop2_nopush_binaryMSOp hStk hStep
 
 /-- REVERT: same shape as RETURN at the EVM-step level (the X loop catches
 the actual halt by inspecting the operation kind). -/
@@ -1291,15 +985,7 @@ theorem step_REVERT_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchBinaryMachineStateOp EVM.binaryMachineStateOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, rfl, rfl⟩
+  step_pop2_nopush_binaryMSOp hStk hStep
 
 /-! ## Copy ops (CALLDATACOPY, CODECOPY, RETURNDATACOPY, EXTCODECOPY) -/
 
@@ -1312,15 +998,7 @@ theorem step_CALLDATACOPY_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchTernaryCopyOp EVM.ternaryCopyOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop3, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, rfl, rfl⟩
+  step_pop3_nopush_ternaryCopy hStk hStep
 
 /-- CODECOPY: pops 3, no push, `pc += 1`. -/
 theorem step_CODECOPY_shape
@@ -1331,15 +1009,7 @@ theorem step_CODECOPY_shape
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
-  unfold EVM.step at hStep
-  simp only [bind, Except.bind, pure, Except.pure] at hStep
-  unfold EvmYul.step at hStep
-  simp only [Id.run] at hStep
-  unfold dispatchTernaryCopyOp EVM.ternaryCopyOp at hStep
-  rw [hStk] at hStep
-  simp only [Stack.pop3, Id_run_ok, Except.ok.injEq] at hStep
-  subst hStep
-  refine ⟨rfl, rfl, rfl⟩
+  step_pop3_nopush_ternaryCopy hStk hStep
 
 /-- RETURNDATACOPY: pops 3, no push, `pc += 1`. Implemented inline in
 `EvmYul.step` (does not go through a generic dispatcher). -/
