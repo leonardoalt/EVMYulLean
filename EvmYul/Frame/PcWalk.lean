@@ -114,70 +114,13 @@ variable {code : ByteArray} {N : ℕ}
 
 /-! ### Push / control-flow / no-stack-input ops -/
 
-/-- `step_PUSH1_shape` lifted to a known PC. -/
-theorem step_PUSH1_at_pc
-    (s s' : EVM.State) (f' cost : ℕ)
-    (op : Operation .EVM) (arg : Option (UInt256 × Nat)) (v : UInt256)
-    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
-    (hCode : s.executionEnv.code = code)
-    (hpc : s.pc = UInt256.ofNat N)
-    (hDecode : decode code (UInt256.ofNat N)
-                 = some (.Push .PUSH1, some (v, 1)))
-    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
-    s'.pc = s.pc + UInt256.ofNat 2 ∧
-    s'.stack = v :: s.stack ∧
-    s'.executionEnv = s.executionEnv := by
-  have hDec : decode s.executionEnv.code s.pc
-                = some (.Push .PUSH1, some (v, 1)) := by
-    rw [hCode, hpc]; exact hDecode
-  obtain ⟨hOp, hArg⟩ := op_arg_eq_of_fetchInstr_decode hDec hFetch
-  subst hOp; subst hArg
-  exact step_PUSH1_shape s s' f' cost v hStep
+/-! ### A shared schema for all `_at_pc` wrappers
 
-/-- `step_PUSH0_shape` at a known PC. -/
-theorem step_PUSH0_at_pc
-    (s s' : EVM.State) (f' cost : ℕ)
-    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
-    (expArg : Option (UInt256 × Nat))
-    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
-    (hCode : s.executionEnv.code = code)
-    (hpc : s.pc = UInt256.ofNat N)
-    (hDecode : decode code (UInt256.ofNat N) = some (.Push .PUSH0, expArg))
-    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
-    s'.pc = s.pc + UInt256.ofNat 1 ∧
-    s'.stack = ⟨0⟩ :: s.stack ∧
-    s'.executionEnv = s.executionEnv := by
-  have hDec : decode s.executionEnv.code s.pc = some (.Push .PUSH0, expArg) := by
-    rw [hCode, hpc]; exact hDecode
-  obtain ⟨hOp, hArg⟩ := op_arg_eq_of_fetchInstr_decode hDec hFetch
-  subst hOp; subst hArg
-  exact step_PUSH0_shape s s' f' cost arg hStep
-
-/-- `step_PUSH_shape` (PUSHn for `n ≥ 1`) at a known PC. -/
-theorem step_PUSH_at_pc
-    (s s' : EVM.State) (f' cost : ℕ)
-    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
-    (pop : Operation.POp) (hOpNeq : pop ≠ .PUSH0)
-    (v : UInt256) (n : Nat)
-    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
-    (hCode : s.executionEnv.code = code)
-    (hpc : s.pc = UInt256.ofNat N)
-    (hDecode : decode code (UInt256.ofNat N) = some (.Push pop, some (v, n)))
-    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
-    s'.pc = s.pc + UInt256.ofNat (n + 1) ∧
-    s'.stack = v :: s.stack ∧
-    s'.executionEnv = s.executionEnv := by
-  have hDec : decode s.executionEnv.code s.pc = some (.Push pop, some (v, n)) := by
-    rw [hCode, hpc]; exact hDecode
-  obtain ⟨hOp, hArg⟩ := op_arg_eq_of_fetchInstr_decode hDec hFetch
-  subst hOp; subst hArg
-  exact step_PUSH_shape s s' f' cost pop hOpNeq v n hStep
-
-/-! ### A shared schema for all "no-stack-input" ops
-
-`mkNoStackAtPc` would force higher-order tactic plumbing; we just
-write each wrapper out explicitly. The pattern is identical: rebuild
-`hDec`, derive op/arg, subst, apply the underlying shape lemma. -/
+The per-PC contract context — `hFetch`, `hCode`, `hpc`, `hDecode` —
+suffices to derive `op = op_dec ∧ arg = arg_dec`, after which the
+wrapper just `subst`s and applies the underlying `_shape` lemma. The
+`aligned_step` helper packages the boilerplate; the `step_at_pc_via`
+macro then collapses each wrapper proof to one line. -/
 
 /-- Helper: package the decode rewrite + `op_arg_eq` once. Returns the
 op/arg equalities the per-opcode wrappers then `subst`. -/
@@ -194,6 +137,81 @@ private theorem aligned_step
     rw [hCode, hpc]; exact hDecode
   exact op_arg_eq_of_fetchInstr_decode hDec hFetch
 
+/-- Tactic macro that closes an `_at_pc` wrapper goal: it derives the
+op/arg equalities via `aligned_step`, substitutes them, and applies
+the named shape lemma to the wrapper's parameters. -/
+syntax "step_at_pc_via" term "with" term,* : tactic
+set_option hygiene false in
+macro_rules
+  | `(tactic| step_at_pc_via $shapeLem with $args,*) =>
+    `(tactic|
+      (obtain ⟨hOp, hArg⟩ :=
+         aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
+       subst hOp; subst hArg
+       exact $shapeLem s s' f' cost arg $args*))
+
+/-- Variant of `step_at_pc_via` for shape lemmas whose third positional
+argument is *not* the wrapper's `arg` but a different value (e.g.
+`step_PUSH1_shape` takes `v` instead). All arguments are passed
+explicitly. -/
+syntax "step_at_pc_via_raw" term "with" term,* : tactic
+set_option hygiene false in
+macro_rules
+  | `(tactic| step_at_pc_via_raw $shapeLem with $args,*) =>
+    `(tactic|
+      (obtain ⟨hOp, hArg⟩ :=
+         aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
+       subst hOp; subst hArg
+       exact $shapeLem s s' f' cost $args*))
+
+/-! ### Push opcodes -/
+
+/-- `step_PUSH1_shape` lifted to a known PC. -/
+theorem step_PUSH1_at_pc
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat)) (v : UInt256)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N)
+                 = some (.Push .PUSH1, some (v, 1)))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 2 ∧
+    s'.stack = v :: s.stack ∧
+    s'.executionEnv = s.executionEnv := by
+  step_at_pc_via_raw step_PUSH1_shape with v, hStep
+
+/-- `step_PUSH0_shape` at a known PC. -/
+theorem step_PUSH0_at_pc
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.Push .PUSH0, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = ⟨0⟩ :: s.stack ∧
+    s'.executionEnv = s.executionEnv := by
+  step_at_pc_via step_PUSH0_shape with hStep
+
+/-- `step_PUSH_shape` (PUSHn for `n ≥ 1`) at a known PC. -/
+theorem step_PUSH_at_pc
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (pop : Operation.POp) (hOpNeq : pop ≠ .PUSH0)
+    (v : UInt256) (n : Nat)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.Push pop, some (v, n)))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat (n + 1) ∧
+    s'.stack = v :: s.stack ∧
+    s'.executionEnv = s.executionEnv := by
+  step_at_pc_via_raw step_PUSH_shape with pop, hOpNeq, v, n, hStep
+
 /-- `step_JUMPDEST_shape` at a known PC. -/
 theorem step_JUMPDEST_at_pc
     (s s' : EVM.State) (f' cost : ℕ)
@@ -207,9 +225,7 @@ theorem step_JUMPDEST_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     s'.stack = s.stack ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_JUMPDEST_shape s s' f' cost arg hStep
+  step_at_pc_via step_JUMPDEST_shape with hStep
 
 /-- `step_PC_shape` at a known PC. -/
 theorem step_PC_at_pc
@@ -224,9 +240,7 @@ theorem step_PC_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_PC_shape s s' f' cost arg hStep
+  step_at_pc_via step_PC_shape with hStep
 
 /-! ### `executionEnvOp`-flavoured pushers (CALLER, GAS, ADDRESS, ...) -/
 
@@ -243,9 +257,7 @@ theorem step_CALLER_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_CALLER_shape s s' f' cost arg hStep
+  step_at_pc_via step_CALLER_shape with hStep
 
 /-- `step_GAS_shape` at a known PC. -/
 theorem step_GAS_at_pc
@@ -260,9 +272,7 @@ theorem step_GAS_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_GAS_shape s s' f' cost arg hStep
+  step_at_pc_via step_GAS_shape with hStep
 
 /-- `step_ADDRESS_shape` at a known PC. -/
 theorem step_ADDRESS_at_pc
@@ -277,9 +287,7 @@ theorem step_ADDRESS_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_ADDRESS_shape s s' f' cost arg hStep
+  step_at_pc_via step_ADDRESS_shape with hStep
 
 /-- `step_ORIGIN_shape` at a known PC. -/
 theorem step_ORIGIN_at_pc
@@ -294,9 +302,7 @@ theorem step_ORIGIN_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_ORIGIN_shape s s' f' cost arg hStep
+  step_at_pc_via step_ORIGIN_shape with hStep
 
 /-- `step_CALLVALUE_shape` at a known PC. -/
 theorem step_CALLVALUE_at_pc
@@ -311,9 +317,7 @@ theorem step_CALLVALUE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_CALLVALUE_shape s s' f' cost arg hStep
+  step_at_pc_via step_CALLVALUE_shape with hStep
 
 /-- `step_CALLDATASIZE_shape` at a known PC. -/
 theorem step_CALLDATASIZE_at_pc
@@ -328,9 +332,7 @@ theorem step_CALLDATASIZE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_CALLDATASIZE_shape s s' f' cost arg hStep
+  step_at_pc_via step_CALLDATASIZE_shape with hStep
 
 /-- `step_CODESIZE_shape` at a known PC. -/
 theorem step_CODESIZE_at_pc
@@ -345,9 +347,7 @@ theorem step_CODESIZE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_CODESIZE_shape s s' f' cost arg hStep
+  step_at_pc_via step_CODESIZE_shape with hStep
 
 /-- `step_GASPRICE_shape` at a known PC. -/
 theorem step_GASPRICE_at_pc
@@ -362,9 +362,7 @@ theorem step_GASPRICE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_GASPRICE_shape s s' f' cost arg hStep
+  step_at_pc_via step_GASPRICE_shape with hStep
 
 /-- `step_BASEFEE_shape` at a known PC. -/
 theorem step_BASEFEE_at_pc
@@ -379,9 +377,7 @@ theorem step_BASEFEE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_BASEFEE_shape s s' f' cost arg hStep
+  step_at_pc_via step_BASEFEE_shape with hStep
 
 /-- `step_RETURNDATASIZE_shape` at a known PC. -/
 theorem step_RETURNDATASIZE_at_pc
@@ -396,9 +392,7 @@ theorem step_RETURNDATASIZE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_RETURNDATASIZE_shape s s' f' cost arg hStep
+  step_at_pc_via step_RETURNDATASIZE_shape with hStep
 
 /-- `step_MSIZE_shape` at a known PC. -/
 theorem step_MSIZE_at_pc
@@ -413,9 +407,7 @@ theorem step_MSIZE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_MSIZE_shape s s' f' cost arg hStep
+  step_at_pc_via step_MSIZE_shape with hStep
 
 /-- `step_COINBASE_shape` at a known PC. -/
 theorem step_COINBASE_at_pc
@@ -430,9 +422,7 @@ theorem step_COINBASE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_COINBASE_shape s s' f' cost arg hStep
+  step_at_pc_via step_COINBASE_shape with hStep
 
 /-- `step_TIMESTAMP_shape` at a known PC. -/
 theorem step_TIMESTAMP_at_pc
@@ -447,9 +437,7 @@ theorem step_TIMESTAMP_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_TIMESTAMP_shape s s' f' cost arg hStep
+  step_at_pc_via step_TIMESTAMP_shape with hStep
 
 /-- `step_NUMBER_shape` at a known PC. -/
 theorem step_NUMBER_at_pc
@@ -464,9 +452,7 @@ theorem step_NUMBER_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_NUMBER_shape s s' f' cost arg hStep
+  step_at_pc_via step_NUMBER_shape with hStep
 
 /-- `step_GASLIMIT_shape` at a known PC. -/
 theorem step_GASLIMIT_at_pc
@@ -481,9 +467,7 @@ theorem step_GASLIMIT_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_GASLIMIT_shape s s' f' cost arg hStep
+  step_at_pc_via step_GASLIMIT_shape with hStep
 
 /-- `step_CHAINID_shape` at a known PC. -/
 theorem step_CHAINID_at_pc
@@ -498,9 +482,7 @@ theorem step_CHAINID_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_CHAINID_shape s s' f' cost arg hStep
+  step_at_pc_via step_CHAINID_shape with hStep
 
 /-- `step_SELFBALANCE_shape` at a known PC. -/
 theorem step_SELFBALANCE_at_pc
@@ -515,9 +497,7 @@ theorem step_SELFBALANCE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_SELFBALANCE_shape s s' f' cost arg hStep
+  step_at_pc_via step_SELFBALANCE_shape with hStep
 
 /-- `step_PREVRANDAO_shape` at a known PC. -/
 theorem step_PREVRANDAO_at_pc
@@ -532,9 +512,7 @@ theorem step_PREVRANDAO_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_PREVRANDAO_shape s s' f' cost arg hStep
+  step_at_pc_via step_PREVRANDAO_shape with hStep
 
 /-- `step_BLOBBASEFEE_shape` at a known PC. -/
 theorem step_BLOBBASEFEE_at_pc
@@ -549,9 +527,7 @@ theorem step_BLOBBASEFEE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: s.stack) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_BLOBBASEFEE_shape s s' f' cost arg hStep
+  step_at_pc_via step_BLOBBASEFEE_shape with hStep
 
 /-! ### STOP -/
 
@@ -568,9 +544,7 @@ theorem step_STOP_at_pc
     s'.pc = s.pc ∧
     s'.stack = s.stack ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_STOP_shape s s' f' cost arg hStep
+  step_at_pc_via step_STOP_shape with hStep
 
 /-! ### 1-pop ops -/
 
@@ -588,9 +562,7 @@ theorem step_CALLDATALOAD_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_CALLDATALOAD_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_CALLDATALOAD_shape with hd, tl, hStk, hStep
 
 /-- `step_POP_shape` at a known PC. -/
 theorem step_POP_at_pc
@@ -606,9 +578,7 @@ theorem step_POP_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_POP_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_POP_shape with hd, tl, hStk, hStep
 
 /-- `step_ISZERO_shape` at a known PC. -/
 theorem step_ISZERO_at_pc
@@ -624,9 +594,7 @@ theorem step_ISZERO_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_ISZERO_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_ISZERO_shape with hd, tl, hStk, hStep
 
 /-- `step_NOT_shape` at a known PC. -/
 theorem step_NOT_at_pc
@@ -642,9 +610,7 @@ theorem step_NOT_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_NOT_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_NOT_shape with hd, tl, hStk, hStep
 
 /-- `step_BALANCE_shape` at a known PC. -/
 theorem step_BALANCE_at_pc
@@ -660,9 +626,7 @@ theorem step_BALANCE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_BALANCE_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_BALANCE_shape with hd, tl, hStk, hStep
 
 /-- `step_BLOCKHASH_shape` at a known PC. -/
 theorem step_BLOCKHASH_at_pc
@@ -678,9 +642,7 @@ theorem step_BLOCKHASH_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_BLOCKHASH_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_BLOCKHASH_shape with hd, tl, hStk, hStep
 
 /-- `step_EXTCODESIZE_shape` at a known PC. -/
 theorem step_EXTCODESIZE_at_pc
@@ -696,9 +658,7 @@ theorem step_EXTCODESIZE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_EXTCODESIZE_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_EXTCODESIZE_shape with hd, tl, hStk, hStep
 
 /-- `step_EXTCODEHASH_shape` at a known PC. -/
 theorem step_EXTCODEHASH_at_pc
@@ -714,9 +674,7 @@ theorem step_EXTCODEHASH_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_EXTCODEHASH_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_EXTCODEHASH_shape with hd, tl, hStk, hStep
 
 /-- `step_SLOAD_shape` at a known PC. -/
 theorem step_SLOAD_at_pc
@@ -732,9 +690,7 @@ theorem step_SLOAD_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_SLOAD_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_SLOAD_shape with hd, tl, hStk, hStep
 
 /-- `step_MLOAD_shape` at a known PC. -/
 theorem step_MLOAD_at_pc
@@ -750,9 +706,7 @@ theorem step_MLOAD_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_MLOAD_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_MLOAD_shape with hd, tl, hStk, hStep
 
 /-- `step_TLOAD_shape` at a known PC. -/
 theorem step_TLOAD_at_pc
@@ -768,9 +722,7 @@ theorem step_TLOAD_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_TLOAD_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_TLOAD_shape with hd, tl, hStk, hStep
 
 /-- `step_JUMP_shape` at a known PC. -/
 theorem step_JUMP_at_pc
@@ -786,9 +738,7 @@ theorem step_JUMP_at_pc
     s'.pc = hd ∧
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_JUMP_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_JUMP_shape with hd, tl, hStk, hStep
 
 /-- `step_DUP1_shape` at a known PC. -/
 theorem step_DUP1_at_pc
@@ -804,9 +754,7 @@ theorem step_DUP1_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     s'.stack = hd :: s.stack ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_DUP1_shape s s' f' cost arg hd tl hStk hStep
+  step_at_pc_via step_DUP1_shape with hd, tl, hStk, hStep
 
 /-! ### 2-pop ops -/
 
@@ -824,9 +772,7 @@ theorem step_SSTORE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_SSTORE_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_SSTORE_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_ADD_shape` at a known PC. -/
 theorem step_ADD_at_pc
@@ -842,9 +788,7 @@ theorem step_ADD_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_ADD_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_ADD_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_SUB_shape` at a known PC. -/
 theorem step_SUB_at_pc
@@ -860,9 +804,7 @@ theorem step_SUB_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_SUB_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_SUB_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_MUL_shape` at a known PC. -/
 theorem step_MUL_at_pc
@@ -878,9 +820,7 @@ theorem step_MUL_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_MUL_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_MUL_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_EQ_shape` at a known PC. -/
 theorem step_EQ_at_pc
@@ -896,9 +836,7 @@ theorem step_EQ_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_EQ_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_EQ_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_AND_shape` at a known PC. -/
 theorem step_AND_at_pc
@@ -914,9 +852,7 @@ theorem step_AND_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_AND_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_AND_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_OR_shape` at a known PC. -/
 theorem step_OR_at_pc
@@ -932,9 +868,7 @@ theorem step_OR_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_OR_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_OR_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_LT_shape` at a known PC. -/
 theorem step_LT_at_pc
@@ -950,9 +884,7 @@ theorem step_LT_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_LT_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_LT_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_GT_shape` at a known PC. -/
 theorem step_GT_at_pc
@@ -968,9 +900,7 @@ theorem step_GT_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_GT_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_GT_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_DIV_shape` at a known PC. -/
 theorem step_DIV_at_pc
@@ -986,9 +916,7 @@ theorem step_DIV_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_DIV_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_DIV_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_MOD_shape` at a known PC. -/
 theorem step_MOD_at_pc
@@ -1004,9 +932,7 @@ theorem step_MOD_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_MOD_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_MOD_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_KECCAK256_shape` at a known PC. -/
 theorem step_KECCAK256_at_pc
@@ -1022,9 +948,7 @@ theorem step_KECCAK256_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_KECCAK256_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_KECCAK256_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_MSTORE_shape` at a known PC. -/
 theorem step_MSTORE_at_pc
@@ -1040,9 +964,7 @@ theorem step_MSTORE_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_MSTORE_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_MSTORE_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_MSTORE8_shape` at a known PC. -/
 theorem step_MSTORE8_at_pc
@@ -1058,9 +980,7 @@ theorem step_MSTORE8_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_MSTORE8_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_MSTORE8_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_JUMPI_shape` at a known PC. -/
 theorem step_JUMPI_at_pc
@@ -1076,9 +996,7 @@ theorem step_JUMPI_at_pc
     s'.pc = (if hd2 != ⟨0⟩ then hd1 else s.pc + ⟨1⟩) ∧
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_JUMPI_shape s s' f' cost arg hd1 hd2 tl hStk hStep
+  step_at_pc_via step_JUMPI_shape with hd1, hd2, tl, hStk, hStep
 
 /-! ### CALL (7-pop) -/
 
@@ -1097,9 +1015,7 @@ theorem step_CALL_at_pc
     s'.pc = s.pc + UInt256.ofNat 1 ∧
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
-  obtain ⟨hOp, hArg⟩ := aligned_step (code := code) (N := N) hFetch hCode hpc hDecode
-  subst hOp; subst hArg
-  exact step_CALL_shape s s' f' cost arg hd1 hd2 hd3 hd4 hd5 hd6 hd7 tl hStk hStep
+  step_at_pc_via step_CALL_shape with hd1, hd2, hd3, hd4, hd5, hd6, hd7, tl, hStk, hStep
 
 end AtPcWrappers
 
