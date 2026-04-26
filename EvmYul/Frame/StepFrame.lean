@@ -1686,5 +1686,480 @@ theorem EvmYul.step_accountMap_eq_of_strict
     · exact absurd h (by simp [dispatchInvalid])
     · exact absurd rfl _h_ne_sd
 
+/-! ## `substate.selfDestructSet` preservation for handled non-SELFDESTRUCT
+    opcodes
+
+The only EVM opcode that modifies `substate.selfDestructSet` is
+SELFDESTRUCT itself (in branch A — see `EvmYul.step` body in
+`EvmYul/Semantics.lean`). Every other handled opcode either uses
+`replaceStackAndIncrPC` (which doesn't touch `substate` at all), or
+modifies disjoint substate fields:
+  * SSTORE bumps `refundBalance` and `accessedStorageKeys`.
+  * TSTORE doesn't touch `substate`.
+  * SLOAD/TLOAD/BALANCE/EXTCODESIZE/EXTCODEHASH bump
+    `accessedStorageKeys` or `accessedAccounts`.
+  * LOG ops append to `logSeries`.
+  * No other opcode touches `selfDestructSet`.
+
+We package this as a single theorem `EvmYul.step_preserves_selfDestructSet`
+covering all handled non-SELFDESTRUCT ops, mirroring the structure of
+`EvmYul.step_accountMap_eq_of_strict` but covering SSTORE/TSTORE too. -/
+
+/-! ### Per-helper substate.selfDestructSet preservation -/
+
+theorem balance_preserves_selfDestructSet
+    (self : EvmYul.State .EVM) (k : UInt256) :
+    (EvmYul.State.balance self k).1.substate.selfDestructSet
+      = self.substate.selfDestructSet := by
+  unfold EvmYul.State.balance EvmYul.State.addAccessedAccount
+  rfl
+
+theorem sload_preserves_selfDestructSet
+    (self : EvmYul.State .EVM) (spos : UInt256) :
+    (EvmYul.State.sload self spos).1.substate.selfDestructSet
+      = self.substate.selfDestructSet := by
+  unfold EvmYul.State.sload EvmYul.State.addAccessedStorageKey; rfl
+
+theorem tload_preserves_selfDestructSet
+    (self : EvmYul.State .EVM) (spos : UInt256) :
+    (EvmYul.State.tload self spos).1.substate.selfDestructSet
+      = self.substate.selfDestructSet := by
+  unfold EvmYul.State.tload; rfl
+
+theorem extCodeSize_preserves_selfDestructSet
+    (self : EvmYul.State .EVM) (v : UInt256) :
+    (EvmYul.State.extCodeSize self v).1.substate.selfDestructSet
+      = self.substate.selfDestructSet := by
+  unfold EvmYul.State.extCodeSize EvmYul.State.addAccessedAccount; rfl
+
+theorem extCodeHash_preserves_selfDestructSet
+    (self : EvmYul.State .EVM) (v : UInt256) :
+    (EvmYul.State.extCodeHash self v).1.substate.selfDestructSet
+      = self.substate.selfDestructSet := by
+  unfold EvmYul.State.extCodeHash
+  by_cases hDead :
+      EvmYul.State.dead self.accountMap (AccountAddress.ofUInt256 v) = true
+  · rw [if_pos hDead]; rfl
+  · rw [if_neg hDead]; rfl
+
+theorem sstore_preserves_selfDestructSet
+    (self : EvmYul.State .EVM) (u v : UInt256) :
+    (EvmYul.State.sstore self u v).substate.selfDestructSet
+      = self.substate.selfDestructSet := by
+  unfold EvmYul.State.sstore
+  simp only [EvmYul.State.lookupAccount]
+  match hFind : self.accountMap.find? self.executionEnv.codeOwner with
+  | none => simp [Option.option]
+  | some acc =>
+    simp only [Option.option]
+    show (_ : EvmYul.State .EVM).substate.selfDestructSet
+          = self.substate.selfDestructSet
+    rfl
+
+theorem tstore_preserves_selfDestructSet
+    (self : EvmYul.State .EVM) (u v : UInt256) :
+    (EvmYul.State.tstore self u v).substate.selfDestructSet
+      = self.substate.selfDestructSet := by
+  unfold EvmYul.State.tstore
+  simp only [EvmYul.State.lookupAccount]
+  match hFind : self.accountMap.find? self.executionEnv.codeOwner with
+  | none => simp [Option.option]
+  | some acc =>
+    simp only [Option.option]
+    unfold EvmYul.State.updateAccount; rfl
+
+/-! ### Per-dispatch-helper substate.selfDestructSet preservation -/
+
+theorem execUnOp_preserves_selfDestructSet
+    {f : Primop.Unary} {s s' : EVM.State}
+    (h : EVM.execUnOp f s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.execUnOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem execBinOp_preserves_selfDestructSet
+    {f : Primop.Binary} {s s' : EVM.State}
+    (h : EVM.execBinOp f s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.execBinOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem execTriOp_preserves_selfDestructSet
+    {f : Primop.Ternary} {s s' : EVM.State}
+    (h : EVM.execTriOp f s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.execTriOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem execQuadOp_preserves_selfDestructSet
+    {f : Primop.Quaternary} {s s' : EVM.State}
+    (h : EVM.execQuadOp f s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.execQuadOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem executionEnvOp_preserves_selfDestructSet
+    {op : ExecutionEnv .EVM → UInt256} {s s' : EVM.State}
+    (h : EVM.executionEnvOp op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.executionEnvOp at h
+  simp only [Id_run_ok, Except.ok.injEq] at h
+  subst h; rfl
+
+theorem unaryExecutionEnvOp_preserves_selfDestructSet
+    {op : ExecutionEnv .EVM → UInt256 → UInt256} {s s' : EVM.State}
+    (h : EVM.unaryExecutionEnvOp op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.unaryExecutionEnvOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem machineStateOp_preserves_selfDestructSet
+    {op : MachineState → UInt256} {s s' : EVM.State}
+    (h : EVM.machineStateOp op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.machineStateOp at h
+  simp only [Id_run_ok, Except.ok.injEq] at h
+  subst h; rfl
+
+theorem stateOp_preserves_selfDestructSet
+    {op : EvmYul.State .EVM → UInt256} {s s' : EVM.State}
+    (h : EVM.stateOp op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.stateOp at h
+  simp only [Id_run_ok, Except.ok.injEq] at h
+  subst h; rfl
+
+theorem binaryMachineStateOp_preserves_selfDestructSet
+    {op : MachineState → UInt256 → UInt256 → MachineState} {s s' : EVM.State}
+    (h : EVM.binaryMachineStateOp op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.binaryMachineStateOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem binaryMachineStateOp'_preserves_selfDestructSet
+    {op : MachineState → UInt256 → UInt256 → UInt256 × MachineState} {s s' : EVM.State}
+    (h : EVM.binaryMachineStateOp' op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.binaryMachineStateOp' at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem ternaryMachineStateOp_preserves_selfDestructSet
+    {op : MachineState → UInt256 → UInt256 → UInt256 → MachineState} {s s' : EVM.State}
+    (h : EVM.ternaryMachineStateOp op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.ternaryMachineStateOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem dup_preserves_selfDestructSet
+    {n : ℕ} {s s' : EVM.State}
+    (h : EvmYul.dup n s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EvmYul.dup at h
+  simp only [] at h
+  by_cases hlen : (s.stack.take n).length = n
+  · rw [if_pos hlen] at h; injection h with h; subst h; rfl
+  · rw [if_neg hlen] at h; exact absurd h (by simp)
+
+theorem swap_preserves_selfDestructSet
+    {n : ℕ} {s s' : EVM.State}
+    (h : EvmYul.swap n s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EvmYul.swap at h
+  simp only [] at h
+  by_cases hlen : (s.stack.take (n + 1)).length = n + 1
+  · rw [if_pos hlen] at h; injection h with h; subst h; rfl
+  · rw [if_neg hlen] at h; exact absurd h (by simp)
+
+theorem ternaryCopyOp_preserves_selfDestructSet
+    {op : SharedState .EVM → UInt256 → UInt256 → UInt256 → SharedState .EVM}
+    {s s' : EVM.State}
+    (hOp : ∀ ss a b c, (op ss a b c).toState.substate.selfDestructSet
+                        = ss.toState.substate.selfDestructSet)
+    (h : EVM.ternaryCopyOp op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.ternaryCopyOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h
+    subst h
+    exact hOp _ _ _ _
+  · exact absurd h (by simp)
+
+theorem quaternaryCopyOp_preserves_selfDestructSet
+    {op : SharedState .EVM → UInt256 → UInt256 → UInt256 → UInt256 → SharedState .EVM}
+    {s s' : EVM.State}
+    (hOp : ∀ ss a b c d, (op ss a b c d).toState.substate.selfDestructSet
+                          = ss.toState.substate.selfDestructSet)
+    (h : EVM.quaternaryCopyOp op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.quaternaryCopyOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h
+    subst h
+    exact hOp _ _ _ _ _
+  · exact absurd h (by simp)
+
+theorem calldatacopy_preserves_selfDestructSet
+    {τ} (self : SharedState τ) (mstart datastart size : UInt256) :
+    (SharedState.calldatacopy self mstart datastart size).toState.substate.selfDestructSet
+      = self.toState.substate.selfDestructSet := rfl
+
+theorem codeCopy_preserves_selfDestructSet
+    (self : SharedState .EVM) (mstart cstart size : UInt256) :
+    (SharedState.codeCopy self mstart cstart size).toState.substate.selfDestructSet
+      = self.toState.substate.selfDestructSet := rfl
+
+theorem extCodeCopy'_preserves_selfDestructSet
+    (self : SharedState .EVM) (acc mstart cstart size : UInt256) :
+    (SharedState.extCodeCopy' self acc mstart cstart size).toState.substate.selfDestructSet
+      = self.toState.substate.selfDestructSet := by
+  unfold SharedState.extCodeCopy'; rfl
+
+theorem log0Op_preserves_selfDestructSet
+    {s s' : EVM.State} (h : EVM.log0Op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.log0Op at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem log1Op_preserves_selfDestructSet
+    {s s' : EVM.State} (h : EVM.log1Op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.log1Op at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem log2Op_preserves_selfDestructSet
+    {s s' : EVM.State} (h : EVM.log2Op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.log2Op at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem log3Op_preserves_selfDestructSet
+    {s s' : EVM.State} (h : EVM.log3Op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.log3Op at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem log4Op_preserves_selfDestructSet
+    {s s' : EVM.State} (h : EVM.log4Op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.log4Op at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h; subst h; rfl
+  · exact absurd h (by simp)
+
+theorem unaryStateOp_preserves_selfDestructSet
+    {op : EvmYul.State .EVM → UInt256 → EvmYul.State .EVM × UInt256}
+    {s s' : EVM.State}
+    (hOp : ∀ st u, (op st u).1.substate.selfDestructSet
+                    = st.substate.selfDestructSet)
+    (h : EVM.unaryStateOp op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.unaryStateOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h
+    subst h
+    show (op s.toState _).1.substate.selfDestructSet = s.substate.selfDestructSet
+    exact hOp _ _
+  · exact absurd h (by simp)
+
+theorem binaryStateOp_preserves_selfDestructSet
+    {op : EvmYul.State .EVM → UInt256 → UInt256 → EvmYul.State .EVM}
+    {s s' : EVM.State}
+    (hOp : ∀ st u v, (op st u v).substate.selfDestructSet
+                      = st.substate.selfDestructSet)
+    (h : EVM.binaryStateOp op s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  unfold EVM.binaryStateOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h
+    subst h
+    show (op s.toState _ _).substate.selfDestructSet = s.substate.selfDestructSet
+    exact hOp _ _ _
+  · exact absurd h (by simp)
+
+/-- `EvmYul.step` preserves `substate.selfDestructSet` for every handled
+opcode except SELFDESTRUCT.
+
+Mirrors the structure of `EvmYul.step_accountMap_eq_of_strict` but
+covers SSTORE and TSTORE explicitly (whose substate-touching is
+disjoint from `selfDestructSet`). -/
+theorem EvmYul.step_preserves_selfDestructSet
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (h_handled : handledByEvmYulStep op)
+    (h_ne : op ≠ .SELFDESTRUCT)
+    (h : EvmYul.step op arg s = .ok s') :
+    s'.substate.selfDestructSet = s.substate.selfDestructSet := by
+  obtain ⟨hne1, hne2, hne3, hne4, hne5, hne6⟩ := h_handled
+  cases op with
+  | StopArith o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    · injection h with h; subst h; rfl
+    all_goals first
+      | exact execBinOp_preserves_selfDestructSet h
+      | exact execTriOp_preserves_selfDestructSet h
+  | CompBit o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    all_goals first
+      | exact execBinOp_preserves_selfDestructSet h
+      | exact execUnOp_preserves_selfDestructSet h
+  | Keccak o =>
+    cases o
+    unfold EvmYul.step at h; simp only [Id.run] at h
+    exact binaryMachineStateOp'_preserves_selfDestructSet h
+  | Env o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    · exact executionEnvOp_preserves_selfDestructSet h
+    · exact unaryStateOp_preserves_selfDestructSet
+        (fun st v => balance_preserves_selfDestructSet st v) h
+    · exact executionEnvOp_preserves_selfDestructSet h
+    · exact executionEnvOp_preserves_selfDestructSet h
+    · exact executionEnvOp_preserves_selfDestructSet h
+    · exact unaryStateOp_preserves_selfDestructSet (fun _ _ => rfl) h
+    · exact executionEnvOp_preserves_selfDestructSet h
+    · exact ternaryCopyOp_preserves_selfDestructSet
+        (fun ss a b c => calldatacopy_preserves_selfDestructSet ss a b c) h
+    · exact executionEnvOp_preserves_selfDestructSet h
+    · exact executionEnvOp_preserves_selfDestructSet h
+    · exact ternaryCopyOp_preserves_selfDestructSet
+        (fun ss a b c => codeCopy_preserves_selfDestructSet ss a b c) h
+    · exact unaryStateOp_preserves_selfDestructSet
+        (fun st v => extCodeSize_preserves_selfDestructSet st v) h
+    · exact quaternaryCopyOp_preserves_selfDestructSet
+        (fun ss a b c d => extCodeCopy'_preserves_selfDestructSet ss a b c d) h
+    · exact machineStateOp_preserves_selfDestructSet h
+    · split at h
+      · simp only [Except.ok.injEq] at h; subst h; rfl
+      · exact absurd h (by simp)
+    · exact unaryStateOp_preserves_selfDestructSet
+        (fun st v => extCodeHash_preserves_selfDestructSet st v) h
+  | Block o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    · exact unaryStateOp_preserves_selfDestructSet (fun _ _ => rfl) h
+    · exact stateOp_preserves_selfDestructSet h
+    · exact stateOp_preserves_selfDestructSet h
+    · exact stateOp_preserves_selfDestructSet h
+    · exact executionEnvOp_preserves_selfDestructSet h
+    · exact stateOp_preserves_selfDestructSet h
+    · exact stateOp_preserves_selfDestructSet h
+    · exact stateOp_preserves_selfDestructSet h
+    · exact executionEnvOp_preserves_selfDestructSet h
+    · exact unaryExecutionEnvOp_preserves_selfDestructSet h
+    · exact executionEnvOp_preserves_selfDestructSet h
+  | StackMemFlow o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    · split at h
+      · injection h with h; subst h; rfl
+      · exact absurd h (by simp)
+    · split at h
+      · simp only [Except.ok.injEq] at h; subst h; rfl
+      · exact absurd h (by simp)
+    · exact binaryMachineStateOp_preserves_selfDestructSet h
+    · exact unaryStateOp_preserves_selfDestructSet
+        (fun st v => sload_preserves_selfDestructSet st v) h
+    · -- SSTORE
+      exact binaryStateOp_preserves_selfDestructSet
+        (fun st u v => sstore_preserves_selfDestructSet st u v) h
+    · exact binaryMachineStateOp_preserves_selfDestructSet h
+    · split at h
+      · injection h with h; subst h; rfl
+      · exact absurd h (by simp)
+    · split at h
+      · injection h with h; subst h; rfl
+      · exact absurd h (by simp)
+    · injection h with h; subst h; rfl
+    · exact machineStateOp_preserves_selfDestructSet h
+    · exact machineStateOp_preserves_selfDestructSet h
+    · injection h with h; subst h; rfl
+    · exact unaryStateOp_preserves_selfDestructSet
+        (fun st v => tload_preserves_selfDestructSet st v) h
+    · -- TSTORE
+      exact binaryStateOp_preserves_selfDestructSet
+        (fun st u v => tstore_preserves_selfDestructSet st u v) h
+    · exact ternaryMachineStateOp_preserves_selfDestructSet h
+  | Push o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    · injection h with h; subst h; rfl
+    all_goals (
+      cases harg : arg with
+      | none => simp [harg] at h
+      | some p =>
+        obtain ⟨a', w'⟩ := p
+        simp [harg] at h
+        subst h; rfl)
+  | Dup o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    all_goals exact dup_preserves_selfDestructSet h
+  | Exchange o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    all_goals exact swap_preserves_selfDestructSet h
+  | Log o =>
+    cases o
+    all_goals (unfold EvmYul.step at h; simp only [Id.run] at h)
+    · exact log0Op_preserves_selfDestructSet h
+    · exact log1Op_preserves_selfDestructSet h
+    · exact log2Op_preserves_selfDestructSet h
+    · exact log3Op_preserves_selfDestructSet h
+    · exact log4Op_preserves_selfDestructSet h
+  | System o =>
+    cases o
+    all_goals (try unfold EvmYul.step at h; try simp only [Id.run] at h)
+    · exact absurd rfl hne1
+    · exact absurd rfl hne3
+    · exact absurd rfl hne4
+    · exact binaryMachineStateOp_preserves_selfDestructSet h
+    · exact absurd rfl hne5
+    · exact absurd rfl hne2
+    · exact absurd rfl hne6
+    · exact binaryMachineStateOp_preserves_selfDestructSet h
+    · exact absurd h (by simp [dispatchInvalid])
+    · exact absurd rfl h_ne
+
+/-- Corollary of `EvmYul.step_preserves_selfDestructSet`: a handled
+non-SELFDESTRUCT step preserves `SubstateSDExclude … C`. -/
+theorem EvmYul.step_preserves_SD_exclude
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State) (C : AccountAddress)
+    (h_handled : handledByEvmYulStep op)
+    (h_ne : op ≠ .SELFDESTRUCT)
+    (h : EvmYul.step op arg s = .ok s')
+    (hSD : ∀ k ∈ s.substate.selfDestructSet.1.toList, k ≠ C) :
+    ∀ k ∈ s'.substate.selfDestructSet.1.toList, k ≠ C := by
+  have hEq := EvmYul.step_preserves_selfDestructSet op arg s s' h_handled h_ne h
+  intro k hk
+  rw [hEq] at hk
+  exact hSD k hk
+
 end Frame
 end EvmYul
