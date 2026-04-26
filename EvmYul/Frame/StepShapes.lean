@@ -421,7 +421,7 @@ theorem step_POP_shape
   unfold EvmYul.step at hStep
   simp only [Id.run] at hStep
   rw [hStk] at hStep
-  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at hStep
+  simp only [Stack.pop, Except.ok.injEq] at hStep
   subst hStep
   refine ⟨rfl, rfl, rfl⟩
 
@@ -568,7 +568,7 @@ theorem step_MLOAD_shape
   unfold EvmYul.step at hStep
   simp only [Id.run] at hStep
   rw [hStk] at hStep
-  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at hStep
+  simp only [Stack.pop, Except.ok.injEq] at hStep
   subst hStep
   refine ⟨rfl, ⟨_, rfl⟩, rfl⟩
 
@@ -605,7 +605,7 @@ theorem step_STOP_shape
   unfold EVM.step at hStep
   simp only [bind, Except.bind, pure, Except.pure] at hStep
   unfold EvmYul.step at hStep
-  simp only [Id.run, Id_run_ok, Except.ok.injEq] at hStep
+  simp only [Id.run, Except.ok.injEq] at hStep
   subst hStep
   exact ⟨rfl, rfl, rfl⟩
 
@@ -1240,7 +1240,7 @@ theorem step_JUMP_shape
   unfold EvmYul.step at hStep
   simp only [Id.run] at hStep
   rw [hStk] at hStep
-  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at hStep
+  simp only [Stack.pop, Except.ok.injEq] at hStep
   subst hStep
   refine ⟨rfl, rfl, rfl⟩
 
@@ -1257,7 +1257,7 @@ theorem step_JUMPI_shape
   unfold EvmYul.step at hStep
   simp only [Id.run] at hStep
   rw [hStk] at hStep
-  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
+  simp only [Stack.pop2, Except.ok.injEq] at hStep
   subst hStep
   refine ⟨rfl, rfl, rfl⟩
 
@@ -1356,7 +1356,7 @@ theorem step_RETURNDATACOPY_shape
   unfold EvmYul.step at hStep
   simp only [Id.run] at hStep
   rw [hStk] at hStep
-  simp only [Stack.pop3, Id_run_ok, Except.ok.injEq] at hStep
+  simp only [Stack.pop3, Except.ok.injEq] at hStep
   subst hStep
   refine ⟨rfl, rfl, rfl⟩
 
