@@ -1839,6 +1839,139 @@ private theorem applyPrecompile_accountMap
   refine ⟨default, rfl, Or.inr ?_⟩
   rfl
 
+/-! ### Per-precompile substate-purity lemmas
+
+Each of the 10 precompiles (`Ξ_ECREC`, `Ξ_SHA256`, …, `Ξ_PointEval`)
+returns the input substate `A` unchanged in every code path. The
+proofs are direct case analysis on the precompile bodies (each `if`
+and `match` branch literally returns `(_, _, _, A, _)`).
+
+These lemmas feed `applyPrecompile_substate_eq_when_in_range`, which
+is the substate sibling of `applyPrecompile_accountMap`. -/
+
+private theorem Ξ_ECREC_substate_eq
+    (σ₁ : AccountMap .EVM) (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM) :
+    (Ξ_ECREC σ₁ g A I).2.2.2.1 = A := by
+  unfold Ξ_ECREC
+  simp only []
+  split <;> rfl
+
+private theorem Ξ_SHA256_substate_eq
+    (σ₁ : AccountMap .EVM) (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM) :
+    (Ξ_SHA256 σ₁ g A I).2.2.2.1 = A := by
+  unfold Ξ_SHA256
+  simp only []
+  split <;> rfl
+
+private theorem Ξ_RIP160_substate_eq
+    (σ₁ : AccountMap .EVM) (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM) :
+    (Ξ_RIP160 σ₁ g A I).2.2.2.1 = A := by
+  unfold Ξ_RIP160
+  simp only []
+  split <;> rfl
+
+private theorem Ξ_ID_substate_eq
+    (σ₁ : AccountMap .EVM) (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM) :
+    (Ξ_ID σ₁ g A I).2.2.2.1 = A := by
+  unfold Ξ_ID
+  simp only []
+  split <;> rfl
+
+private theorem Ξ_EXPMOD_substate_eq
+    (σ₁ : AccountMap .EVM) (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM) :
+    (Ξ_EXPMOD σ₁ g A I).2.2.2.1 = A := by
+  -- Goal: substate output of Ξ_EXPMOD = A.
+  -- The body is `if cond then (false, ∅, ⟨0⟩, A, .empty) else (true, σ₁, _, A, _)`,
+  -- and `.2.2.2.1` projects the substate. Both branches give A. So
+  -- `apply Eq.refl` after if-elim would work, but in Lean we can use
+  -- the if-then-else form.
+  unfold Ξ_EXPMOD
+  simp only []
+  generalize (max 200
+      (((max (nat_of_slice I.calldata 0 32) (nat_of_slice I.calldata 64 32) + 7) / 8) ^ 2
+        * _ / 3)) = gᵣ
+  by_cases h : g.toNat < gᵣ
+  · simp [h]
+  · simp [h]
+
+private theorem Ξ_BN_ADD_substate_eq
+    (σ₁ : AccountMap .EVM) (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM) :
+    (Ξ_BN_ADD σ₁ g A I).2.2.2.1 = A := by
+  unfold Ξ_BN_ADD
+  simp only []
+  split
+  · rfl
+  · split <;> rfl
+
+private theorem Ξ_BN_MUL_substate_eq
+    (σ₁ : AccountMap .EVM) (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM) :
+    (Ξ_BN_MUL σ₁ g A I).2.2.2.1 = A := by
+  unfold Ξ_BN_MUL
+  simp only []
+  split
+  · rfl
+  · split <;> rfl
+
+-- Note: `Ξ_SNARKV_substate_eq` is omitted due to a known Lean kernel
+-- deep-recursion issue when unfolding `Ξ_SNARKV` (see file docstring,
+-- `theta_precompile_dispatch_ok` blocker discussion). Consumers of
+-- `applyPrecompile_substate_eq_when_in_range` work around this by
+-- excluding the `pc = 8` (SNARKV) case from the lemma's range; the
+-- existing `applyPrecompile_accountMap` axiom-based path avoids
+-- this issue by routing through the axiom rather than direct unfolding.
+private theorem Ξ_SNARKV_substate_eq_postponed : True := trivial
+
+private theorem Ξ_BLAKE2_F_substate_eq
+    (σ₁ : AccountMap .EVM) (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM) :
+    (Ξ_BLAKE2_F σ₁ g A I).2.2.2.1 = A := by
+  unfold Ξ_BLAKE2_F
+  simp only []
+  split
+  · rfl
+  · split <;> rfl
+
+private theorem Ξ_PointEval_substate_eq
+    (σ₁ : AccountMap .EVM) (g : UInt256) (A : Substate) (I : ExecutionEnv .EVM) :
+    (Ξ_PointEval σ₁ g A I).2.2.2.1 = A := by
+  unfold Ξ_PointEval
+  simp only []
+  split
+  · rfl
+  · split <;> rfl
+
+/-- `applyPrecompile` substate purity at precompile addresses
+(`pc ∈ {1, …, 7, 9, 10}`): when `pc` is a precompile (excluding
+SNARKV which triggers a kernel deep-recursion when unfolded), the
+output substate equals the input substate. Restricted to in-range
+`pc` because the default (out-of-range) branch returns
+`default : Except _ _`, whose `.ok` content's substate is the
+default substate, not necessarily equal to a given `A`.
+
+SNARKV (`pc = 8`) is the one excluded address. In practice this is
+fine: consumers of this lemma typically restrict the range further
+to non-precompile addresses or specific addresses encountered in
+their bytecode. -/
+private theorem applyPrecompile_substate_eq_when_in_range
+    (pc : AccountAddress) (σ₁ : AccountMap .EVM) (g : UInt256)
+    (A : Substate) (I : ExecutionEnv .EVM)
+    (h_inRange : pc = 1 ∨ pc = 2 ∨ pc = 3 ∨ pc = 4 ∨ pc = 5 ∨
+                 pc = 6 ∨ pc = 7 ∨ pc = 9 ∨ pc = 10) :
+    ∃ tup : Batteries.RBSet AccountAddress compare × Bool
+              × AccountMap .EVM × UInt256 × Substate × ByteArray,
+      EVM.applyPrecompile pc σ₁ g A I = .ok tup
+        ∧ tup.2.2.2.2.1 = A := by
+  rcases h_inRange with h|h|h|h|h|h|h|h|h
+  all_goals subst h
+  · exact ⟨(∅, Ξ_ECREC σ₁ g A I), rfl, Ξ_ECREC_substate_eq σ₁ g A I⟩
+  · exact ⟨(∅, Ξ_SHA256 σ₁ g A I), rfl, Ξ_SHA256_substate_eq σ₁ g A I⟩
+  · exact ⟨(∅, Ξ_RIP160 σ₁ g A I), rfl, Ξ_RIP160_substate_eq σ₁ g A I⟩
+  · exact ⟨(∅, Ξ_ID σ₁ g A I), rfl, Ξ_ID_substate_eq σ₁ g A I⟩
+  · exact ⟨(∅, Ξ_EXPMOD σ₁ g A I), rfl, Ξ_EXPMOD_substate_eq σ₁ g A I⟩
+  · exact ⟨(∅, Ξ_BN_ADD σ₁ g A I), rfl, Ξ_BN_ADD_substate_eq σ₁ g A I⟩
+  · exact ⟨(∅, Ξ_BN_MUL σ₁ g A I), rfl, Ξ_BN_MUL_substate_eq σ₁ g A I⟩
+  · exact ⟨(∅, Ξ_BLAKE2_F σ₁ g A I), rfl, Ξ_BLAKE2_F_substate_eq σ₁ g A I⟩
+  · exact ⟨(∅, Ξ_PointEval σ₁ g A I), rfl, Ξ_PointEval_substate_eq σ₁ g A I⟩
+
 /-- `applyPrecompile` bundles: accountMap preservation + createdAccounts = ∅. -/
 private theorem applyPrecompile_bundled
     (pc : AccountAddress) (σ₁ : AccountMap .EVM) (g : UInt256)
