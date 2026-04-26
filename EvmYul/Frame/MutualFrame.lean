@@ -822,10 +822,10 @@ theorem sstore_preserves_StateWF
   simp only [EvmYul.State.lookupAccount]
   match hFind : self.accountMap.find? self.executionEnv.codeOwner with
   | none =>
-    simp only [Option.option, hFind]
+    simp only [Option.option]
     exact hWF
   | some acc =>
-    simp only [Option.option, hFind]
+    simp only [Option.option]
     show StateWF (self.accountMap.insert self.executionEnv.codeOwner
                     (acc.updateStorage spos sval))
     refine StateWF_insert_eq_bal _ _ _ _ hFind ?_ hWF
@@ -842,10 +842,10 @@ theorem tstore_preserves_StateWF
   simp only [EvmYul.State.lookupAccount]
   match hFind : self.accountMap.find? self.executionEnv.codeOwner with
   | none =>
-    simp only [Option.option, hFind]
+    simp only [Option.option]
     exact hWF
   | some acc =>
-    simp only [Option.option, hFind]
+    simp only [Option.option]
     show StateWF ((_ : EvmYul.State .EVM).accountMap)
     -- updateAccount at codeOwner with {acc with tstorage-updated}.
     -- accountMap = self.accountMap.insert codeOwner {acc with tstorage-updated}.
@@ -974,7 +974,6 @@ private theorem totalETH_double_insert_sd_case5A_le
   --         = totalETH σ_mid + {σ_Iₐ with balance := 0}.balance.toNat
   -- Both balance.toNat terms are 0.
   simp only [show ({σ_Iₐ with balance := (⟨0⟩ : UInt256)} : Account .EVM).balance.toNat = 0 from rfl,
-             show ({σ_r with balance := (⟨0⟩ : UInt256)} : Account .EVM).balance.toNat = 0 from rfl,
              Nat.add_zero] at h_outer
   -- h_outer : totalETH (σ_mid.insert r _) = totalETH σ_mid
   -- Compute totalETH σ_mid.
@@ -2141,8 +2140,7 @@ private theorem Θ_body_code
       by_cases hErr : err = EVM.ExecutionException.OutOfFuel
       · -- Then branch: heq reduces to .error OutOfFuel = .ok (...) → contradiction.
         subst hErr
-        simp only [bind, Except.bind, pure, Except.pure, throw, throwThe,
-                   MonadExceptOf.throw, beq_self_eq_true, if_true] at heq
+        simp only [bind, Except.bind, pure, Except.pure] at heq
         exact Except.noConfusion heq
       · -- Else branch: heq reduces to .ok (cA, false, σ, 0, A, .empty) = .ok (...).
         have hBEq : (err == EVM.ExecutionException.OutOfFuel) = false := by
@@ -2914,7 +2912,7 @@ private theorem op_classification (op : Operation .EVM) :
 where `evmState' := {evmState with gasAvailable := evmState.gasAvailable - ...}`.
 We show that when step succeeds, the bundle holds. -/
 private theorem step_bundled_handled_case
-    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ)
+    (C : AccountAddress) (_f : ℕ) (cost₂ : ℕ)
     (op : Operation .EVM) (arg : Option (UInt256 × Nat))
     (evmState sstepState : EVM.State)
     (hWF : StateWF evmState.accountMap)
@@ -3125,7 +3123,7 @@ private theorem step_CREATE_arm
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hAtCFrame : ΞAtCFrame C (f + 1))
+    (_hAtCFrame : ΞAtCFrame C (f + 1))
     (hFrame : ΞFrameAtC C (f + 1))
     (hStep : EVM.step (f + 1) cost₂ (some (.CREATE, arg)) evmState = .ok sstepState) :
     balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
@@ -3263,8 +3261,8 @@ private theorem step_CREATE_arm
                 show (σ.find? Iₐ |>.option (⟨0⟩ : UInt256) (·.balance))
                        = ((σ.find? Iₐ).getD default).balance
                 cases hF : σ.find? Iₐ with
-                | none => simp [hF]; rfl
-                | some acc2 => simp [hF]; rfl
+                | none => rfl
+                | some acc2 => rfl
               rw [hU] at hμ
               -- μ₀ ≤ σ_Iₐ.balance (UInt256) unfolds to μ₀.val.val ≤ σ_Iₐ.balance.val.val, i.e., toNat ≤ toNat.
               exact hμ
@@ -3350,7 +3348,7 @@ private theorem step_CREATE2_arm
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hAtCFrame : ΞAtCFrame C (f + 1))
+    (_hAtCFrame : ΞAtCFrame C (f + 1))
     (hFrame : ΞFrameAtC C (f + 1))
     (hStep : EVM.step (f + 1) cost₂ (some (.CREATE2, arg)) evmState = .ok sstepState) :
     balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
@@ -4650,13 +4648,13 @@ private theorem X_inv_succ_content
       -- From here on we let `split_ifs at hZ` close each remaining `if` chain
       -- because the earlier simp has left hZ in a form where each if condition
       -- is a pure Prop that Lean's elab can dispatch via decidable instances.
-      split_ifs at hZ <;>
+      (split_ifs at hZ;
         first
         | exact Except.noConfusion hZ
         | (injection hZ with h_inj
            injection h_inj with h_inj1 _
            subst h_inj1
-           exact ⟨h_accMap, h_eEnv, h_cA⟩)
+           exact ⟨h_accMap, h_eEnv, h_cA⟩))
     obtain ⟨hZ_accMap, hZ_eEnv, hZ_cA⟩ := hZ_struct
     -- Transport the preservation facts to evmStateZ.
     have hWFZ : StateWF evmStateZ.accountMap := by rw [hZ_accMap]; exact _hWF
@@ -4882,13 +4880,13 @@ private theorem X_inv_at_C_v0_holds
             by_cases hc4 : evmState'.stack.length < (δ ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1).getD 0
             · rw [if_pos hc4] at hZ; exact Except.noConfusion hZ
             rw [if_neg hc4] at hZ
-            split_ifs at hZ <;>
+            (split_ifs at hZ;
               first
               | exact Except.noConfusion hZ
               | (injection hZ with h_inj
                  injection h_inj with h_inj1 _
                  subst h_inj1
-                 rfl)
+                 rfl))
           have hZ_accMap : evmStateZ.accountMap = evmState.accountMap := by rw [hZ_full]
           have hZ_eEnv : evmStateZ.executionEnv = evmState.executionEnv := by rw [hZ_full]
           have hZ_cA : evmStateZ.createdAccounts = evmState.createdAccounts := by rw [hZ_full]
