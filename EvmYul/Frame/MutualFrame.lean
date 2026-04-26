@@ -419,6 +419,54 @@ theorem ΞFrameAtC_of_Strong (C : AccountAddress) (maxFuel : ℕ)
       exact ⟨hh.1, hh.2.1, hh.2.2.1⟩
     | revert _ _ => trivial
 
+/-! ## Side-channel SD-tracking through `EvmYul.step`
+
+`EvmYul.step` preserves `SubstateSDExclude C` whenever:
+* `op ≠ .SELFDESTRUCT` — by `EvmYul.step_preserves_selfDestructSet`, the
+  whole SD-set is unchanged.
+* `op = .SELFDESTRUCT` and the executing-frame `Iₐ ≠ C` — by
+  `selfdestruct_preserves_SD_exclude_C` (in `SelfdestructFrame.lean`).
+
+We package both into a single lemma `EvmYul_step_preserves_SD_exclude_at_C`
+that mirrors `step_preserves_balanceOf` and `selfdestruct_balanceOf_ne_Iₐ_ge`
+unified for the SD-tracking side-channel. The hypothesis
+`s.executionEnv.codeOwner ≠ C` covers the SELFDESTRUCT case; for non-SD
+ops it is unused. -/
+
+/-- `EvmYul.step` preserves `SubstateSDExclude C` for any handled op,
+given the executing-frame `Iₐ = s.executionEnv.codeOwner ≠ C`.
+
+This unifies (a) the non-SELFDESTRUCT case (selfDestructSet preserved
+literally) and (b) the SELFDESTRUCT-at-non-C case (Iₐ ≠ C, so the
+inserted address is ≠ C). It is the per-step ingredient for the
+SD-tracking side-channel. -/
+theorem EvmYul_step_preserves_SD_exclude_at_C
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State) (C : AccountAddress)
+    (h_handled : handledByEvmYulStep op)
+    (hIₐne : s.executionEnv.codeOwner ≠ C)
+    (h : EvmYul.step op arg s = .ok s')
+    (hSD : SubstateSDExclude s.substate C) :
+    SubstateSDExclude s'.substate C := by
+  unfold SubstateSDExclude at *
+  by_cases hSDop : op = .SELFDESTRUCT
+  · -- SELFDESTRUCT case: route through `selfdestruct_preserves_SD_exclude_C`.
+    subst hSDop
+    -- Normalize arg to .none (SELFDESTRUCT body doesn't read arg).
+    have hStep_none :
+        EvmYul.step (.SELFDESTRUCT : Operation .EVM) .none s = .ok s' := by
+      have : EvmYul.step (.SELFDESTRUCT : Operation .EVM) arg s
+            = EvmYul.step (.SELFDESTRUCT : Operation .EVM) .none s := by
+        unfold EvmYul.step; rfl
+      rw [← this]; exact h
+    exact selfdestruct_preserves_SD_exclude_C s s' C hSD hIₐne hStep_none
+  · -- Non-SD: selfDestructSet preserved literally.
+    intro k hk
+    have hEq :=
+      EvmYul.step_preserves_selfDestructSet op arg s s' h_handled hSDop h
+    rw [hEq] at hk
+    exact hSD k hk
+
 /-! ## Helper lemmas for Θ's value-transfer prefix
 
 These factor out the purely-map-manipulation content of Θ's body
