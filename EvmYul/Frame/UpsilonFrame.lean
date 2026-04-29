@@ -1139,5 +1139,131 @@ theorem Υ_balanceOf_ge
        rw [hOk] at h
        exact Nat.le_trans hBal h)
 
+/-! ## §1.3 — Υ's invariant-preservation entry point
+
+Mirror of `Υ_balanceOf_ge`'s chain, with conclusion changed from
+balance monotonicity to `WethInvFr` preservation. The structure is:
+
+  * `ΥBodyFactorsInvariant` — invariant-flavoured body factorisation
+    (σ' decomposes through the tail; σ_P satisfies `WethInvFr σ_P C`
+    and `dead σ_P C = false`). Discharged per-contract via the at-C
+    invariant frames.
+  * `Υ_tail_invariant_preserves` — combines `Υ_tail_balanceOf_ge`
+    (β unchanged at C across the tail) with `Υ_tail_storageSum_eq`
+    (S unchanged at C across the tail) ⇒ `WethInvFr σ_P C →
+    WethInvFr σ_tail C`.
+  * `Υ_invariant_preserved` — top-level consumer entry point. -/
+
+/-- Hypothesis form of Υ's body factorisation, **invariant flavour**.
+
+Whenever Υ returns `.ok (σ', A, z, _)`, σ' decomposes as
+`Υ_tail_state σ_P g' A …` for some `(σ_P, g')` produced by the Θ/Λ
+dispatch, with `WethInvFr σ_P C` (rather than balance monotonicity)
+and `C` not dead in σ_P. Discharged per-contract by the caller via
+the at-C invariant frame chain (`Θ_invariant_preserved` /
+`Λ_invariant_preserved` / §H.2's `Ξ_invariant_preserved_bundled_bdd`). -/
+def ΥBodyFactorsInvariant (σ : AccountMap .EVM) (fuel H_f : ℕ)
+    (H H_gen : BlockHeader) (blocks : ProcessedBlocks) (tx : Transaction)
+    (S_T C : AccountAddress) : Prop :=
+  match EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
+  | .ok (σ', A', _, _) =>
+      ∃ σ_P g',
+        σ' = Υ_tail_state σ_P g' A' H H_f tx S_T ∧
+        WethInvFr σ_P C ∧
+        State.dead σ_P C = false
+  | .error _ => True
+
+/-- Combined tail step: under the structural exclusions for the SD/dead
+sweeps and the `dead σ_P C = false` hypothesis, the pure tail of Υ
+preserves `WethInvFr` at `C`.
+
+Direct consequence of `Υ_tail_balanceOf_ge` (β unchanged at C across
+the tail; the conclusion `balanceOf tail C ≥ balanceOf σ_P C`
+upgrades to equality because the tail also doesn't add at C, but for
+the invariant we only need `≥`) combined with `Υ_tail_storageSum_eq`
+(S unchanged at C across the tail). -/
+private theorem Υ_tail_invariant_preserves
+    (σ_P : AccountMap .EVM) (g' : UInt256) (A : Substate)
+    (H : BlockHeader) (H_f : ℕ) (tx : Transaction)
+    (S_T C : AccountAddress)
+    (hS_T : C ≠ S_T)
+    (hBen : C ≠ H.beneficiary)
+    (hSD : ∀ k ∈ A.selfDestructSet.1.toList, k ≠ C)
+    (hDeadGated :
+       ∀ σ_F : AccountMap .EVM, State.dead σ_F C = false →
+         ∀ k ∈ A.touchedAccounts.filter (State.dead σ_F ·), k ≠ C)
+    (hDead_σP : State.dead σ_P C = false)
+    (hInv_σP : WethInvFr σ_P C) :
+    WethInvFr (Υ_tail_state σ_P g' A H H_f tx S_T) C := by
+  unfold WethInvFr at hInv_σP ⊢
+  have hβ : balanceOf (Υ_tail_state σ_P g' A H H_f tx S_T) C = balanceOf σ_P C :=
+    Υ_tail_balanceOf_ge σ_P g' A H H_f tx S_T C hS_T hBen hSD hDeadGated hDead_σP
+  have hS : storageSum (Υ_tail_state σ_P g' A H H_f tx S_T) C = storageSum σ_P C :=
+    Υ_tail_storageSum_eq σ_P g' A H H_f tx S_T C hS_T hBen hSD hDeadGated hDead_σP
+  rw [hβ, hS]
+  exact hInv_σP
+
+/-- Υ's invariant-preservation frame, proved from the invariant body
+factorisation and tail-invariant hypotheses.
+
+Mirror of `Υ_output_balance_ge` for the (β ≥ S) chain. The
+`hWitness : ΞPreservesInvariantAtC C` argument is the §H.2 entry
+point (analogous to `_hWitness : ΞPreservesAtC C`); it is not used
+inside this proof body but is structurally required by the consumer
+(Weth's `Solvency.lean` analogue) to discharge `hFactor`. -/
+theorem Υ_output_invariant_preserves
+    (fuel : ℕ) (σ : AccountMap .EVM) (H_f : ℕ)
+    (H H_gen : BlockHeader) (blocks : ProcessedBlocks) (tx : Transaction)
+    (S_T C : AccountAddress)
+    (_hWF : StateWF σ)
+    (hS_T : C ≠ S_T)
+    (hBen : C ≠ H.beneficiary)
+    (_hWitness : ΞPreservesInvariantAtC C)
+    (hTail : ΥTailInvariant σ fuel H_f H H_gen blocks tx S_T C)
+    (hFactor : ΥBodyFactorsInvariant σ fuel H_f H H_gen blocks tx S_T C) :
+    match EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
+    | .ok (σ', _, _, _) => WethInvFr σ' C
+    | .error _ => True := by
+  unfold ΥBodyFactorsInvariant at hFactor
+  unfold ΥTailInvariant at hTail
+  cases hΥ : EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
+  | error e => trivial
+  | ok r =>
+    obtain ⟨σ', A, z, gUsed⟩ := r
+    rw [hΥ] at hFactor
+    rw [hΥ] at hTail
+    obtain ⟨σ_P, g', hEq, hInv_σP, hDead_σP⟩ := hFactor
+    obtain ⟨hSD, hDeadGated⟩ := hTail
+    show WethInvFr σ' C
+    rw [hEq]
+    exact Υ_tail_invariant_preserves σ_P g' A H H_f tx S_T C hS_T hBen
+      hSD hDeadGated hDead_σP hInv_σP
+
+/-- Υ's transaction-level invariant-preservation theorem. Given a
+pre-state σ satisfying `WethInvFr σ C` and the structural hypotheses,
+the post-state σ' produced by Υ also satisfies `WethInvFr σ' C`.
+
+Mirror of `Υ_balanceOf_ge` for the (β ≥ S) chain. The proof composes
+`Υ_output_invariant_preserves` (which produces `WethInvFr σ' C`
+directly from σ_P's invariant) — no additional projection is needed
+because the body factor's `WethInvFr σ_P C` is the invariant we want
+to lift. -/
+theorem Υ_invariant_preserved
+    (fuel : ℕ) (σ : AccountMap .EVM) (H_f : ℕ)
+    (H H_gen : BlockHeader) (blocks : ProcessedBlocks) (tx : Transaction)
+    (S_T C : AccountAddress)
+    (hWF : StateWF σ)
+    (_hInv : WethInvFr σ C)
+    (hS_T : C ≠ S_T)
+    (hBen : C ≠ H.beneficiary)
+    (hWitness : ΞPreservesInvariantAtC C)
+    (hTail : ΥTailInvariant σ fuel H_f H H_gen blocks tx S_T C)
+    (hFactor : ΥBodyFactorsInvariant σ fuel H_f H H_gen blocks tx S_T C) :
+    match EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
+    | .ok (σ', _, _, _) => WethInvFr σ' C
+    | .error _ => True :=
+  Υ_output_invariant_preserves fuel σ H_f H H_gen blocks tx S_T C
+    hWF hS_T hBen hWitness hTail hFactor
+
 end Frame
 end EvmYul
