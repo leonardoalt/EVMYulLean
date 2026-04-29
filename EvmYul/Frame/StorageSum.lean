@@ -109,5 +109,64 @@ theorem storageSum_of_storage_proj_eq
       simp only [Option.map_some, Option.some.injEq] at h
       simp only [h]
 
+/-! ## §1.4 — `storageSum_old_le`
+
+The "old slot value is bounded by the storage-sum" bound. Used by
+the at-`C` SSTORE step lemma: if the slot's old value is `oldVal`,
+then `oldVal.toNat ≤ storageSum σ C`. The proof reduces `storageSum`
+to `List.sum`-over-`toList` and uses `List.le_sum_of_mem` after
+extracting the `(slot, oldVal)` pair from the `find?` hypothesis. -/
+
+/-- Fold ↔ `List.sum` bridge for storage values. Mirror of
+`Projection.totalETH_eq_sum`. -/
+private theorem storageSum_acc_eq_sum
+    (acc : Account .EVM) :
+    acc.storage.foldl (fun a _ v => a + v.toNat) 0
+      = (acc.storage.toList.map (fun p => p.2.toNat)).sum := by
+  rw [Batteries.RBMap.foldl_eq_foldl_toList]
+  generalize acc.storage.toList = L
+  clear acc
+  suffices h : ∀ (init : ℕ),
+      L.foldl (fun init p => init + p.2.toNat) init
+        = init + (L.map (fun p => p.2.toNat)).sum by
+    simpa using h 0
+  intro init
+  induction L generalizing init with
+  | nil => simp
+  | cons x xs ih =>
+    simp [List.foldl_cons, List.map_cons, List.sum_cons, ih]
+    ring
+
+/-- If `σ.find? C = some acc` and `acc.storage.find? slot = some oldVal`,
+then `oldVal.toNat ≤ storageSum σ C`. Mirror of `balance_toNat_le_totalETH`
+for the storage map. -/
+theorem storageSum_old_le
+    (σ : AccountMap .EVM) (C : AccountAddress) (slot oldVal : UInt256)
+    (h : ((σ.find? C).map (·.storage)).bind (·.find? slot) = some oldVal) :
+    oldVal.toNat ≤ storageSum σ C := by
+  -- Decompose h into σ.find? C = some acc and acc.storage.find? slot = some oldVal.
+  cases hσ : σ.find? C with
+  | none =>
+    rw [hσ] at h
+    simp only [Option.map_none, Option.bind_none] at h
+    cases h
+  | some acc =>
+    rw [hσ] at h
+    simp only [Option.map_some] at h
+    -- h : (acc.storage).find? slot |>.bind … = some oldVal but already at the
+    -- `bind` level via Option.some_bind: bind some f = f acc.storage.
+    -- Actually: (some acc.storage).bind (·.find? slot) = some oldVal
+    -- ⇒ acc.storage.find? slot = some oldVal.
+    have h_find : acc.storage.find? slot = some oldVal := by
+      simpa using h
+    -- Reduce storageSum σ C to the foldl over acc.storage.
+    rw [storageSum_of_find?_some σ C acc hσ, storageSum_acc_eq_sum acc]
+    -- Use find?_some_mem_toList: ∃ slot' ∈ toList with compare-eq.
+    obtain ⟨slot', hMem, _⟩ := Batteries.RBMap.find?_some_mem_toList h_find
+    -- oldVal.toNat ∈ mapped list of values.
+    have hIn : oldVal.toNat ∈ acc.storage.toList.map (fun p => p.2.toNat) :=
+      List.mem_map.mpr ⟨(slot', oldVal), hMem, rfl⟩
+    exact List.le_sum_of_mem hIn
+
 end Frame
 end EvmYul
