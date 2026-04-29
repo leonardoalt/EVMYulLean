@@ -6440,5 +6440,406 @@ theorem theta_σ₁_invariant_preserved_at_C
     rw [hBalσ'₁] at h_slack
     omega
 
+/-- Θ's σ'-clamp step for the invariant: if the interpreter-dispatch
+result `σ''` either preserves WethInvFr (when non-empty by BEq) or is
+∅, then `σ' = if σ'' == ∅ then σ else σ''` preserves WethInvFr too. -/
+theorem theta_σ'_clamp_invariant
+    (σ σ'' : AccountMap .EVM) (C : AccountAddress)
+    (hInvσ : WethInvFr σ C)
+    (hInv : (σ'' == ∅) = false → WethInvFr σ'' C) :
+    WethInvFr (if σ'' == ∅ then σ else σ'') C := by
+  cases h : (σ'' == ∅) with
+  | true => simp only [if_true]; exact hInvσ
+  | false => simp only [Bool.false_eq_true, if_false]; exact hInv h
+
+/-- Strengthened clamp using the case analysis `σ'' = σ₁ ∨ σ'' = ∅`,
+mirroring `theta_σ'_clamp_ge_of_σ₁_or_empty`. -/
+theorem theta_σ'_clamp_invariant_of_σ₁_or_empty
+    (σ σ₁ σ'' : AccountMap .EVM) (C : AccountAddress)
+    (hInvσ : WethInvFr σ C)
+    (hInvσ₁ : WethInvFr σ₁ C)
+    (hσ''_cases : σ'' = σ₁ ∨ σ'' = ∅) :
+    WethInvFr (if σ'' == ∅ then σ else σ'') C := by
+  apply theta_σ'_clamp_invariant _ _ _ hInvσ
+  intro hNotEmpty
+  rcases hσ''_cases with heq | heq
+  · rw [heq]; exact hInvσ₁
+  · exfalso
+    rw [heq] at hNotEmpty
+    have hTrue : ((∅ : AccountMap .EVM) == ∅) = true := rfl
+    rw [hTrue] at hNotEmpty
+    exact Bool.noConfusion hNotEmpty
+
+/-! ## §H.2 — `Θ_invariant_preserved_bdd`
+
+The Weth-flavoured sibling of `Θ_balanceOf_ge_bdd`. Tracks `WethInvFr
+σ C` (rather than `≥ b₀`) through `EVM.Θ`. Same closure structure
+(value-transfer prefix → precompile/code dispatch → σ'-clamp), but
+with two key changes:
+
+* The hypothesis on the s-side debit. For the balance closure, the
+  debit only mattered when s = C (where it would shrink the balance
+  in a way that broke `≥ b₀`). For the invariant closure, the same
+  s = C case is the *only* one that needs special handling: we need a
+  slack hypothesis `v.toNat + storageSum σ C ≤ balanceOf σ C` to
+  cover the debit. The hypothesis `h_slack` provides this disjunction
+  (s ≠ C ∨ v = 0 ∨ slack covers v).
+* The two mutual-induction frames are now the WethInv variants:
+  `ΞInvariantAtCFrame` for r = C and `ΞInvariantFrameAtC` for r ≠ C.
+
+The proof structure mirrors `Θ_balanceOf_ge_bdd`'s precompile/code
+dispatch but uses the invariant-tracking helpers `theta_σ'₁_invariant_preserved`,
+`theta_σ₁_invariant_preserved_general`,
+`theta_σ₁_invariant_preserved_at_C`, and
+`theta_σ'_clamp_invariant_of_σ₁_or_empty`. -/
+
+/-- Θ's body — precompile arm, invariant version. The conclusion is
+`WethInvFr σ' C` instead of `balanceOf σ' C ≥ balanceOf σ C`. -/
+private theorem Θ_body_precompile_invariant
+    (σ σ₁ : AccountMap .EVM) (A : Substate) (I : ExecutionEnv .EVM)
+    (C : AccountAddress) (fuel' : Nat)
+    (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ₀ : AccountMap .EVM) (s o r : AccountAddress) (pc : AccountAddress)
+    (g p v v' : UInt256) (d : ByteArray) (e : Nat)
+    (H : BlockHeader) (w : Bool)
+    (hInvσ : WethInvFr σ C)
+    (hInvσ₁ : WethInvFr σ₁ C)
+    (hWF : StateWF σ)
+    (h_WFσ₁ : StateWF σ₁)
+    (hΘeq : EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                genesisBlockHeader blocks σ σ₀ A s o r
+                (ToExecute.Precompiled pc) g p v v' d e H w
+          = (do
+              let y ← EVM.applyPrecompile pc σ₁ g A I
+              match y with
+              | (cA'', z, σ'', g', A'', out) =>
+                let σ' := if (σ'' == ∅) then σ else σ''
+                let A' := if (σ'' == ∅) then A else A''
+                pure (cA'', σ', g', A', z, out))) :
+    match EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o r
+                  (ToExecute.Precompiled pc) g p v v' d e H w with
+    | .ok (cA'_out, σ', _, _, _, _) =>
+        WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
+    | .error _ => True := by
+  rw [hΘeq]
+  obtain ⟨tup, hTup, hCases, hcA_empty⟩ := applyPrecompile_bundled pc σ₁ g A I
+  rw [hTup]
+  refine ⟨?_, ?_, ?_⟩
+  · -- WethInvFr.
+    exact theta_σ'_clamp_invariant_of_σ₁_or_empty σ σ₁ tup.2.2.1 C
+      hInvσ hInvσ₁ hCases
+  · -- StateWF σ'.
+    show StateWF (if (tup.2.2.1 == ∅) = true then σ else tup.2.2.1)
+    rcases hCases with heq | heq
+    · split_ifs
+      · exact hWF
+      · rw [heq]; exact h_WFσ₁
+    · rw [heq]
+      have h : ((∅ : AccountMap .EVM) == ∅) = true := rfl
+      rw [h]; simp only [if_true]; exact hWF
+  · show ∀ a' ∈ tup.1, a' ≠ C
+    rw [hcA_empty]
+    intro a' ha'
+    exact absurd ha' (fun h => by cases h)
+
+/-- Θ's body — code arm, invariant version. -/
+private theorem Θ_body_code_invariant
+    (σ σ₁ : AccountMap .EVM) (A : Substate) (I : ExecutionEnv .EVM)
+    (C : AccountAddress) (fuel' : Nat)
+    (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ₀ : AccountMap .EVM) (s o r : AccountAddress) (c_code : ByteArray)
+    (g p v v' : UInt256) (d : ByteArray) (e : Nat)
+    (H : BlockHeader) (w : Bool)
+    (hInvσ : WethInvFr σ C)
+    (hInvσ₁ : WethInvFr σ₁ C)
+    (hWF : StateWF σ)
+    (h_WFσ₁ : StateWF σ₁)
+    (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
+    (hAtCFrame : ΞInvariantAtCFrame C fuel')
+    (hFrame : ΞInvariantFrameAtC C fuel')
+    (hI_codeOwner : I.codeOwner = r)
+    (hΘeq : EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                genesisBlockHeader blocks σ σ₀ A s o r
+                (ToExecute.Code c_code) g p v v' d e H w
+          = (do
+              let y ←
+                match EVM.Ξ fuel' createdAccounts genesisBlockHeader blocks
+                        σ₁ σ₀ g A I with
+                | .error e =>
+                  if e == .OutOfFuel then throw .OutOfFuel
+                  else pure (createdAccounts, false, σ, ⟨0⟩, A, .empty)
+                | .ok (.revert g' o) =>
+                  pure (createdAccounts, false, σ, g', A, o)
+                | .ok (.success (a, b, c', d) o) =>
+                  pure (a, true, b, c', d, o)
+              match y with
+              | (cA'', z, σ'', g', A'', out) =>
+                let σ' := if (σ'' == ∅) then σ else σ''
+                let A' := if (σ'' == ∅) then A else A''
+                pure (cA'', σ', g', A', z, out))) :
+    match EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o r
+                  (ToExecute.Code c_code) g p v v' d e H w with
+    | .ok (cA'_out, σ', _, _, _, _) =>
+        WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
+    | .error _ => True := by
+  rw [hΘeq]
+  cases hΞ : EVM.Ξ fuel' createdAccounts genesisBlockHeader blocks σ₁ σ₀ g A I
+  case error err =>
+    split
+    case h_1 =>
+      rename_i cA'' σ'' g' A'' z out heq
+      by_cases hErr : err = EVM.ExecutionException.OutOfFuel
+      · subst hErr
+        simp only [bind, Except.bind, pure, Except.pure] at heq
+        exact Except.noConfusion heq
+      · have hBEq : (err == EVM.ExecutionException.OutOfFuel) = false := by
+          cases err
+          all_goals first
+            | (exfalso; exact hErr rfl)
+            | rfl
+        simp only [bind, Except.bind, pure, Except.pure, hBEq,
+                   Bool.false_eq_true, if_false] at heq
+        injection heq with h1
+        injection h1 with h1a h1b
+        injection h1b with h1ba h1bb
+        subst h1a
+        subst h1ba
+        refine ⟨?_, ?_, h_newC⟩
+        · -- σ'' = σ → σ' = σ. Invariant preserved.
+          show WethInvFr (if (σ == ∅) = true then σ else σ) C
+          split_ifs <;> exact hInvσ
+        · split_ifs <;> exact hWF
+    case h_2 => trivial
+  case ok res =>
+    cases res
+    case revert g' o_out =>
+      split
+      case h_1 =>
+        rename_i cA'' σ'' g' A'' z out heq
+        simp only [bind, Except.bind, pure, Except.pure] at heq
+        injection heq with h1
+        injection h1 with h1a h1b
+        injection h1b with h1ba h1bb
+        subst h1a
+        subst h1ba
+        refine ⟨?_, ?_, h_newC⟩
+        · show WethInvFr (if (σ == ∅) = true then σ else σ) C
+          split_ifs <;> exact hInvσ
+        · split_ifs <;> exact hWF
+      case h_2 => trivial
+    case success details out =>
+      obtain ⟨cA', σ_Ξ, g', A_Ξ⟩ := details
+      split
+      case h_1 =>
+        rename_i cA'' σ'' g' A'' z out' heq
+        simp only [bind, Except.bind, pure, Except.pure] at heq
+        injection heq with h1
+        injection h1 with h1a h1b
+        injection h1b with h1ba h1bb
+        subst h1a
+        subst h1ba
+        -- σ'' = σ_Ξ, cA'' = cA'.
+        by_cases hrC : r = C
+        · -- r = C: invoke ΞInvariantAtCFrame.
+          have hIowner : I.codeOwner = C := by rw [hI_codeOwner]; exact hrC
+          have hW := hAtCFrame fuel' (Nat.le_refl _) createdAccounts genesisBlockHeader blocks
+              σ₁ σ₀ g A I h_WFσ₁ hIowner h_newC hInvσ₁
+          rw [hΞ] at hW
+          obtain ⟨hW_inv, hW_WF, hW_newC⟩ := hW
+          refine ⟨?_, ?_, ?_⟩
+          · apply theta_σ'_clamp_invariant
+            · exact hInvσ
+            · intro _; exact hW_inv
+          · show StateWF (if (σ_Ξ == ∅) = true then σ else σ_Ξ)
+            split_ifs
+            · exact hWF
+            · exact hW_WF
+          · exact hW_newC
+        · -- r ≠ C: invoke ΞInvariantFrameAtC.
+          have hIowner_ne : C ≠ I.codeOwner := by
+            rw [hI_codeOwner]; intro h; exact hrC h.symm
+          have hW := hFrame fuel' (Nat.le_refl _)
+              createdAccounts genesisBlockHeader blocks
+              σ₁ σ₀ g A I h_WFσ₁ hIowner_ne h_newC hInvσ₁
+          rw [hΞ] at hW
+          obtain ⟨hW_inv, hW_WF, hW_newC⟩ := hW
+          refine ⟨?_, ?_, ?_⟩
+          · apply theta_σ'_clamp_invariant
+            · exact hInvσ
+            · intro _; exact hW_inv
+          · show StateWF (if (σ_Ξ == ∅) = true then σ else σ_Ξ)
+            split_ifs
+            · exact hWF
+            · exact hW_WF
+          · exact hW_newC
+      case h_2 => trivial
+
+/-- §H.2's Θ frame for `WethInvFr`. Mirror of `Θ_balanceOf_ge_bdd`
+but tracking the invariant. -/
+private theorem Θ_invariant_preserved_bdd
+    (fuel : Nat) (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (A : Substate)
+    (s o r : AccountAddress) (c : ToExecute .EVM)
+    (g p v v' : UInt256) (d : ByteArray) (e : Nat)
+    (H : BlockHeader) (w : Bool) (C : AccountAddress)
+    (hWF : StateWF σ)
+    (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
+    (hValBound : ∀ acc, σ.find? r = some acc →
+        acc.balance.toNat + v.toNat < UInt256.size)
+    (h_funds_strict :
+        v = ⟨0⟩ ∨ ∃ acc, σ.find? s = some acc ∧ v.toNat ≤ acc.balance.toNat)
+    (h_slack :
+        C ≠ s ∨ v = ⟨0⟩ ∨
+        v.toNat + storageSum σ C ≤ balanceOf σ C)
+    (hInv : WethInvFr σ C)
+    (hAtCFrame : ΞInvariantAtCFrame C fuel)
+    (hFrame : ΞInvariantFrameAtC C fuel) :
+    match EVM.Θ fuel blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o r c g p v v' d e H w with
+    | .ok (cA'_out, σ', _, _, _, _) =>
+        WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
+    | .error _ => True := by
+  match fuel with
+  | 0 =>
+    rw [show EVM.Θ 0 blobVersionedHashes createdAccounts genesisBlockHeader
+                  blocks σ σ₀ A s o r c g p v v' d e H w = .error .OutOfFuel from rfl]
+    trivial
+  | fuel' + 1 =>
+    -- Establish WethInvFr σ'₁ C via the credit-prefix helper.
+    have h_σ'₁_inv := theta_σ'₁_invariant_preserved σ r C v hWF hValBound hInv
+    set σ'₁ : AccountMap .EVM :=
+      match σ.find? r with
+        | none =>
+          if v != ⟨0⟩ then
+            σ.insert r
+              { nonce := (default : Account .EVM).nonce
+                balance := v
+                storage := (default : Account .EVM).storage
+                code := (default : Account .EVM).code
+                tstorage := (default : Account .EVM).tstorage }
+          else σ
+        | some acc =>
+          σ.insert r
+            { nonce := acc.nonce
+              balance := acc.balance + v
+              storage := acc.storage
+              code := acc.code
+              tstorage := acc.tstorage }
+      with hσ'₁_def
+    set σ₁ : AccountMap .EVM :=
+      match σ'₁.find? s with
+        | none => σ'₁
+        | some acc =>
+          σ'₁.insert s
+            { nonce := acc.nonce
+              balance := acc.balance - v
+              storage := acc.storage
+              code := acc.code
+              tstorage := acc.tstorage }
+      with hσ₁_def
+    -- Establish WethInvFr σ₁ C via the debit-prefix helper.
+    have h_σ₁_inv : WethInvFr σ₁ C := by
+      -- Decompose h_slack into the three cases.
+      rcases h_slack with hCs | hv | hSlack
+      · -- C ≠ s: use the general (s ≠ C disjunct) helper.
+        exact theta_σ₁_invariant_preserved_general σ'₁ s C v (Or.inl hCs) h_σ'₁_inv
+      · -- v = 0: use the general (v = 0 disjunct) helper.
+        exact theta_σ₁_invariant_preserved_general σ'₁ s C v (Or.inr hv) h_σ'₁_inv
+      · -- s = C, v ≠ 0, slack covers v: use the at-C helper.
+        -- Need s = C — unfold from the (negated) form. Actually
+        -- h_slack is over original σ; we need to lift to σ'₁.
+        -- Use the trichotomy to pick C ≠ s for use in the general,
+        -- otherwise s = C.
+        by_cases hCs : C = s
+        · -- s = C in h_slack. Need to show:
+          -- h_funds : ∀ acc, σ'₁.find? C = some acc → v.toNat ≤ acc.balance.toNat.
+          subst hCs
+          -- Lift slack from σ to σ'₁ via balance monotonicity + storage equality.
+          have hStg : storageSum σ'₁ C = storageSum σ C := theta_σ'₁_storageSum_eq σ r C v
+          have hBal : balanceOf σ'₁ C ≥ balanceOf σ C := theta_σ'₁_ge σ r C v hWF hValBound
+          have h_slack_σ'₁ : v.toNat + storageSum σ'₁ C ≤ balanceOf σ'₁ C := by
+            rw [hStg]; omega
+          have h_funds : ∀ acc, σ'₁.find? C = some acc → v.toNat ≤ acc.balance.toNat := by
+            intro acc hLook
+            have hBal_eq : balanceOf σ'₁ C = acc.balance.toNat := by
+              unfold balanceOf; rw [hLook]; rfl
+            have hVle : v.toNat ≤ balanceOf σ'₁ C := by omega
+            rw [hBal_eq] at hVle
+            exact hVle
+          exact theta_σ₁_invariant_preserved_at_C σ'₁ C v h_funds h_slack_σ'₁
+        · -- C ≠ s.
+          push_neg at hCs
+          exact theta_σ₁_invariant_preserved_general σ'₁ s C v (Or.inl hCs) h_σ'₁_inv
+    -- StateWF σ₁.
+    have h_WFσ₁ : StateWF σ₁ :=
+      stateWF_theta_σ₁ σ hWF s r v hValBound h_funds_strict
+    -- Execution env I.
+    set I : ExecutionEnv .EVM :=
+      { codeOwner := r, sender := o, source := s, weiValue := v', calldata := d,
+        code :=
+          match c with
+            | ToExecute.Precompiled _ => default
+            | ToExecute.Code code => code,
+        gasPrice := p.toNat, header := H, depth := e, perm := w,
+        blobVersionedHashes := blobVersionedHashes }
+      with hI_def
+    cases c with
+    | Precompiled pc =>
+      have hΘeq :
+          EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                genesisBlockHeader blocks σ σ₀ A s o r
+                (ToExecute.Precompiled pc) g p v v' d e H w
+            = (do
+                let y ← EVM.applyPrecompile pc σ₁ g A I
+                match y with
+                | (cA'', z, σ'', g', A'', out) =>
+                  let σ' := if (σ'' == ∅) then σ else σ''
+                  let A' := if (σ'' == ∅) then A else A''
+                  pure (cA'', σ', g', A', z, out)) := by
+        show _ = _
+        rfl
+      exact Θ_body_precompile_invariant σ σ₁ A I C fuel' blobVersionedHashes
+        createdAccounts genesisBlockHeader blocks σ₀ s o r pc g p v v' d e H w
+        hInv h_σ₁_inv hWF h_WFσ₁ hΘeq
+    | Code c_code =>
+      have hΘeq :
+          EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                genesisBlockHeader blocks σ σ₀ A s o r
+                (ToExecute.Code c_code) g p v v' d e H w
+            = (do
+                let y ←
+                  match EVM.Ξ fuel' createdAccounts genesisBlockHeader blocks
+                          σ₁ σ₀ g A I with
+                  | .error e =>
+                    if e == .OutOfFuel then throw .OutOfFuel
+                    else pure (createdAccounts, false, σ, ⟨0⟩, A, .empty)
+                  | .ok (.revert g' o) =>
+                    pure (createdAccounts, false, σ, g', A, o)
+                  | .ok (.success (a, b, c', d) o) =>
+                    pure (a, true, b, c', d, o)
+                match y with
+                | (cA'', z, σ'', g', A'', out) =>
+                  let σ' := if (σ'' == ∅) then σ else σ''
+                  let A' := if (σ'' == ∅) then A else A''
+                  pure (cA'', σ', g', A', z, out)) := by
+        show _ = _
+        rfl
+      have hI_co : I.codeOwner = r := by rw [hI_def]
+      have hAtCFrame' : ΞInvariantAtCFrame C fuel' :=
+        ΞInvariantAtCFrame_mono C (fuel' + 1) fuel' (Nat.le_succ _) hAtCFrame
+      have hFrame' : ΞInvariantFrameAtC C fuel' :=
+        ΞInvariantFrameAtC_mono C (fuel' + 1) fuel' (Nat.le_succ _) hFrame
+      exact Θ_body_code_invariant σ σ₁ A I C fuel' blobVersionedHashes
+        createdAccounts genesisBlockHeader blocks σ₀ s o r c_code g p v v' d e H w
+        hInv h_σ₁_inv hWF h_WFσ₁ h_newC hAtCFrame' hFrame' hI_co hΘeq
+
 end Frame
 end EvmYul
