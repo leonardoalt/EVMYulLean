@@ -7509,5 +7509,162 @@ private theorem step_STATICCALL_arm_invariant
       · simp only [executionEnv_replaceStackAndIncrPC]; rw [hCOres]; exact hCO
       · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNCres
 
+/-- CALLCODE invariant arm: same body shape as CALL, but `src = rcp =
+codeOwner` (self-call). The slack discharge is `Or.inl hCO` after
+`hRoundtrip`. -/
+private theorem step_CALLCODE_arm_invariant
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
+    (hFrame : ΞInvariantFrameAtC C (f + 1))
+    (hInv : WethInvFr evmState.accountMap C)
+    (hStep : EVM.step (f + 1) cost₂ (some (.CALLCODE, arg)) evmState = .ok sstepState) :
+    WethInvFr sstepState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  simp only [EVM.step, Operation.CALLCODE, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
+  split at hStep
+  · exact absurd hStep (by simp)
+  · rename_i p hpop7
+    obtain ⟨stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆⟩ := p
+    split at hStep
+    · exact absurd hStep (by simp)
+    · rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      have hWFes1 : StateWF eS1.accountMap := hWF
+      have hCOes1 : C ≠ eS1.executionEnv.codeOwner := hCO
+      have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
+      have hInves1 : WethInvFr eS1.accountMap C := hInv
+      have hRoundtrip :
+          AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner)
+            = eS1.executionEnv.codeOwner := by
+        show Fin.ofNat _ (((Fin.ofNat UInt256.size
+                eS1.executionEnv.codeOwner.val).val) % AccountAddress.size)
+             = eS1.executionEnv.codeOwner
+        have hAddrLtUSize : AccountAddress.size ≤ UInt256.size := by
+          show AccountAddress.size ≤ UInt256.size
+          decide
+        have hCoLtAddr : eS1.executionEnv.codeOwner.val < AccountAddress.size :=
+          eS1.executionEnv.codeOwner.isLt
+        have hCoLtU : eS1.executionEnv.codeOwner.val < UInt256.size :=
+          Nat.lt_of_lt_of_le hCoLtAddr hAddrLtUSize
+        have h1 : (Fin.ofNat UInt256.size eS1.executionEnv.codeOwner.val).val
+                  = eS1.executionEnv.codeOwner.val := by
+          show eS1.executionEnv.codeOwner.val % UInt256.size
+                = eS1.executionEnv.codeOwner.val
+          exact Nat.mod_eq_of_lt hCoLtU
+        rw [h1]
+        show Fin.ofNat _ (eS1.executionEnv.codeOwner.val % AccountAddress.size)
+             = eS1.executionEnv.codeOwner
+        rw [Nat.mod_eq_of_lt hCoLtAddr]
+        show Fin.ofNat _ eS1.executionEnv.codeOwner.val = eS1.executionEnv.codeOwner
+        apply Fin.ext
+        show eS1.executionEnv.codeOwner.val % AccountAddress.size
+             = eS1.executionEnv.codeOwner.val
+        exact Nat.mod_eq_of_lt hCoLtAddr
+      have h_slack_call :
+          C ≠ AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner) ∨
+              μ₂ = ⟨0⟩ ∨
+              μ₂.toNat + storageSum eS1.accountMap C ≤ balanceOf eS1.accountMap C := by
+        left; rw [hRoundtrip]; exact hCOes1
+      set Iₐ : AccountAddress := eS1.executionEnv.codeOwner
+      by_cases hGate :
+          μ₂ ≤ (eS1.accountMap.find? Iₐ |>.option (⟨0⟩ : UInt256) (·.balance))
+            ∧ eS1.executionEnv.depth < 1024
+      · have hμle := hGate.1
+        have h_fs_call :
+            μ₂ = ⟨0⟩ ∨ ∃ acc,
+              (eS1.accountMap).find? (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner))
+                = some acc ∧ μ₂.toNat ≤ acc.balance.toNat := by
+          cases hFo : eS1.accountMap.find? Iₐ with
+          | none =>
+            rw [hFo] at hμle
+            have hNle : μ₂.toNat ≤ (⟨0⟩ : UInt256).toNat := by
+              show μ₂.val.val ≤ (⟨0⟩ : UInt256).val.val
+              exact hμle
+            have hμ0N : μ₂.toNat = 0 := Nat.le_zero.mp hNle
+            left
+            show μ₂ = ⟨⟨0, by decide⟩⟩
+            cases μ₂ with
+            | mk v =>
+              cases v with
+              | mk x hx =>
+                simp only [UInt256.toNat] at hμ0N
+                subst hμ0N
+                rfl
+          | some acc_Ia =>
+            right
+            have hFo' :
+                eS1.accountMap.find? (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner))
+                  = some acc_Ia := by
+              rw [hRoundtrip]; exact hFo
+            refine ⟨acc_Ia, hFo', ?_⟩
+            rw [hFo] at hμle
+            show μ₂.val.val ≤ acc_Ia.balance.val.val
+            exact hμle
+        have h_vb_call :
+            ∀ acc, (eS1.accountMap).find? (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner))
+                = some acc →
+              acc.balance.toNat + μ₂.toNat < UInt256.size := by
+          intro acc h_find_r
+          rw [hRoundtrip] at h_find_r
+          have hμle' : μ₂.toNat ≤ acc.balance.toNat := by
+            rw [h_find_r] at hμle
+            show μ₂.val.val ≤ acc.balance.val.val
+            exact hμle
+          have hBalLe : acc.balance.toNat ≤ totalETH eS1.accountMap :=
+            balance_toNat_le_totalETH eS1.accountMap Iₐ acc h_find_r
+          have hDbl : 2 * totalETH eS1.accountMap < UInt256.size :=
+            hWFes1.boundedTotalDouble
+          calc acc.balance.toNat + μ₂.toNat
+              ≤ acc.balance.toNat + acc.balance.toNat := by omega
+            _ = 2 * acc.balance.toNat := by ring
+            _ ≤ 2 * totalETH eS1.accountMap := by omega
+            _ < UInt256.size := hDbl
+        have hAtCFrame_f : ΞInvariantAtCFrame C f :=
+          ΞInvariantAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
+        have hFrame_f : ΞInvariantFrameAtC C f :=
+          ΞInvariantFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+        have hBundle :=
+          call_invariant_preserved C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
+            (.ofNat eS1.executionEnv.codeOwner) μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆
+            eS1.executionEnv.perm eS1 state' x
+            hWFes1 hNCes1 hAtCFrame_f hFrame_f h_vb_call h_fs_call h_slack_call hInves1 hCallRes
+        obtain ⟨hInvres, hWFres, hCOres, hNCres⟩ := hBundle
+        refine ⟨?_, ?_, ?_, ?_⟩
+        · simp only [accountMap_replaceStackAndIncrPC]; exact hInvres
+        · simp only [accountMap_replaceStackAndIncrPC]; exact hWFres
+        · simp only [executionEnv_replaceStackAndIncrPC]; rw [hCOres]; exact hCO
+        · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNCres
+      · -- Gate failed: state unchanged.
+        unfold EVM.call at hCallRes
+        simp only [bind, Except.bind, pure, Except.pure] at hCallRes
+        cases hf : f with
+        | zero =>
+          rw [hf] at hCallRes
+          exact absurd hCallRes (by simp)
+        | succ f' =>
+          rw [hf] at hCallRes
+          simp only at hCallRes
+          rw [if_neg hGate] at hCallRes
+          simp only [Except.ok.injEq, Prod.mk.injEq] at hCallRes
+          obtain ⟨_hxEq, hStateEq⟩ := hCallRes
+          refine ⟨?_, ?_, ?_, ?_⟩
+          · simp only [accountMap_replaceStackAndIncrPC, ← hStateEq]
+            exact hInves1
+          · simp only [accountMap_replaceStackAndIncrPC, ← hStateEq]
+            exact hWFes1
+          · simp only [executionEnv_replaceStackAndIncrPC, ← hStateEq]
+            exact hCOes1
+          · simp only [createdAccounts_replaceStackAndIncrPC, ← hStateEq]
+            exact hNCes1
+
 end Frame
 end EvmYul
