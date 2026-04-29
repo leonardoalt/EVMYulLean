@@ -6262,5 +6262,183 @@ theorem EvmYul_step_preserves_WethInvFr_of_strict
   rw [hAM]
   exact hInv
 
+/-! ## §H.2 — Storage-side helpers for Θ's value-transfer prefix
+
+The invariant `WethInvFr σ C := storageSum σ C ≤ balanceOf σ C` only
+depends on the *balance* and *storage* projections of `σ` at `C`. Θ's
+value-transfer prefix (credit `r` then debit `s`) only modifies
+`balance` (storage is preserved through both `.insert` operations).
+These helpers bridge the storage-side projection equality so the
+invariant tracking through Θ's prefix only needs to handle balance
+changes. -/
+
+/-- Θ's `σ'₁` credit step preserves `storageSum C` for every `C`.
+
+Both `.insert` branches preserve storage at every key:
+* `none → some v`: insert at `r` with default storage. At `C ≠ r`,
+  `storageSum` is preserved by `find?_insert_ne`. At `C = r`, the
+  default storage's foldl-sum is `0`, and the σ-side has `find? r =
+  none` ⇒ `storageSum σ r = 0` (definitional). So both equal `0`.
+* `none → σ` (v = 0): trivial.
+* `some acc → some {acc with balance := acc.balance + v}`: storage in
+  the inserted account equals `acc.storage`, which is the storage at
+  `r` in `σ`, so storage projection is preserved at every key. -/
+theorem theta_σ'₁_storageSum_eq
+    (σ : AccountMap .EVM) (r C : AccountAddress) (v : UInt256) :
+    let σ'₁ :=
+      match σ.find? r with
+        | none =>
+          if v != ⟨0⟩ then
+            σ.insert r { (default : Account .EVM) with balance := v }
+          else σ
+        | some acc => σ.insert r { acc with balance := acc.balance + v }
+    storageSum σ'₁ C = storageSum σ C := by
+  simp only
+  split
+  · case _ hLook =>
+    split
+    · -- v ≠ 0, insert default-record with balance v
+      by_cases hrC : r = C
+      · -- r = C: the inserted account has default storage; storageSum σ C = 0 from hLook.
+        subst hrC
+        unfold storageSum
+        rw [find?_insert_self, hLook]
+        -- LHS: foldl over default storage = 0; RHS: 0.
+        rfl
+      · apply storageSum_unchanged_at_other_account
+        exact hrC
+    · -- v = 0, σ unchanged
+      rfl
+  · case _ acc hLook =>
+    by_cases hrC : r = C
+    · -- r = C: inserted account has acc.storage; storageSum projects identically.
+      subst hrC
+      unfold storageSum
+      rw [find?_insert_self, hLook]
+    · apply storageSum_unchanged_at_other_account
+      exact hrC
+
+/-- Θ's `σ₁` debit step preserves `storageSum C` for every `C`.
+
+Same shape as `theta_σ'₁_storageSum_eq` but for the `s`-side debit:
+`.insert s { acc with balance := acc.balance - v }`. The storage
+projection is unchanged because `acc.storage` is reused. -/
+theorem theta_σ₁_storageSum_eq
+    (σ'₁ : AccountMap .EVM) (s C : AccountAddress) (v : UInt256) :
+    let σ₁ :=
+      match σ'₁.find? s with
+        | none => σ'₁
+        | some acc => σ'₁.insert s { acc with balance := acc.balance - v }
+    storageSum σ₁ C = storageSum σ'₁ C := by
+  simp only
+  split
+  · rfl
+  · case _ acc hLook =>
+    by_cases hsC : s = C
+    · subst hsC
+      unfold storageSum
+      rw [find?_insert_self, hLook]
+    · apply storageSum_unchanged_at_other_account
+      exact hsC
+
+/-- The credit prefix `σ → σ'₁` preserves `WethInvFr σ C` always (slack
+weakly increases: at `r = C` balance grows; at `r ≠ C` balance is
+unchanged).
+
+Combined with `theta_σ'₁_storageSum_eq` (storage unchanged at `C`), and
+`theta_σ'₁_ge` (balance monotone at `C`), the invariant carries
+through verbatim. -/
+theorem theta_σ'₁_invariant_preserved
+    (σ : AccountMap .EVM) (r C : AccountAddress) (v : UInt256)
+    (hWF : StateWF σ)
+    (hValBound : ∀ acc, σ.find? r = some acc →
+        acc.balance.toNat + v.toNat < UInt256.size)
+    (hInv : WethInvFr σ C) :
+    let σ'₁ :=
+      match σ.find? r with
+        | none =>
+          if v != ⟨0⟩ then
+            σ.insert r { (default : Account .EVM) with balance := v }
+          else σ
+        | some acc => σ.insert r { acc with balance := acc.balance + v }
+    WethInvFr σ'₁ C := by
+  unfold WethInvFr at *
+  -- storageSum unchanged + balance monotone ⇒ invariant preserved.
+  have hStg := theta_σ'₁_storageSum_eq σ r C v
+  have hBal := theta_σ'₁_ge σ r C v hWF hValBound
+  simp only at hStg hBal ⊢
+  rw [hStg]
+  exact Nat.le_trans hInv hBal
+
+/-- The debit prefix `σ'₁ → σ₁` preserves `WethInvFr σ'₁ C` when
+either `s ≠ C` (balance unchanged) or `v = 0` (balance unchanged).
+
+For the s = C, v ≠ 0 case, see `theta_σ₁_invariant_preserved_at_C`
+which takes the slack hypothesis as input. -/
+theorem theta_σ₁_invariant_preserved_general
+    (σ'₁ : AccountMap .EVM) (s C : AccountAddress) (v : UInt256)
+    (h_s : C ≠ s ∨ v = ⟨0⟩)
+    (hInv : WethInvFr σ'₁ C) :
+    let σ₁ :=
+      match σ'₁.find? s with
+        | none => σ'₁
+        | some acc => σ'₁.insert s { acc with balance := acc.balance - v }
+    WethInvFr σ₁ C := by
+  unfold WethInvFr at *
+  -- storageSum unchanged + balance unchanged at C ⇒ invariant preserved.
+  have hStg := theta_σ₁_storageSum_eq σ'₁ s C v
+  have hBal := theta_σ₁_preserves σ'₁ s C v h_s
+  simp only at hStg hBal ⊢
+  rw [hStg, hBal]
+  exact hInv
+
+/-- The debit prefix `σ'₁ → σ₁` at `s = C` (and `v ≠ 0`): the
+balance shrinks by `v` at `C`, but the invariant holds *if* the slack
+hypothesis covers `v`. The slack hypothesis takes the form
+`v.toNat + storageSum σ'₁ C ≤ balanceOf σ'₁ C` which is the precise
+form of "the credit/debit doesn't violate the invariant". -/
+theorem theta_σ₁_invariant_preserved_at_C
+    (σ'₁ : AccountMap .EVM) (C : AccountAddress) (v : UInt256)
+    (h_funds : ∀ acc, σ'₁.find? C = some acc → v.toNat ≤ acc.balance.toNat)
+    (h_slack : v.toNat + storageSum σ'₁ C ≤ balanceOf σ'₁ C) :
+    let σ₁ :=
+      match σ'₁.find? C with
+        | none => σ'₁
+        | some acc => σ'₁.insert C { acc with balance := acc.balance - v }
+    WethInvFr σ₁ C := by
+  unfold WethInvFr
+  simp only
+  -- storageSum unchanged at C through the s=C insert.
+  have hStg := theta_σ₁_storageSum_eq σ'₁ C C v
+  simp only at hStg
+  rw [hStg]
+  -- balanceOf σ₁ C: split on σ'₁.find? C.
+  cases hLook : σ'₁.find? C with
+  | none =>
+    -- σ₁ = σ'₁, balanceOf σ'₁ C = 0 (since find? = none), storageSum σ'₁ C
+    -- ≤ 0 from h_slack so storageSum = 0; goal is 0 ≤ 0.
+    have hBal0 : balanceOf σ'₁ C = 0 := by
+      unfold balanceOf; rw [hLook]; rfl
+    rw [hBal0] at h_slack ⊢
+    have hS0 : storageSum σ'₁ C = 0 := by omega
+    rw [hS0]
+  | some acc =>
+    -- σ₁ = σ'₁.insert C { acc with balance := acc.balance - v }.
+    -- balanceOf σ₁ C = (acc.balance - v).toNat.
+    have hBal_v : v.toNat ≤ acc.balance.toNat := h_funds acc hLook
+    have hBalσ'₁ : balanceOf σ'₁ C = acc.balance.toNat := by
+      unfold balanceOf; rw [hLook]; rfl
+    show balanceOf
+        (σ'₁.insert C { acc with balance := acc.balance - v }) C
+        ≥ storageSum σ'₁ C
+    unfold balanceOf
+    rw [find?_insert_self]
+    show (acc.balance - v).toNat ≥ storageSum σ'₁ C
+    -- show acc.balance - v |>.toNat ≥ storageSum σ'₁ C.
+    rw [UInt256_sub_toNat_of_le _ _ hBal_v]
+    -- v.toNat + storageSum ≤ balanceOf σ'₁ C = acc.balance.toNat
+    rw [hBalσ'₁] at h_slack
+    omega
+
 end Frame
 end EvmYul
