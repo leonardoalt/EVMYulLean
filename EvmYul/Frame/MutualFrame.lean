@@ -9363,7 +9363,11 @@ private theorem step_bundled_invariant_at_C_invariant_at_C_dispatch
       exact hNC a haIn
 
 /-- **Dispatch X-induction predicate.** Mirror of `X_inv_at_C_invariant`
-with the `h_v0` hypothesis replaced by a per-state CALL dispatcher. -/
+with the `h_v0` hypothesis replaced by a per-state CALL dispatcher. The
+step-closure obligation is restricted to non-halt ops (op ∉ {RETURN,
+REVERT, STOP, SELFDESTRUCT}), since halt ops cause X to exit the X loop
+without recursing — so the post-halt state's reachability is never
+needed downstream. -/
 private def X_inv_at_C_invariant_dispatch (OpAllowedSet : Operation .EVM → Prop)
     (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
     (Reachable : EVM.State → Prop)
@@ -9380,6 +9384,7 @@ private def X_inv_at_C_invariant_dispatch (OpAllowedSet : Operation .EVM → Pro
   (∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
       fetchInstr s.executionEnv s.pc = .ok (op, arg) →
       EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
+      op ≠ .RETURN → op ≠ .REVERT → op ≠ .STOP → op ≠ .SELFDESTRUCT →
       Reachable s') →
   (∀ s : EVM.State, Reachable s →
       ∃ pair, decode s.executionEnv.code s.pc = some pair) →
@@ -9580,10 +9585,20 @@ private theorem X_inv_at_C_invariant_holds_dispatch
                   hWFZ hCCZ hNCZ hAtCFrameAtSuccF' hFrameAtSuccF' hInvZ
                   hAllowed hDischarge h_call_dispatch_op h_sstore_post hStep'
               obtain ⟨hInvSstep, hWFsstep, hCCsstep, hNCsstep⟩ := hBundle
-              have hReachStep : Reachable sstepState :=
-                hReach_step evmStateZ sstepState f'' cost₂ op arg hReachZ hFetchOK hStep'
               split at hXres
               case h_1 _ hH_none =>
+                -- H = none ⇒ op ∉ {RETURN, REVERT, STOP, SELFDESTRUCT}.
+                have hOpRet : op ≠ .RETURN := by
+                  intro hEq; rw [hEq] at hH_none; simp at hH_none
+                have hOpRev : op ≠ .REVERT := by
+                  intro hEq; rw [hEq] at hH_none; simp at hH_none
+                have hOpStop : op ≠ .STOP := by
+                  intro hEq; rw [hEq] at hH_none; simp at hH_none
+                have hOpSD : op ≠ .SELFDESTRUCT := by
+                  intro hEq; rw [hEq] at hH_none; simp at hH_none
+                have hReachStep : Reachable sstepState :=
+                  hReach_step evmStateZ sstepState f'' cost₂ op arg hReachZ hFetchOK hStep'
+                    hOpRet hOpRev hOpStop hOpSD
                 have hFrame' : ∀ f'_1, f'_1 ≤ (f'' + 1) → ΞInvariantFrameAtC C f'_1 :=
                   fun f1 h1 =>
                     ΞInvariantFrameAtC_mono C ((f'' + 1) + 1) f1
@@ -9631,6 +9646,7 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_dispatch
     (hReach_step : ∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
         fetchInstr s.executionEnv s.pc = .ok (op, arg) →
         EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
+        op ≠ .RETURN → op ≠ .REVERT → op ≠ .STOP → op ≠ .SELFDESTRUCT →
         Reachable s')
     (hReach_decodeSome : ∀ s : EVM.State, Reachable s →
         ∃ pair, decode s.executionEnv.code s.pc = some pair)
