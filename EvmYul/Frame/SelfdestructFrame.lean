@@ -1,5 +1,6 @@
 import EvmYul.Frame.Projection
 import EvmYul.Frame.StepFrame
+import EvmYul.Frame.StorageSum
 import EvmYul.Semantics
 import EvmYul.EVM.State
 
@@ -407,6 +408,219 @@ theorem selfdestruct_SDset_subset_or_Iₐ
       rw [hSDeq] at hk
       exact Or.inl hk
   case _ _ => simp at h
+
+/-! ## SELFDESTRUCT storage-sum preservation (§H.2 leaf)
+
+For the Weth invariant chain we need: at any handled SELFDESTRUCT step
+with `Iₐ ≠ C`, `storageSum σ C` is preserved. Mirror of
+`selfdestruct_balanceOf_ne_Iₐ_ge`, but for the `storageSum`
+projection. The argument is structural: in every shape where the
+accountMap actually changes, the change is two inserts at `r` and
+`Iₐ` whose new account-records re-use the original storage of the
+key (`{σ_r with balance := …}` / `{σ_Iₐ with balance := …}`). At
+`C ≠ Iₐ`:
+
+* Outer insert at `Iₐ` frames the `find?` lookup at `C` (so the
+  outer insert vanishes for the `storageSum` projection).
+* Inner insert at `r` either frames at `C ≠ r`, or — when `r = C` —
+  re-uses `σ_r.storage` (case 4 / 5A) or default storage with
+  `σ.find? r = none` (case 3, in which case `storageSum σ C = 0 =
+  storageSum σ_default C`).
+
+Used as a leaf in `step_bundled_invariant_at_C_invariant_general`'s
+SELFDESTRUCT arm. -/
+
+/-- `storageSum` of the case-3 / case-4 / case-5A double-insert at
+`C ≠ Iₐ`. The new account records share storage with the key's
+original record (or, for case 3, the original is `none`). -/
+private theorem storageSum_double_insert_with_balance_only
+    (σ : AccountMap .EVM) (r Iₐ C : AccountAddress)
+    (acc_r acc_Iₐ : Account .EVM)
+    (acc_r' acc_Iₐ' : Account .EVM)
+    (hStg_r : acc_r'.storage = acc_r.storage)
+    (_hStg_Iₐ : acc_Iₐ'.storage = acc_Iₐ.storage)
+    (hRfind : σ.find? r = some acc_r)
+    (_hIₐfind : σ.find? Iₐ = some acc_Iₐ)
+    (_hRA : True)
+    (hIₐC : Iₐ ≠ C) :
+    storageSum ((σ.insert r acc_r').insert Iₐ acc_Iₐ') C
+      = storageSum σ C := by
+  by_cases hrC : r = C
+  · -- r = C: storageSum at C in the post-image equals foldl over acc_r'.storage = foldl over acc_r.storage = storageSum σ C.
+    subst hrC
+    unfold storageSum
+    rw [find?_insert_ne _ _ _ _ hIₐC]
+    rw [find?_insert_self]
+    rw [hRfind]
+    simp only [hStg_r]
+  · -- r ≠ C: both inserts frame at C.
+    apply storageSum_of_find?_eq
+    rw [find?_insert_ne _ _ _ _ hIₐC]
+    exact find?_insert_ne _ _ _ _ hrC
+
+/-- Variant of `storageSum_double_insert_with_balance_only` for case 3
+where `σ.find? r = none` and the inserted account at `r` has the
+default (empty) storage. The original `storageSum σ C` is `0` when
+`r = C` (since `σ.find? r = none`), and the inserted record's
+storage is empty so its foldl-sum is also `0`. -/
+private theorem storageSum_double_insert_case3
+    (σ : AccountMap .EVM) (r Iₐ C : AccountAddress)
+    (acc_Iₐ : Account .EVM)
+    (newR newIₐ : Account .EVM)
+    (hStg_r_default : newR.storage = (default : Account .EVM).storage)
+    (_hStg_Iₐ : newIₐ.storage = acc_Iₐ.storage)
+    (hRfind : σ.find? r = none)
+    (_hIₐfind : σ.find? Iₐ = some acc_Iₐ)
+    (hIₐC : Iₐ ≠ C) :
+    storageSum ((σ.insert r newR).insert Iₐ newIₐ) C
+      = storageSum σ C := by
+  by_cases hrC : r = C
+  · subst hrC
+    -- LHS: foldl over default storage = 0.
+    -- RHS: storageSum σ r = 0 since σ.find? r = none.
+    unfold storageSum
+    rw [find?_insert_ne _ _ _ _ hIₐC]
+    rw [find?_insert_self]
+    rw [hRfind]
+    simp only [hStg_r_default]
+    rfl
+  · apply storageSum_of_find?_eq
+    rw [find?_insert_ne _ _ _ _ hIₐC]
+    exact find?_insert_ne _ _ _ _ hrC
+
+/-- **Main lemma.** SELFDESTRUCT step preserves `storageSum σ C` when
+the executing-frame address `Iₐ ≠ C`.
+
+Mirror of `selfdestruct_balanceOf_ne_Iₐ_ge`'s 5-case dispatch (Iₐ
+absent / r absent × σ_Iₐ zero / r absent × σ_Iₐ nonzero / r present
+× r ≠ Iₐ / r = Iₐ) times 2 outer branches (created-same-tx or not).
+In every shape, the post-step `storageSum σ' C` equals the pre-step
+`storageSum σ C`:
+* Cases 1, 2, 5B (accountMap literally unchanged): trivial.
+* Case 3 (r absent + σ_Iₐ nonzero): two inserts at `r` (default
+  account with `σ_Iₐ.balance`) and `Iₐ` (zero balance). Storage at
+  every key is preserved through both inserts when `r, Iₐ ≠ C`; at
+  `r = C` we use that `σ.find? r = none` makes both sides zero.
+* Case 4 (r present + r ≠ Iₐ): two inserts at `r`/`Iₐ`, both
+  re-using the key's original storage record. At `r = C`,
+  `find? r = some σ_r` and the new record's storage is `σ_r.storage`;
+  at `r ≠ C`, both inserts frame.
+* Case 5A (r = Iₐ + branch A burn): two inserts both at `r = Iₐ`,
+  re-using the original storage. With `Iₐ ≠ C` both frame at C. -/
+theorem selfdestruct_storageSum_at_ne_Iₐ_eq
+    (s s' : EVM.State) (C : AccountAddress)
+    (h : EvmYul.step (.SELFDESTRUCT : Operation .EVM) .none s = .ok s')
+    (hne : C ≠ s.executionEnv.codeOwner) :
+    storageSum s'.accountMap C = storageSum s.accountMap C := by
+  unfold EvmYul.step at h
+  simp only [Id.run] at h
+  set Iₐ := s.executionEnv.codeOwner with hIₐ_def
+  have hIₐC : Iₐ ≠ C := fun heq => hne heq.symm
+  split at h
+  case _ stk μ₁ hPop =>
+    set r : AccountAddress := AccountAddress.ofUInt256 μ₁ with hr_def
+    split at h
+    case _ hCreated =>
+      -- Branch A
+      split at h
+      case _ hLookIₐ =>
+        -- Case 1: accountMap unchanged
+        simp only [Except.ok.injEq] at h
+        subst h
+        rfl
+      case _ σ_Iₐ hLookIₐ =>
+        have hIₐfind : s.accountMap.find? Iₐ = some σ_Iₐ := hLookIₐ
+        split at h
+        case _ hLookR =>
+          have hRfind_none : s.accountMap.find? r = none := hLookR
+          split at h
+          case isTrue hBal =>
+            -- Case 2
+            simp only [Except.ok.injEq] at h
+            subst h
+            rfl
+          case isFalse hBal =>
+            -- Case 3: r absent, σ_Iₐ ≠ 0
+            simp only [Except.ok.injEq] at h
+            subst h
+            change storageSum (_root_.Batteries.RBMap.insert _ _ _) C = _
+            exact storageSum_double_insert_case3 s.accountMap r Iₐ C σ_Iₐ
+              { (default : Account .EVM) with balance := σ_Iₐ.balance }
+              { σ_Iₐ with balance := ⟨0⟩ }
+              rfl rfl hRfind_none hIₐfind hIₐC
+        case _ σ_r hLookR =>
+          have hRfind : s.accountMap.find? r = some σ_r := hLookR
+          split at h
+          case isTrue hrIₐ =>
+            -- Case 4
+            simp only [Except.ok.injEq] at h
+            subst h
+            change storageSum (_root_.Batteries.RBMap.insert _ _ _) C = _
+            exact storageSum_double_insert_with_balance_only s.accountMap r Iₐ C
+              σ_r σ_Iₐ
+              { σ_r with balance := σ_r.balance + σ_Iₐ.balance }
+              { σ_Iₐ with balance := ⟨0⟩ }
+              rfl rfl hRfind hIₐfind trivial hIₐC
+          case isFalse hrIₐ =>
+            -- Case 5A: burn (r = Iₐ branch in branch A)
+            simp only [Except.ok.injEq] at h
+            subst h
+            change storageSum (_root_.Batteries.RBMap.insert _ _ _) C = _
+            have hrIₐ' : r = Iₐ := Classical.not_not.mp hrIₐ
+            -- σ_r = σ_Iₐ since lookup at r = Iₐ.
+            have hRfind' : s.accountMap.find? r = some σ_r := hRfind
+            -- Use the same helper; r and Iₐ both equal so both inserts collapse to same key.
+            exact storageSum_double_insert_with_balance_only s.accountMap r Iₐ C
+              σ_r σ_Iₐ
+              { σ_r with balance := ⟨0⟩ }
+              { σ_Iₐ with balance := ⟨0⟩ }
+              rfl rfl hRfind hIₐfind trivial hIₐC
+    case _ hNotCreated =>
+      -- Branch B
+      split at h
+      case _ hLookIₐ =>
+        simp only [Except.ok.injEq] at h
+        subst h
+        rfl
+      case _ σ_Iₐ hLookIₐ =>
+        have hIₐfind : s.accountMap.find? Iₐ = some σ_Iₐ := hLookIₐ
+        split at h
+        case _ hLookR =>
+          have hRfind_none : s.accountMap.find? r = none := hLookR
+          split at h
+          case isTrue hBal =>
+            simp only [Except.ok.injEq] at h
+            subst h
+            rfl
+          case isFalse hBal =>
+            -- Case 3 (branch B)
+            simp only [Except.ok.injEq] at h
+            subst h
+            change storageSum (_root_.Batteries.RBMap.insert _ _ _) C = _
+            exact storageSum_double_insert_case3 s.accountMap r Iₐ C σ_Iₐ
+              { (default : Account .EVM) with balance := σ_Iₐ.balance }
+              { σ_Iₐ with balance := ⟨0⟩ }
+              rfl rfl hRfind_none hIₐfind hIₐC
+        case _ σ_r hLookR =>
+          have hRfind : s.accountMap.find? r = some σ_r := hLookR
+          split at h
+          case isTrue hrIₐ =>
+            -- Case 4 (branch B)
+            simp only [Except.ok.injEq] at h
+            subst h
+            change storageSum (_root_.Batteries.RBMap.insert _ _ _) C = _
+            exact storageSum_double_insert_with_balance_only s.accountMap r Iₐ C
+              σ_r σ_Iₐ
+              { σ_r with balance := σ_r.balance + σ_Iₐ.balance }
+              { σ_Iₐ with balance := ⟨0⟩ }
+              rfl rfl hRfind hIₐfind trivial hIₐC
+          case isFalse hrIₐ =>
+            -- Case 5B (branch B, r = Iₐ): no-op
+            simp only [Except.ok.injEq] at h
+            subst h
+            rfl
+  case _ hPop =>
+    simp at h
 
 /-- SELFDESTRUCT step preserves `SubstateSDExclude C` of the substate
 when the executing-frame address `Iₐ ≠ C`.
