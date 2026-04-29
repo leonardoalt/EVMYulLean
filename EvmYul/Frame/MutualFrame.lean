@@ -5827,6 +5827,137 @@ theorem ΞPreservesAtC_of_Reachable
           exact hRes
         | revert _ _ => trivial
 
+/-- **Op-whitelist generalization of `ΞPreservesAtC_of_Reachable`.**
+
+Same shape as the v0 entry point, but the per-state "op ∈ Register's
+8" closure is replaced with a general `OpAllowedSet : Operation .EVM
+→ Prop` predicate plus a per-op dispatcher hypothesis (allowed ⇒
+handled∧¬SD ∨ op=.CALL). The CALL arm continues to require
+`stack[2]? = some 0` (Mode V0 routing). Mode INV (value ≠ 0) requires
+§H's parallel mutual closure and is not instantiated here.
+
+The existing `ΞPreservesAtC_of_Reachable` becomes a special case of
+this — instantiating `OpAllowedSet := λ op => op = .Push .PUSH1 ∨ ...`
+recovers the v0 conclusion. The two siblings coexist as additive
+infrastructure; Phase G.2 (re-deriving `_v0` from `_general`) is
+optional and may be deferred. -/
+theorem ΞPreservesAtC_of_Reachable_general
+    (OpAllowedSet : Operation .EVM → Prop)
+    (C : AccountAddress)
+    (Reachable : EVM.State → Prop)
+    (hReach_Z : ∀ s : EVM.State, ∀ g : UInt256, Reachable s →
+        Reachable { s with gasAvailable := g })
+    (hReach_step : ∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
+        Reachable s')
+    (hReach_decodeSome : ∀ s : EVM.State, Reachable s →
+        ∃ pair, decode s.executionEnv.code s.pc = some pair)
+    (hReach_op : ∀ s : EVM.State, ∀ op : Operation .EVM, ∀ arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        OpAllowedSet op)
+    (hDischarge : ∀ op', OpAllowedSet op' →
+        (handledByEvmYulStep op' ∧ op' ≠ .SELFDESTRUCT) ∨ op' = .CALL)
+    (hReach_v0 : ∀ s : EVM.State, ∀ arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
+        s.stack[2]? = some ⟨0⟩)
+    (hReachInit : ∀ (cA : RBSet AccountAddress compare)
+                    (gbh : BlockHeader) (bs : ProcessedBlocks)
+                    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+                    (I : ExecutionEnv .EVM),
+        I.codeOwner = C →
+        Reachable
+          { (default : EVM.State) with
+              accountMap := σ
+              σ₀ := σ₀
+              executionEnv := I
+              substate := A
+              createdAccounts := cA
+              gasAvailable := g
+              blocks := bs
+              genesisBlockHeader := gbh }) :
+    ΞPreservesAtC C := by
+  intro fuel
+  induction fuel using Nat.strong_induction_on with
+  | _ n IH =>
+    intro cA gbh bs σ σ₀ g A I hWF hCO hNC
+    match n with
+    | 0 =>
+      rw [show EVM.Ξ 0 cA gbh bs σ σ₀ g A I = .error .OutOfFuel from rfl]
+      trivial
+    | f + 1 =>
+      have hAtCBdd : ∀ f', f' ≤ f → ΞAtCFrame C f' := by
+        intro f' hf'
+        intro f'' hf'' cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hCO'' hNC''
+        have hlt : f'' < f + 1 := Nat.lt_succ_of_le (Nat.le_trans hf'' hf')
+        exact IH f'' hlt cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hCO'' hNC''
+      have Ξ_frame_at : ∀ f', f' ≤ f → ΞFrameAtC C f' := by
+        intro f' hf'
+        intro f'' hf'' cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hCO_ne'' hNC''
+        have hf''_le_f : f'' ≤ f := Nat.le_trans hf'' hf'
+        have hAtCSub : ∀ k, k < f'' → ΞAtCFrame C k := by
+          intro k hk
+          have : k ≤ f := by omega
+          exact hAtCBdd k this
+        exact Ξ_balanceOf_ge_bundled_bdd C f'' hAtCSub
+          cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hCO_ne'' hNC''
+      have hΞ_eq :
+          EVM.Ξ (f + 1) cA gbh bs σ σ₀ g A I
+            = (do
+                let defState : EVM.State := default
+                let freshEvmState : EVM.State :=
+                  { defState with
+                      accountMap := σ
+                      σ₀ := σ₀
+                      executionEnv := I
+                      substate := A
+                      createdAccounts := cA
+                      gasAvailable := g
+                      blocks := bs
+                      genesisBlockHeader := gbh }
+                let result ← EVM.X f (D_J I.code ⟨0⟩) freshEvmState
+                match result with
+                | .success evmState' o =>
+                  let finalGas := evmState'.gasAvailable
+                  .ok (ExecutionResult.success
+                    (evmState'.createdAccounts, evmState'.accountMap,
+                     finalGas, evmState'.substate) o)
+                | .revert g' o => .ok (ExecutionResult.revert g' o)) := rfl
+      rw [hΞ_eq]
+      simp only [bind, Except.bind]
+      generalize hXres : EVM.X f (D_J I.code ⟨0⟩) _ = xRes
+      set freshState : EVM.State :=
+        { (default : EVM.State) with
+            accountMap := σ
+            σ₀ := σ₀
+            executionEnv := I
+            substate := A
+            createdAccounts := cA
+            gasAvailable := g
+            blocks := bs
+            genesisBlockHeader := gbh } with hFresh_def
+      have hWFFresh : StateWF freshState.accountMap := hWF
+      have hCCFresh : C = freshState.executionEnv.codeOwner := hCO.symm
+      have hNCFresh : ∀ a ∈ freshState.createdAccounts, a ≠ C := hNC
+      have hReachFresh : Reachable freshState :=
+        hReachInit cA gbh bs σ σ₀ g A I hCO
+      have hAtCBddF : ΞAtCFrame C f := hAtCBdd f (Nat.le_refl _)
+      have Ξ_frame_atF : ΞFrameAtC C f := Ξ_frame_at f (Nat.le_refl _)
+      have hXinv : X_inv_at_C_general OpAllowedSet C f (D_J I.code ⟨0⟩) Reachable freshState :=
+        X_inv_at_C_general_holds OpAllowedSet C f (D_J I.code ⟨0⟩) Reachable freshState
+          hAtCBdd Ξ_frame_at
+      unfold X_inv_at_C_general at hXinv
+      have hRes := hXinv hWFFresh hCCFresh hNCFresh hAtCBddF Ξ_frame_atF
+        hReachFresh hReach_Z hReach_step hReach_decodeSome hReach_op hDischarge hReach_v0
+      rw [hXres] at hRes
+      cases xRes with
+      | error _ => trivial
+      | ok er =>
+        cases er with
+        | success evmState' out =>
+          exact hRes
+        | revert _ _ => trivial
+
 /-- `Ξ_balanceOf_ge` — Ξ (code execution) preserves `balanceOf C` when
 code runs at `I.codeOwner ≠ C`.
 
