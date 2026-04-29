@@ -8399,5 +8399,155 @@ private theorem X_inv_invariant_holds
         exact X_inv_invariant_succ_content C f' validJumps evmState finalState out
           hWF hCO hNC hAtCFrame_f' hFrame_f' hInv IH' hXres
 
+/-- **Bounded variant of `Ξ_invariant_preserved_bundled`.** Mirror of
+`Ξ_balanceOf_ge_bundled_bdd` for the invariant chain. Takes per-fuel
+`ΞInvariantAtCFrame C f` witnesses (one per fuel level less than `n`)
+and builds the corresponding `ΞInvariantFrameAtC` projection. -/
+theorem Ξ_invariant_preserved_bundled_bdd (C : AccountAddress)
+    (n : ℕ)
+    (hAtCBdd : ∀ f', f' < n → ΞInvariantAtCFrame C f') :
+    ∀ (cA' : RBSet AccountAddress compare) (gbh' : BlockHeader)
+      (bs' : ProcessedBlocks) (σ' σ₀' : AccountMap .EVM) (g' : UInt256)
+      (A' : Substate) (I' : ExecutionEnv .EVM),
+      StateWF σ' →
+      C ≠ I'.codeOwner →
+      (∀ a ∈ cA', a ≠ C) →
+      WethInvFr σ' C →
+      match EVM.Ξ n cA' gbh' bs' σ' σ₀' g' A' I' with
+      | .ok (.success (cA_out, σ''final, _, _) _) =>
+          WethInvFr σ''final C ∧ StateWF σ''final ∧
+            (∀ a ∈ cA_out, a ≠ C)
+      | _ => True := by
+  intro cA' gbh' bs' σ' σ₀' g' A' I' hWF' hco' hnc' hInv'
+  match n with
+  | 0 =>
+    rw [show EVM.Ξ 0 cA' gbh' bs' σ' σ₀' g' A' I' = .error .OutOfFuel from rfl]
+    trivial
+  | f + 1 =>
+    have Ξ_frame_at : ∀ m, m ≤ f → ΞInvariantFrameAtC C m := by
+      intro m
+      induction m using Nat.strong_induction_on with
+      | _ m IHm =>
+        intro hm
+        intro f'' hf'' cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hco'' hnc'' hInv''
+        match f'' with
+        | 0 =>
+          rw [show EVM.Ξ 0 cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I''
+                = .error .OutOfFuel from rfl]
+          trivial
+        | k + 1 =>
+          have hkLeF : k + 1 ≤ f := Nat.le_trans hf'' hm
+          have hAtCSubst : ∀ k', k' ≤ k → ΞInvariantAtCFrame C k' := by
+            intro k' hk'
+            have hk'LtSucc : k' < f + 1 := by omega
+            exact hAtCBdd k' hk'LtSucc
+          have hFrameSubst : ∀ k', k' ≤ k → ΞInvariantFrameAtC C k' := by
+            intro k' hk'
+            have hkLtM : k < m := by
+              have : k + 1 ≤ m := hf''
+              omega
+            have hk'LtM : k' < m := Nat.lt_of_le_of_lt hk' hkLtM
+            have hk'LeF : k' ≤ f := by omega
+            exact IHm k' hk'LtM hk'LeF
+          have hΞ_eq :
+              EVM.Ξ (k + 1) cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I''
+                = (do
+                    let defState : EVM.State := default
+                    let freshEvmState : EVM.State :=
+                      { defState with
+                          accountMap := σ''
+                          σ₀ := σ₀''
+                          executionEnv := I''
+                          substate := A''
+                          createdAccounts := cA''
+                          gasAvailable := g''
+                          blocks := bs''
+                          genesisBlockHeader := gbh'' }
+                    let result ← EVM.X k (D_J I''.code ⟨0⟩) freshEvmState
+                    match result with
+                    | .success evmState' o =>
+                      let finalGas := evmState'.gasAvailable
+                      .ok (ExecutionResult.success
+                        (evmState'.createdAccounts, evmState'.accountMap,
+                         finalGas, evmState'.substate) o)
+                    | .revert g' o => .ok (ExecutionResult.revert g' o)) := rfl
+          rw [hΞ_eq]
+          simp only [bind, Except.bind]
+          generalize hXres : EVM.X k (D_J I''.code ⟨0⟩) _ = xRes
+          have hXinv : X_inv_invariant C k (D_J I''.code ⟨0⟩)
+            { (default : EVM.State) with
+                accountMap := σ''
+                σ₀ := σ₀''
+                executionEnv := I''
+                substate := A''
+                createdAccounts := cA''
+                gasAvailable := g''
+                blocks := bs''
+                genesisBlockHeader := gbh'' } :=
+            X_inv_invariant_holds C k (D_J I''.code ⟨0⟩) _ hAtCSubst hFrameSubst
+          unfold X_inv_invariant at hXinv
+          have := hXinv hWF'' hco'' hnc''
+                  (hAtCSubst k (Nat.le_refl _)) (hFrameSubst k (Nat.le_refl _)) hInv''
+          rw [hXres] at this
+          cases xRes with
+          | error _ => trivial
+          | ok er =>
+            cases er with
+            | success evmState' out => exact this
+            | revert _ _ => trivial
+    have hAtCAll : ∀ f', f' ≤ f → ΞInvariantAtCFrame C f' := by
+      intro f' hf'
+      exact hAtCBdd f' (Nat.lt_succ_of_le hf')
+    have hΞ_eq :
+        EVM.Ξ (f + 1) cA' gbh' bs' σ' σ₀' g' A' I'
+          = (do
+              let defState : EVM.State := default
+              let freshEvmState : EVM.State :=
+                { defState with
+                    accountMap := σ'
+                    σ₀ := σ₀'
+                    executionEnv := I'
+                    substate := A'
+                    createdAccounts := cA'
+                    gasAvailable := g'
+                    blocks := bs'
+                    genesisBlockHeader := gbh' }
+              let result ← EVM.X f (D_J I'.code ⟨0⟩) freshEvmState
+              match result with
+              | .success evmState' o =>
+                let finalGas := evmState'.gasAvailable
+                .ok (ExecutionResult.success
+                  (evmState'.createdAccounts, evmState'.accountMap,
+                   finalGas, evmState'.substate) o)
+              | .revert g' o => .ok (ExecutionResult.revert g' o)) := rfl
+    rw [hΞ_eq]
+    simp only [bind, Except.bind]
+    generalize hXres : EVM.X f (D_J I'.code ⟨0⟩) _ = xRes
+    have hXinv : X_inv_invariant C f (D_J I'.code ⟨0⟩)
+      { (default : EVM.State) with
+          accountMap := σ'
+          σ₀ := σ₀'
+          executionEnv := I'
+          substate := A'
+          createdAccounts := cA'
+          gasAvailable := g'
+          blocks := bs'
+          genesisBlockHeader := gbh' } :=
+      X_inv_invariant_holds C f (D_J I'.code ⟨0⟩) _ hAtCAll Ξ_frame_at
+    unfold X_inv_invariant at hXinv
+    have hWFF : StateWF σ' := hWF'
+    have hCOF : C ≠ I'.codeOwner := hco'
+    have hNCF : ∀ a ∈ cA', a ≠ C := hnc'
+    have hInvF : WethInvFr σ' C := hInv'
+    have := hXinv hWFF hCOF hNCF (hAtCAll f (Nat.le_refl _)) (Ξ_frame_at f (Nat.le_refl _)) hInvF
+    rw [hXres] at this
+    cases xRes with
+    | error _ => trivial
+    | ok er =>
+      cases er with
+      | success evmState' out =>
+        exact this
+      | revert _ _ => trivial
+
 end Frame
 end EvmYul
