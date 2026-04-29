@@ -1,4 +1,5 @@
 import EvmYul.Frame.Projection
+import EvmYul.Frame.StorageSum
 import EvmYul.Frame.StepFrame
 import EvmYul.Frame.SelfdestructFrame
 import EvmYul.Frame.MutualFrame
