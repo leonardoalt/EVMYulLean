@@ -32,10 +32,10 @@ similar contract proofs need:
   - SSTORE, ADD, SUB, MUL, DIV, MOD, LT, GT, SLT, SGT, EQ, AND, OR,
     XOR, SHL, SHR, SDIV, SMOD, EXP, SIGNEXTEND, BYTE, SAR,
     KECCAK256, MSTORE, MSTORE8, JUMPI, RETURN, REVERT, TSTORE,
-    DUP2, SWAP1
-  - ADDMOD, MULMOD, CALLDATACOPY, CODECOPY, RETURNDATACOPY, DUP3,
+    DUP2, DUP3, DUP4, DUP5, SWAP1
+  - ADDMOD, MULMOD, CALLDATACOPY, CODECOPY, RETURNDATACOPY,
     SWAP2
-  - EXTCODECOPY, DUP4, SWAP3
+  - EXTCODECOPY, SWAP3
   - CALL
   - STOP
 
@@ -756,6 +756,73 @@ theorem step_DUP1_at_pc
     s'.executionEnv = s.executionEnv := by
   step_at_pc_via step_DUP1_shape with hd, tl, hStk, hStep
 
+/-- `step_DUP2_shape` at a known PC. -/
+theorem step_DUP2_at_pc
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.DUP2, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd2 :: s.stack ∧
+    s'.executionEnv = s.executionEnv := by
+  step_at_pc_via step_DUP2_shape with hd1, hd2, tl, hStk, hStep
+
+/-- `step_DUP3_shape` at a known PC. -/
+theorem step_DUP3_at_pc
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: tl)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.DUP3, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd3 :: s.stack ∧
+    s'.executionEnv = s.executionEnv := by
+  step_at_pc_via step_DUP3_shape with hd1, hd2, hd3, tl, hStk, hStep
+
+/-- `step_DUP4_shape` at a known PC. -/
+theorem step_DUP4_at_pc
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 hd4 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: hd4 :: tl)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.DUP4, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd4 :: s.stack ∧
+    s'.executionEnv = s.executionEnv := by
+  step_at_pc_via step_DUP4_shape with hd1, hd2, hd3, hd4, tl, hStk, hStep
+
+/-- `step_DUP5_shape` at a known PC. -/
+theorem step_DUP5_at_pc
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 hd4 hd5 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: hd4 :: hd5 :: tl)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.DUP5, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd5 :: s.stack ∧
+    s'.executionEnv = s.executionEnv := by
+  step_at_pc_via step_DUP5_shape with hd1, hd2, hd3, hd4, hd5, tl, hStk, hStep
+
 /-! ### 2-pop ops -/
 
 /-- `step_SSTORE_shape` at a known PC. -/
@@ -902,6 +969,22 @@ theorem step_GT_at_pc
     s'.executionEnv = s.executionEnv := by
   step_at_pc_via step_GT_shape with hd1, hd2, tl, hStk, hStep
 
+/-- `step_SHR_shape` at a known PC. -/
+theorem step_SHR_at_pc
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.SHR, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    (∃ v, s'.stack = v :: tl) ∧
+    s'.executionEnv = s.executionEnv := by
+  step_at_pc_via step_SHR_shape with hd1, hd2, tl, hStk, hStep
+
 /-- `step_DIV_shape` at a known PC. -/
 theorem step_DIV_at_pc
     (s s' : EVM.State) (f' cost : ℕ)
@@ -981,6 +1064,24 @@ theorem step_MSTORE8_at_pc
     s'.stack = tl ∧
     s'.executionEnv = s.executionEnv := by
   step_at_pc_via step_MSTORE8_shape with hd1, hd2, tl, hStk, hStep
+
+/-- `step_REVERT_shape` at a known PC. The actual frame halt is caught
+by the X loop on the operation kind; at the EVM-step level REVERT
+behaves like MSTORE (pop 2, no push, advance pc). -/
+theorem step_REVERT_at_pc
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.REVERT, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = tl ∧
+    s'.executionEnv = s.executionEnv := by
+  step_at_pc_via step_REVERT_shape with hd1, hd2, tl, hStk, hStep
 
 /-- `step_JUMPI_shape` at a known PC. -/
 theorem step_JUMPI_at_pc
