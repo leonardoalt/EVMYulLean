@@ -479,6 +479,29 @@ theorem step_SLOAD_shape
     s'.executionEnv = s.executionEnv := by
   step_pop1_push1_unaryStateOp hStk hStep
 
+/-- SLOAD strong: like `step_SLOAD_shape`, but also exposes the pushed
+value as the storage lookup at the contract's own address (the EVM
+`SLOAD` semantics) and proves `accountMap` preservation. -/
+theorem step_SLOAD_shape_strong
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.SLOAD, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack =
+      (s.lookupAccount s.executionEnv.codeOwner
+        |>.option ⟨0⟩ (Account.lookupStorage (k := hd))) :: tl ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dispatchUnaryStateOp EVM.unaryStateOp at hStep
+  rw [hStk] at hStep
+  simp only [Stack.pop, Id_run_ok, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl, rfl⟩
+
 /-- MLOAD: pops 1, pushes 1, `pc += 1`. -/
 theorem step_MLOAD_shape
     (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
@@ -623,6 +646,27 @@ theorem step_SUB_shape
     s'.executionEnv = s.executionEnv := by
   step_pop2_push1_binary hStk hStep
 
+/-- SUB strong: like `step_SUB_shape`, but exposes the pushed value as
+`UInt256.sub hd1 hd2` (the EVM `SUB` semantics: top - second-from-top)
+and proves `accountMap` preservation. -/
+theorem step_SUB_shape_strong
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.SUB, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = UInt256.sub hd1 hd2 :: tl ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dispatchBinary EVM.execBinOp at hStep
+  rw [hStk] at hStep
+  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl, rfl⟩
+
 /-- MUL: pops 2, pushes 1, `pc += 1`. -/
 theorem step_MUL_shape
     (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
@@ -662,6 +706,27 @@ theorem step_LT_shape
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
   step_pop2_push1_binary hStk hStep
+
+/-- LT strong: like `step_LT_shape`, but exposes the pushed value as
+`UInt256.lt hd1 hd2` (the EVM `LT` semantics: `1` if top < second, else
+`0`) and proves `accountMap` preservation. -/
+theorem step_LT_shape_strong
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.LT, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = UInt256.lt hd1 hd2 :: tl ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dispatchBinary EVM.execBinOp at hStep
+  rw [hStk] at hStep
+  simp only [Stack.pop2, Id_run_ok, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl, rfl⟩
 
 /-- GT: pops 2, pushes 1, `pc += 1`. -/
 theorem step_GT_shape
