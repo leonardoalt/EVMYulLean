@@ -6941,5 +6941,255 @@ private theorem call_invariant_preserved
       rw [← hState]
       refine ⟨hInv, hWF, rfl, hNC⟩
 
+/-! ## §H.2 — `Λ_invariant_preserved_bdd`
+
+Mirror of `Λ_balanceOf_ge_bdd` for `WethInvFr`. Easier than Θ because
+Λ's inner Ξ runs at `I.codeOwner = a ≠ C` (by `lambda_derived_address_ne_C`):
+no joint mutual recursion needed; only `ΞInvariantFrameAtC` IH suffices.
+
+The value-transfer prefix in Λ is `s → a`: insert at `s` with debit,
+insert at `a` with credit. Since `a ≠ C` (Keccak axiom T5) and `s ≠ C`
+(hypothesis), both inserts frame at `C` for both balance and storage.
+So `WethInvFr σStarMap C = WethInvFr σ C` directly. -/
+private theorem Λ_invariant_preserved_bdd
+    (fuel : Nat) (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (A : Substate)
+    (s o : AccountAddress) (g p v : UInt256) (i : ByteArray) (e : UInt256)
+    (ζ : Option ByteArray) (H : BlockHeader) (w : Bool)
+    (C : AccountAddress)
+    (hWF : StateWF σ)
+    (h_s : C ≠ s)
+    (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
+    (h_funds : ∀ acc, σ.find? s = some acc → v.toNat ≤ acc.balance.toNat)
+    (hInv : WethInvFr σ C)
+    (hFrame : ΞInvariantFrameAtC C fuel) :
+    match EVM.Lambda fuel blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o g p v i e ζ H w with
+    | .ok (a, cA', σ', _, _, _, _) =>
+        a ≠ C ∧ WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a' ∈ cA', a' ≠ C)
+    | .error _ => True := by
+  set_option maxHeartbeats 2400000 in
+  match fuel with
+  | 0 =>
+    rw [show EVM.Lambda 0 blobVersionedHashes createdAccounts genesisBlockHeader
+                  blocks σ σ₀ A s o g p v i e ζ H w = .error .OutOfFuel from rfl]
+    trivial
+  | f + 1 =>
+    have ha_ne_C : ∀ (n' : UInt256) lₐ, EVM.Lambda.L_A s n' ζ i = some lₐ →
+        (Fin.ofNat AccountAddress.size
+           (fromByteArrayBigEndian ((ffi.KEC lₐ).extract 12 32))
+          : AccountAddress) ≠ C := by
+      intro n' lₐ hLA
+      have h := lambda_derived_address_ne_C s n' ζ i C
+      have hGet : ((EVM.Lambda.L_A s n' ζ i).getD default) = lₐ := by
+        rw [hLA]; rfl
+      rw [← hGet]; exact h
+    have ha_ne_s : ∀ (n' : UInt256) lₐ, EVM.Lambda.L_A s n' ζ i = some lₐ →
+        (Fin.ofNat AccountAddress.size
+           (fromByteArrayBigEndian ((ffi.KEC lₐ).extract 12 32))
+          : AccountAddress) ≠ s := by
+      intro n' lₐ hLA
+      have h := lambda_derived_address_ne_C s n' ζ i s
+      have hGet : ((EVM.Lambda.L_A s n' ζ i).getD default) = lₐ := by
+        rw [hLA]; rfl
+      rw [← hGet]; exact h
+    unfold EVM.Lambda
+    cases hLA : EVM.Lambda.L_A s
+        ((σ.find? s |>.option ⟨0⟩ (·.nonce)) - ⟨1⟩) ζ i with
+    | none =>
+      simp only [hLA]
+      trivial
+    | some lₐ =>
+      simp only [hLA]
+      set a : AccountAddress :=
+        Fin.ofNat AccountAddress.size
+          (fromByteArrayBigEndian ((ffi.KEC lₐ).extract 12 32))
+      have ha_ne_C' : a ≠ C := ha_ne_C _ lₐ hLA
+      have ha_ne_s' : a ≠ s := ha_ne_s _ lₐ hLA
+      set existentAccount : Account .EVM := σ.findD a default
+      set iPair :
+        ByteArray × Batteries.RBSet AccountAddress compare :=
+        if (decide (existentAccount.nonce ≠ ⟨0⟩)
+            || decide (existentAccount.code.size ≠ 0)
+            || existentAccount.storage != default) = true
+        then ((⟨#[0xfe]⟩ : ByteArray), createdAccounts)
+        else (i, createdAccounts.insert a) with hiPair_def
+      have h_newC_iPair : ∀ a' ∈ iPair.2, a' ≠ C := by
+        by_cases hIf :
+            (decide (existentAccount.nonce ≠ ⟨0⟩)
+              || decide (existentAccount.code.size ≠ 0)
+              || existentAccount.storage != default) = true
+        · have : iPair.2 = createdAccounts := by
+            show (if
+              (decide (existentAccount.nonce ≠ ⟨0⟩)
+                || decide (existentAccount.code.size ≠ 0)
+                || existentAccount.storage != default) = true
+              then ((⟨#[0xfe]⟩ : ByteArray), createdAccounts)
+              else (i, createdAccounts.insert a)).2 = createdAccounts
+            rw [if_pos hIf]
+          rw [this]
+          exact h_newC
+        · have : iPair.2 = createdAccounts.insert a := by
+            show (if
+              (decide (existentAccount.nonce ≠ ⟨0⟩)
+                || decide (existentAccount.code.size ≠ 0)
+                || existentAccount.storage != default) = true
+              then ((⟨#[0xfe]⟩ : ByteArray), createdAccounts)
+              else (i, createdAccounts.insert a)).2 = createdAccounts.insert a
+            rw [if_neg hIf]
+          rw [this]
+          intro a' ha'_mem
+          rw [Batteries.RBSet.mem_insert] at ha'_mem
+          rcases ha'_mem with h_orig | h_eq
+          · exact h_newC a' h_orig
+          · have : a = a' := Std.LawfulEqCmp.compare_eq_iff_eq.mp h_eq
+            rw [← this]; exact ha_ne_C'
+      -- σStar's WethInvFr at C: balance unchanged (both inserts at ≠C),
+      -- storage unchanged (both inserts at ≠C). So invariant carries.
+      have hσStar_inv :
+          ∀ (σ' : AccountMap .EVM),
+            (σ' = (match σ.find? s with
+                   | none => σ
+                   | some ac =>
+                     (σ.insert s
+                       { nonce := ac.nonce, balance := ac.balance - v
+                         storage := ac.storage, code := ac.code
+                         tstorage := ac.tstorage })
+                      |>.insert a
+                       { nonce := existentAccount.nonce + ⟨1⟩
+                         balance := v + existentAccount.balance
+                         storage := existentAccount.storage
+                         code := existentAccount.code
+                         tstorage := existentAccount.tstorage })) →
+            WethInvFr σ' C := by
+        intro σ' hσ'
+        rw [hσ']
+        cases hFs : σ.find? s with
+        | none =>
+          -- match σ.find? s reduces to σ; goal is WethInvFr σ C.
+          exact hInv
+        | some ac =>
+          have hsC : s ≠ C := fun h => h_s h.symm
+          unfold WethInvFr
+          rw [storageSum_unchanged_at_other_account _ _ _ _ ha_ne_C']
+          rw [storageSum_unchanged_at_other_account _ _ _ _ hsC]
+          rw [balanceOf_of_find?_eq (find?_insert_ne _ a C _ ha_ne_C')]
+          rw [balanceOf_of_find?_eq (find?_insert_ne _ s C _ hsC)]
+          exact hInv
+      have hWFσStar :
+          StateWF (match σ.find? s with
+                   | none => σ
+                   | some ac =>
+                     (σ.insert s
+                       { nonce := ac.nonce, balance := ac.balance - v
+                         storage := ac.storage, code := ac.code
+                         tstorage := ac.tstorage })
+                      |>.insert a
+                       { nonce := existentAccount.nonce + ⟨1⟩
+                         balance := v + existentAccount.balance
+                         storage := existentAccount.storage
+                         code := existentAccount.code
+                         tstorage := existentAccount.tstorage }) := by
+        cases hFs : σ.find? s with
+        | none => exact hWF
+        | some ac =>
+          have h_bound := h_funds ac hFs
+          have := stateWF_lambda_σStar_some σ hWF s a ac v ha_ne_s' hFs h_bound
+          exact this
+      set σStarMap : AccountMap .EVM :=
+        (match σ.find? s with
+         | none => σ
+         | some ac =>
+           (σ.insert s
+             { nonce := ac.nonce, balance := ac.balance - v
+               storage := ac.storage, code := ac.code
+               tstorage := ac.tstorage })
+            |>.insert a
+             { nonce := existentAccount.nonce + ⟨1⟩
+               balance := v + existentAccount.balance
+               storage := existentAccount.storage
+               code := existentAccount.code
+               tstorage := existentAccount.tstorage })
+        with hσStarMap_def
+      have hσStar_invMap : WethInvFr σStarMap C := hσStar_inv σStarMap hσStarMap_def
+      have hWFσStarMap : StateWF σStarMap := by rw [hσStarMap_def]; exact hWFσStar
+      set exEnv : ExecutionEnv .EVM :=
+        { codeOwner := a, sender := o, source := s, weiValue := v
+          calldata := default, code := iPair.1, gasPrice := p.toNat
+          header := H, depth := e.toNat, perm := w
+          blobVersionedHashes := blobVersionedHashes } with hexEnv_def
+      split
+      case h_2 => trivial
+      case h_1 heq =>
+        simp only [bind, Except.bind, pure, Except.pure] at heq
+        split at heq
+        · exact absurd heq (by simp)
+        · rename_i lin hvok
+          have hv_eq : lin = lₐ := by
+            injection hvok with h1
+            exact h1.symm
+          rw [hv_eq] at heq
+          clear hvok hv_eq lin
+          split at heq
+          · split at heq
+            · exact absurd heq (by simp)
+            · injection heq with h1
+              injection h1 with h1a h1b
+              injection h1b with h1ba h1bb
+              injection h1bb with h1bba h1bbb
+              subst h1a
+              subst h1ba
+              subst h1bba
+              refine ⟨ha_ne_C', hInv, hWF, ?_⟩
+              exact h_newC_iPair
+          · injection heq with h1
+            injection h1 with h1a h1b
+            injection h1b with h1ba h1bb
+            injection h1bb with h1bba h1bbb
+            subst h1a
+            subst h1ba
+            subst h1bba
+            refine ⟨ha_ne_C', hInv, hWF, ?_⟩
+            exact h_newC_iPair
+          · -- Ξ-success branch.
+            rename_i cA_out σ_Ξ gSS AStarStar returnedData hΞeq
+            injection heq with h1
+            injection h1 with h1a h1b
+            injection h1b with h1ba h1bb
+            injection h1bb with h1bba h1bbb
+            subst h1a
+            subst h1ba
+            subst h1bba
+            have hΞeq_folded :
+                EVM.Ξ f iPair.2 genesisBlockHeader blocks σStarMap σ₀ g
+                      (A.addAccessedAccount a) exEnv
+                    = .ok (.success (cA_out, σ_Ξ, gSS, AStarStar) returnedData) := hΞeq
+            -- exEnv.codeOwner = a, and a ≠ C.
+            have hCO_ne : C ≠ exEnv.codeOwner := by
+              rw [hexEnv_def]; exact ha_ne_C'.symm
+            have hFrame_f : ΞInvariantFrameAtC C f :=
+              ΞInvariantFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+            have hΞInv_raw := hFrame_f f (Nat.le_refl _) iPair.2
+              genesisBlockHeader blocks
+              σStarMap σ₀ g (A.addAccessedAccount a) exEnv
+              hWFσStarMap hCO_ne h_newC_iPair hσStar_invMap
+            rw [hΞeq_folded] at hΞInv_raw
+            obtain ⟨hΞInv_inv, hWFσ_Ξ, h_newC_out⟩ := hΞInv_raw
+            refine ⟨ha_ne_C', ?_, ?_, h_newC_out⟩
+            · -- σ_final = if F then σ else σ_Ξ.insert a {... with code := returnedData}.
+              split_ifs with hF
+              · exact hInv
+              · -- WethInvFr (σ_Ξ.insert a {... with code := returnedData}) C.
+                -- a ≠ C, so the insert frames at C for both balance & storage.
+                unfold WethInvFr
+                rw [storageSum_unchanged_at_other_account _ _ _ _ ha_ne_C']
+                rw [balanceOf_of_find?_eq (find?_insert_ne _ a C _ ha_ne_C')]
+                exact hΞInv_inv
+            · split_ifs with hF
+              · exact hWF
+              · exact StateWF_insert_findD_code σ_Ξ a returnedData hWFσ_Ξ
+
 end Frame
 end EvmYul
