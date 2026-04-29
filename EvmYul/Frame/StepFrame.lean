@@ -507,6 +507,51 @@ theorem tstore_preserves_codeOf
     exact codeOf_insert_preserve_of_eq _ _ _ _ hFind
       (Account_updateTransientStorage_code _ _ _) _
 
+/-! ## Helpers for storage-only-at-codeOwner
+
+These are shared by `EvmYul.step_modifies_storage_only_at_codeOwner`
+(in the §1.5 section below, which depends on
+`step_accountMap_eq_of_strict`). -/
+
+/-- SSTORE at codeOwner doesn't modify storage at any other account. -/
+private theorem sstore_storage_unchanged_ne
+    (self : EvmYul.State .EVM) (spos sval : UInt256) (a : AccountAddress)
+    (h_ne : a ≠ self.executionEnv.codeOwner) :
+    ((EvmYul.State.sstore self spos sval).accountMap.find? a).map (·.storage)
+      = (self.accountMap.find? a).map (·.storage) := by
+  unfold EvmYul.State.sstore
+  simp only [EvmYul.State.lookupAccount]
+  match hFind : self.accountMap.find? self.executionEnv.codeOwner with
+  | none => simp [Option.option]
+  | some acc =>
+    simp only [Option.option]
+    change ((self.accountMap.insert self.executionEnv.codeOwner
+              (acc.updateStorage spos sval)).find? a).map (·.storage)
+         = (self.accountMap.find? a).map (·.storage)
+    have hne' : self.executionEnv.codeOwner ≠ a := fun heq => h_ne heq.symm
+    rw [Frame.find?_insert_ne _ _ _ _ hne']
+
+/-- TSTORE doesn't modify *persistent* storage anywhere; in particular
+not at any non-codeOwner account. (TSTORE only updates the transient
+storage field.) -/
+private theorem tstore_storage_unchanged_ne
+    (self : EvmYul.State .EVM) (spos sval : UInt256) (a : AccountAddress)
+    (h_ne : a ≠ self.executionEnv.codeOwner) :
+    ((EvmYul.State.tstore self spos sval).accountMap.find? a).map (·.storage)
+      = (self.accountMap.find? a).map (·.storage) := by
+  unfold EvmYul.State.tstore
+  simp only [EvmYul.State.lookupAccount]
+  match hFind : self.accountMap.find? self.executionEnv.codeOwner with
+  | none => simp [Option.option]
+  | some acc =>
+    simp only [Option.option]
+    change ((self.accountMap.insert self.executionEnv.codeOwner
+              (acc.updateTransientStorage spos sval)).find? a).map
+                (·.storage)
+         = (self.accountMap.find? a).map (·.storage)
+    have hne' : self.executionEnv.codeOwner ≠ a := fun heq => h_ne heq.symm
+    rw [Frame.find?_insert_ne _ _ _ _ hne']
+
 /-! ## Main theorem — `EvmYul.step` balance/code frame
 
 `EvmYul.step` for the **EVM** branch is a big opcode match. For a
@@ -2160,6 +2205,94 @@ theorem EvmYul.step_preserves_SD_exclude
   intro k hk
   rw [hEq] at hk
   exact hSD k hk
+
+/-! ## §1.5 — Storage frame at non-codeOwner addresses
+
+For any *non-SELFDESTRUCT* handled opcode, `EvmYul.step` never modifies
+storage at addresses other than `s.executionEnv.codeOwner`. SSTORE
+modifies storage *at* codeOwner only; TSTORE modifies *transient* storage
+at codeOwner only (which leaves persistent storage untouched everywhere);
+all other handled opcodes preserve `accountMap` literally
+(`step_accountMap_eq_of_strict`).
+
+SELFDESTRUCT is genuinely excluded: in branch A's case 3 / branch B's
+case 3 it can introduce a fresh default account at the beneficiary `r`,
+which has empty storage but didn't exist beforehand — so
+`((find? r).map storage)` jumps from `none` to `some .empty`. Weth's
+bytecode contains no SELFDESTRUCT, so this exclusion is harmless for
+its solvency proof.
+
+The two SSTORE / TSTORE helpers `sstore_storage_unchanged_ne` and
+`tstore_storage_unchanged_ne` are declared earlier in this file. -/
+
+/-- Helper analogue of `binaryStateOp_preserves_balanceOf` for storage at
+a fixed `a`: if the underlying operation preserves
+`((·.find? a).map storage)` *at the specific state being dispatched*,
+so does the dispatched binary state-op that wraps it. The hypothesis
+is parameterised at `s.toState` so SSTORE/TSTORE side-conditions
+(`a ≠ s.executionEnv.codeOwner` ⇔ `a ≠ s.toState.executionEnv.codeOwner`)
+are dischargeable. -/
+private theorem binaryStateOp_preserves_storage_map_at
+    {op : EvmYul.State .EVM → UInt256 → UInt256 → EvmYul.State .EVM}
+    {s s' : EVM.State} {a : AccountAddress}
+    (hOp : ∀ u v, ((op s.toState u v).accountMap.find? a).map (·.storage)
+                    = (s.accountMap.find? a).map (·.storage))
+    (h : EVM.binaryStateOp op s = .ok s') :
+    ((s'.accountMap.find? a).map (·.storage))
+      = ((s.accountMap.find? a).map (·.storage)) := by
+  unfold EVM.binaryStateOp at h
+  split at h
+  case _ stk μ₀ μ₁ hPop =>
+    simp only [Id_run_ok, Except.ok.injEq] at h
+    subst h
+    -- The post-state's accountMap is `(op s.toState μ₀ μ₁).accountMap`.
+    show ((op s.toState μ₀ μ₁).accountMap.find? a).map (·.storage)
+         = (s.accountMap.find? a).map (·.storage)
+    exact hOp μ₀ μ₁
+  case _ hPop =>
+    exact absurd h (by simp)
+
+/-- §1.5: `EvmYul.step` only modifies storage at `s.executionEnv.codeOwner`.
+
+For any handled, non-SELFDESTRUCT opcode and any `a ≠ codeOwner`, the
+storage map at `a` is unchanged across the step. The proof case-splits
+on the operation kind: SSTORE and TSTORE are dispatched to their
+dedicated helpers; every other handled non-SELFDESTRUCT opcode preserves
+`accountMap` literally via `EvmYul.step_accountMap_eq_of_strict`. -/
+theorem EvmYul.step_modifies_storage_only_at_codeOwner
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State) (a : AccountAddress)
+    (h_handled : handledByEvmYulStep op)
+    (h_ne_sd : op ≠ .SELFDESTRUCT)
+    (h : EvmYul.step op arg s = .ok s')
+    (h_ne : a ≠ s.executionEnv.codeOwner) :
+    ((s'.accountMap.find? a).map (·.storage))
+      = ((s.accountMap.find? a).map (·.storage)) := by
+  -- Split on whether op is SSTORE, TSTORE, or strictly preserves.
+  by_cases h_sstore : op = .StackMemFlow .SSTORE
+  · subst h_sstore
+    unfold EvmYul.step at h
+    simp only [Id.run] at h
+    -- h : EVM.binaryStateOp State.sstore s = .ok s'
+    -- s.toState.executionEnv.codeOwner = s.executionEnv.codeOwner.
+    have h_ne' : a ≠ s.toState.executionEnv.codeOwner := h_ne
+    refine binaryStateOp_preserves_storage_map_at (s := s) ?_ h
+    intro u v
+    exact sstore_storage_unchanged_ne s.toState u v a h_ne'
+  by_cases h_tstore : op = .StackMemFlow .TSTORE
+  · subst h_tstore
+    unfold EvmYul.step at h
+    simp only [Id.run] at h
+    have h_ne' : a ≠ s.toState.executionEnv.codeOwner := h_ne
+    refine binaryStateOp_preserves_storage_map_at (s := s) ?_ h
+    intro u v
+    exact tstore_storage_unchanged_ne s.toState u v a h_ne'
+  -- Otherwise, accountMap is strictly preserved.
+  have hStrict : strictlyPreservesAccountMap op :=
+    ⟨h_handled, h_ne_sd, h_sstore, h_tstore⟩
+  have hAM : s'.accountMap = s.accountMap :=
+    EvmYul.step_accountMap_eq_of_strict op arg s s' hStrict h
+  rw [hAM]
 
 end Frame
 end EvmYul
