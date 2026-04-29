@@ -7191,5 +7191,144 @@ private theorem Λ_invariant_preserved_bdd
               · exact hWF
               · exact StateWF_insert_findD_code σ_Ξ a returnedData hWFσ_Ξ
 
+/-! ## §H.2 — Per-arm system-call invariant helpers
+
+Mirrors of `step_CALL_arm` / `step_CREATE_arm` / `step_CALLCODE_arm` /
+`step_DELEGATECALL_arm` / `step_STATICCALL_arm` / `step_CREATE2_arm`,
+but tracking `WethInvFr` instead of just `balanceOf σ C ≥ balanceOf σ
+C`. Each arm dispatches to `call_invariant_preserved` or `Λ`
+invariant analogue; the body otherwise follows the balance-side
+template verbatim. -/
+
+/-- DELEGATECALL invariant arm: `WethInvFr` is preserved through the
+DELEGATECALL step at non-`C` codeOwner. DELEGATECALL passes value
+`⟨0⟩` to `call`, so the slack hypothesis is trivially satisfied via
+`Or.inr (Or.inl rfl)`. -/
+private theorem step_DELEGATECALL_arm_invariant
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
+    (hFrame : ΞInvariantFrameAtC C (f + 1))
+    (hInv : WethInvFr evmState.accountMap C)
+    (hStep : EVM.step (f + 1) cost₂ (some (.DELEGATECALL, arg)) evmState = .ok sstepState) :
+    WethInvFr sstepState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  simp only [EVM.step, Operation.DELEGATECALL, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
+  split at hStep
+  · exact absurd hStep (by simp)
+  · rename_i p hpop6
+    obtain ⟨stack, μ₀, μ₁, μ₃, μ₄, μ₅, μ₆⟩ := p
+    split at hStep
+    · exact absurd hStep (by simp)
+    · rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      have hWFes1 : StateWF eS1.accountMap := hWF
+      have hCOes1 : C ≠ eS1.executionEnv.codeOwner := hCO
+      have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
+      have hInves1 : WethInvFr eS1.accountMap C := hInv
+      have h_vb_call :
+          ∀ acc, (eS1.accountMap).find?
+              (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner)) = some acc →
+            acc.balance.toNat + (⟨0⟩ : UInt256).toNat < UInt256.size := by
+        intro acc _
+        show acc.balance.toNat + 0 < UInt256.size
+        rw [Nat.add_zero]
+        exact acc.balance.val.isLt
+      have h_fs_call :
+          (⟨0⟩ : UInt256) = ⟨0⟩ ∨ ∃ acc, (eS1.accountMap).find?
+                        (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.source)) = some acc ∧
+                  (⟨0⟩ : UInt256).toNat ≤ acc.balance.toNat := Or.inl rfl
+      have h_slack_call :
+          C ≠ AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.source) ∨
+              (⟨0⟩ : UInt256) = ⟨0⟩ ∨
+              (⟨0⟩ : UInt256).toNat + storageSum eS1.accountMap C
+                ≤ balanceOf eS1.accountMap C := Or.inr (Or.inl rfl)
+      have hAtCFrame_f : ΞInvariantAtCFrame C f :=
+        ΞInvariantAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
+      have hFrame_f : ΞInvariantFrameAtC C f :=
+        ΞInvariantFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+      have hBundle :=
+        call_invariant_preserved C f cost₂ μ₀ (.ofNat eS1.executionEnv.source)
+          (.ofNat eS1.executionEnv.codeOwner) μ₁ ⟨0⟩ eS1.executionEnv.weiValue
+          μ₃ μ₄ μ₅ μ₆ eS1.executionEnv.perm eS1 state' x
+          hWFes1 hNCes1 hAtCFrame_f hFrame_f h_vb_call h_fs_call h_slack_call hInves1 hCallRes
+      obtain ⟨hInvres, hWFres, hCOres, hNCres⟩ := hBundle
+      refine ⟨?_, ?_, ?_, ?_⟩
+      · simp only [accountMap_replaceStackAndIncrPC]; exact hInvres
+      · simp only [accountMap_replaceStackAndIncrPC]; exact hWFres
+      · simp only [executionEnv_replaceStackAndIncrPC]; rw [hCOres]; exact hCO
+      · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNCres
+
+/-- STATICCALL invariant arm: same structure as DELEGATECALL but with
+`v = 0`, `permission = false`, and `src = codeOwner`. -/
+private theorem step_STATICCALL_arm_invariant
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
+    (hFrame : ΞInvariantFrameAtC C (f + 1))
+    (hInv : WethInvFr evmState.accountMap C)
+    (hStep : EVM.step (f + 1) cost₂ (some (.STATICCALL, arg)) evmState = .ok sstepState) :
+    WethInvFr sstepState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  simp only [EVM.step, Operation.STATICCALL, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
+  split at hStep
+  · exact absurd hStep (by simp)
+  · rename_i p hpop6
+    obtain ⟨stack, μ₀, μ₁, μ₃, μ₄, μ₅, μ₆⟩ := p
+    split at hStep
+    · exact absurd hStep (by simp)
+    · rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      have hWFes1 : StateWF eS1.accountMap := hWF
+      have hCOes1 : C ≠ eS1.executionEnv.codeOwner := hCO
+      have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
+      have hInves1 : WethInvFr eS1.accountMap C := hInv
+      have h_vb_call :
+          ∀ acc, (eS1.accountMap).find? (AccountAddress.ofUInt256 μ₁) = some acc →
+            acc.balance.toNat + (⟨0⟩ : UInt256).toNat < UInt256.size := by
+        intro acc _
+        show acc.balance.toNat + 0 < UInt256.size
+        rw [Nat.add_zero]
+        exact acc.balance.val.isLt
+      have h_fs_call :
+          (⟨0⟩ : UInt256) = ⟨0⟩ ∨ ∃ acc, (eS1.accountMap).find?
+                        (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner)) = some acc ∧
+                  (⟨0⟩ : UInt256).toNat ≤ acc.balance.toNat := Or.inl rfl
+      have h_slack_call :
+          C ≠ AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner) ∨
+              (⟨0⟩ : UInt256) = ⟨0⟩ ∨
+              (⟨0⟩ : UInt256).toNat + storageSum eS1.accountMap C
+                ≤ balanceOf eS1.accountMap C := Or.inr (Or.inl rfl)
+      have hAtCFrame_f : ΞInvariantAtCFrame C f :=
+        ΞInvariantAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
+      have hFrame_f : ΞInvariantFrameAtC C f :=
+        ΞInvariantFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+      have hBundle :=
+        call_invariant_preserved C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
+          μ₁ μ₁ ⟨0⟩ ⟨0⟩ μ₃ μ₄ μ₅ μ₆ false eS1 state' x
+          hWFes1 hNCes1 hAtCFrame_f hFrame_f h_vb_call h_fs_call h_slack_call hInves1 hCallRes
+      obtain ⟨hInvres, hWFres, hCOres, hNCres⟩ := hBundle
+      refine ⟨?_, ?_, ?_, ?_⟩
+      · simp only [accountMap_replaceStackAndIncrPC]; exact hInvres
+      · simp only [accountMap_replaceStackAndIncrPC]; exact hWFres
+      · simp only [executionEnv_replaceStackAndIncrPC]; rw [hCOres]; exact hCO
+      · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNCres
+
 end Frame
 end EvmYul
