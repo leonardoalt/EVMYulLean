@@ -8184,5 +8184,220 @@ private theorem step_bundled_invariant_at_C_invariant_general
       exact step_bundled_handled_case_invariant C f cost₂ op arg evmState sstepState
         hWF hCO hNC hInv hHandled hStep'
 
+/-- **X-induction invariant for `WethInvFr`.** Mirror of `X_inv`. -/
+private def X_inv_invariant (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
+    (evmState : EVM.State) : Prop :=
+  StateWF evmState.accountMap →
+  C ≠ evmState.executionEnv.codeOwner →
+  (∀ a ∈ evmState.createdAccounts, a ≠ C) →
+  ΞInvariantAtCFrame C f →
+  ΞInvariantFrameAtC C f →
+  WethInvFr evmState.accountMap C →
+  match EVM.X f validJumps evmState with
+  | .ok (.success s' _) =>
+      WethInvFr s'.accountMap C ∧
+      StateWF s'.accountMap ∧
+      (∀ a ∈ s'.createdAccounts, a ≠ C)
+  | _ => True
+
+/-- Per-step invariant projections. -/
+private theorem step_invariant_preserved_at_non_C
+    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
+    (instr : Option (Operation .EVM × Option (UInt256 × Nat)))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hAtCFrame : ΞInvariantAtCFrame C f')
+    (hFrame : ΞInvariantFrameAtC C f')
+    (hInv : WethInvFr evmState.accountMap C)
+    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
+    WethInvFr sstepState.accountMap C :=
+  (step_bundled_invariant_at_C_invariant_general C f' cost₂ instr evmState sstepState
+    hWF hCO hNC hAtCFrame hFrame hInv hStep).1
+
+private theorem step_invariant_StateWF
+    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
+    (instr : Option (Operation .EVM × Option (UInt256 × Nat)))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hAtCFrame : ΞInvariantAtCFrame C f')
+    (hFrame : ΞInvariantFrameAtC C f')
+    (hInv : WethInvFr evmState.accountMap C)
+    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
+    StateWF sstepState.accountMap :=
+  (step_bundled_invariant_at_C_invariant_general C f' cost₂ instr evmState sstepState
+    hWF hCO hNC hAtCFrame hFrame hInv hStep).2.1
+
+private theorem step_invariant_codeOwner
+    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
+    (instr : Option (Operation .EVM × Option (UInt256 × Nat)))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hAtCFrame : ΞInvariantAtCFrame C f')
+    (hFrame : ΞInvariantFrameAtC C f')
+    (hInv : WethInvFr evmState.accountMap C)
+    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
+    C ≠ sstepState.executionEnv.codeOwner :=
+  (step_bundled_invariant_at_C_invariant_general C f' cost₂ instr evmState sstepState
+    hWF hCO hNC hAtCFrame hFrame hInv hStep).2.2.1
+
+private theorem step_invariant_createdAccounts
+    (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
+    (instr : Option (Operation .EVM × Option (UInt256 × Nat)))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hAtCFrame : ΞInvariantAtCFrame C f')
+    (hFrame : ΞInvariantFrameAtC C f')
+    (hInv : WethInvFr evmState.accountMap C)
+    (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
+    ∀ a ∈ sstepState.createdAccounts, a ≠ C :=
+  (step_bundled_invariant_at_C_invariant_general C f' cost₂ instr evmState sstepState
+    hWF hCO hNC hAtCFrame hFrame hInv hStep).2.2.2
+
+/-- **Content-carrying `.succ` closure of `X_inv_invariant_holds`.**
+Mirror of `X_inv_succ_content`. -/
+private theorem X_inv_invariant_succ_content
+    (C : AccountAddress) (f' : ℕ) (validJumps : Array UInt256)
+    (evmState finalState : EVM.State) (_out : ByteArray)
+    (_hWF : StateWF evmState.accountMap)
+    (_hCO : C ≠ evmState.executionEnv.codeOwner)
+    (_hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (_hAtCFrame : ΞInvariantAtCFrame C f')
+    (hFrame : ΞInvariantFrameAtC C f')
+    (_hInv : WethInvFr evmState.accountMap C)
+    (_IH : ∀ evmState', X_inv_invariant C f' validJumps evmState')
+    (hXres : EVM.X (f' + 1) validJumps evmState
+              = .ok (.success finalState _out)) :
+    WethInvFr finalState.accountMap C ∧
+    StateWF finalState.accountMap ∧
+    (∀ a ∈ finalState.createdAccounts, a ≠ C) := by
+  simp only [EVM.X] at hXres
+  split at hXres
+  case h_1 _ _ =>
+    exact absurd hXres (by simp)
+  case h_2 _ evmStateZ cost₂ hZ =>
+    have hZ_struct :
+        evmStateZ.accountMap = evmState.accountMap ∧
+        evmStateZ.executionEnv = evmState.executionEnv ∧
+        evmStateZ.createdAccounts = evmState.createdAccounts := by
+      simp only [bind, Except.bind, pure, Except.pure] at hZ
+      by_cases hc1 : evmState.gasAvailable.toNat < memoryExpansionCost evmState ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1
+      · rw [if_pos hc1] at hZ; exact Except.noConfusion hZ
+      rw [if_neg hc1] at hZ
+      set evmState' : EVM.State :=
+        { evmState with gasAvailable := evmState.gasAvailable - UInt256.ofNat (memoryExpansionCost evmState ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1) } with hevmState'
+      have h_accMap : evmState'.accountMap = evmState.accountMap := by rw [hevmState']
+      have h_eEnv   : evmState'.executionEnv = evmState.executionEnv := by rw [hevmState']
+      have h_cA     : evmState'.createdAccounts = evmState.createdAccounts := by rw [hevmState']
+      by_cases hc2 : evmState'.gasAvailable.toNat < C' evmState' ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1
+      · rw [if_pos hc2] at hZ; exact Except.noConfusion hZ
+      rw [if_neg hc2] at hZ
+      by_cases hc3 : δ ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1 = none
+      · rw [if_pos hc3] at hZ; exact Except.noConfusion hZ
+      rw [if_neg hc3] at hZ
+      by_cases hc4 : evmState'.stack.length < (δ ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1).getD 0
+      · rw [if_pos hc4] at hZ; exact Except.noConfusion hZ
+      rw [if_neg hc4] at hZ
+      (split_ifs at hZ;
+        first
+        | exact Except.noConfusion hZ
+        | (injection hZ with h_inj
+           injection h_inj with h_inj1 _
+           subst h_inj1
+           exact ⟨h_accMap, h_eEnv, h_cA⟩))
+    obtain ⟨hZ_accMap, hZ_eEnv, hZ_cA⟩ := hZ_struct
+    have hWFZ : StateWF evmStateZ.accountMap := by rw [hZ_accMap]; exact _hWF
+    have hCOZ : C ≠ evmStateZ.executionEnv.codeOwner := by
+      rw [hZ_eEnv]; exact _hCO
+    have hNCZ : ∀ a ∈ evmStateZ.createdAccounts, a ≠ C := by
+      rw [hZ_cA]; exact _hNC
+    have hInvZ : WethInvFr evmStateZ.accountMap C := by rw [hZ_accMap]; exact _hInv
+    simp only [bind, Except.bind] at hXres
+    split at hXres
+    case h_1 _ _ =>
+      exact absurd hXres (by simp)
+    case h_2 _ sstepState hStep =>
+      split at hXres
+      case h_1 _ hH_none =>
+        have hInvSstep : WethInvFr sstepState.accountMap C :=
+          step_invariant_preserved_at_non_C C f' cost₂ _ evmStateZ sstepState
+            hWFZ hCOZ hNCZ _hAtCFrame hFrame hInvZ hStep
+        have hWFsstep : StateWF sstepState.accountMap :=
+          step_invariant_StateWF C f' cost₂ _ evmStateZ sstepState
+            hWFZ hCOZ hNCZ _hAtCFrame hFrame hInvZ hStep
+        have hCOsstep : C ≠ sstepState.executionEnv.codeOwner :=
+          step_invariant_codeOwner C f' cost₂ _ evmStateZ sstepState
+            hWFZ hCOZ hNCZ _hAtCFrame hFrame hInvZ hStep
+        have hNCsstep : ∀ a ∈ sstepState.createdAccounts, a ≠ C :=
+          step_invariant_createdAccounts C f' cost₂ _ evmStateZ sstepState
+            hWFZ hCOZ hNCZ _hAtCFrame hFrame hInvZ hStep
+        have hIH := _IH sstepState hWFsstep hCOsstep hNCsstep _hAtCFrame hFrame hInvSstep
+        rw [hXres] at hIH
+        exact hIH
+      case h_2 _ o hH_some =>
+        split at hXres
+        case isTrue _ =>
+          exact absurd hXres (by simp)
+        case isFalse _ =>
+          injection hXres with hXres_inj
+          injection hXres_inj with hfin _
+          subst hfin
+          have hInvSstep : WethInvFr sstepState.accountMap C :=
+            step_invariant_preserved_at_non_C C f' cost₂ _ evmStateZ sstepState
+              hWFZ hCOZ hNCZ _hAtCFrame hFrame hInvZ hStep
+          have hWFsstep : StateWF sstepState.accountMap :=
+            step_invariant_StateWF C f' cost₂ _ evmStateZ sstepState
+              hWFZ hCOZ hNCZ _hAtCFrame hFrame hInvZ hStep
+          have hNCsstep : ∀ a ∈ sstepState.createdAccounts, a ≠ C :=
+            step_invariant_createdAccounts C f' cost₂ _ evmStateZ sstepState
+              hWFZ hCOZ hNCZ _hAtCFrame hFrame hInvZ hStep
+          exact ⟨hInvSstep, hWFsstep, hNCsstep⟩
+
+/-- **The inner X-fuel induction for the invariant chain.** Mirror of
+`X_inv_holds`. -/
+private theorem X_inv_invariant_holds
+    (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
+    (evmState : EVM.State)
+    (hAtCFrameAll : ∀ f', f' ≤ f → ΞInvariantAtCFrame C f')
+    (hFrame : ∀ f', f' ≤ f → ΞInvariantFrameAtC C f') :
+    X_inv_invariant C f validJumps evmState := by
+  induction f generalizing evmState with
+  | zero =>
+    intro _ _ _ _ _ _
+    rw [show EVM.X 0 validJumps evmState = .error .OutOfFuel from rfl]
+    trivial
+  | succ f' IH =>
+    intro hWF hCO hNC _hAtCFrameAtSucc _hFrameAtSucc hInv
+    show match EVM.X (f' + 1) validJumps evmState with
+      | .ok (.success s' _) =>
+          WethInvFr s'.accountMap C ∧
+          StateWF s'.accountMap ∧
+          (∀ a ∈ s'.createdAccounts, a ≠ C)
+      | _ => True
+    generalize hXres : EVM.X (f' + 1) validJumps evmState = xRes
+    cases xRes with
+    | error _ => trivial
+    | ok er =>
+      cases er with
+      | revert _ _ => trivial
+      | success finalState out =>
+        have hFrame_f' : ΞInvariantFrameAtC C f' := hFrame f' (Nat.le_succ f')
+        have hAtCFrame_f' : ΞInvariantAtCFrame C f' := hAtCFrameAll f' (Nat.le_succ f')
+        have hFrame' : ∀ f'_1, f'_1 ≤ f' → ΞInvariantFrameAtC C f'_1 :=
+          fun f1 h1 => hFrame f1 (Nat.le_trans h1 (Nat.le_succ f'))
+        have hAtCFrame' : ∀ f'_1, f'_1 ≤ f' → ΞInvariantAtCFrame C f'_1 :=
+          fun f1 h1 => hAtCFrameAll f1 (Nat.le_trans h1 (Nat.le_succ f'))
+        have IH' : ∀ evmState', X_inv_invariant C f' validJumps evmState' :=
+          fun es => IH es hAtCFrame' hFrame'
+        exact X_inv_invariant_succ_content C f' validJumps evmState finalState out
+          hWF hCO hNC hAtCFrame_f' hFrame_f' hInv IH' hXres
+
 end Frame
 end EvmYul
