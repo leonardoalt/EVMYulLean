@@ -6179,5 +6179,66 @@ theorem ΞInvariantFrameAtC_apply (C : AccountAddress) (maxFuel : ℕ)
     | _ => True :=
   h fuel hf cA gbh bs σ σ₀ g A I hWF hCO hNC hInv
 
+/-! ### §H — Per-step `WethInvFr` preservation at non-`C` codeOwner
+
+This is the leaf for the storage-side of §H's tracking. At any non-SD
+handled step where the executing frame's `codeOwner ≠ C`, both
+`storageSum σ C` and `balanceOf σ C` are preserved, so `WethInvFr σ C`
+is preserved verbatim.
+
+* `storageSum`-side: from `EvmYul.step_modifies_storage_only_at_codeOwner`
+  (the `a ≠ codeOwner` storage-projection-equality lemma) plus
+  `storageSum_of_storage_proj_eq`.
+* `balanceOf`-side: from `EvmYul.step_preserves_balanceOf` (any
+  handled non-SD step is a frame at every account address).
+
+Used in §H.2's `Ξ_invariant_preserved_bundled_bdd` for the per-step
+non-CALL/non-CREATE/non-SELFDESTRUCT case at codeOwner ≠ C. -/
+
+/-- `storageSum σ C` is preserved by any handled non-SELFDESTRUCT step
+when the executing frame's `codeOwner ≠ C`. -/
+theorem EvmYul.step_preserves_storageSum_at_non_codeOwner
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State) (C : AccountAddress)
+    (h_handled : handledByEvmYulStep op)
+    (h_ne_sd : op ≠ .SELFDESTRUCT)
+    (h : EvmYul.step op arg s = .ok s')
+    (h_ne : C ≠ s.executionEnv.codeOwner) :
+    storageSum s'.accountMap C = storageSum s.accountMap C := by
+  -- Storage projection at C is unchanged by the step.
+  -- `step_modifies_storage_only_at_codeOwner` takes `a ≠ codeOwner`;
+  -- our `h_ne : C ≠ codeOwner` is the symmetric form.
+  have h_ne' : C ≠ s.executionEnv.codeOwner := h_ne
+  have hProj :
+      ((s'.accountMap.find? C).map (·.storage))
+        = ((s.accountMap.find? C).map (·.storage)) :=
+    EvmYul.step_modifies_storage_only_at_codeOwner op arg s s' C
+      h_handled h_ne_sd h h_ne'
+  exact storageSum_of_storage_proj_eq hProj
+
+/-- `WethInvFr σ C` is preserved by any handled non-SELFDESTRUCT step
+when the executing frame's `codeOwner ≠ C`. The leaf for §H's
+non-`C` tracking through `Θ`/`Λ`/`Ξ`. -/
+theorem EvmYul_step_preserves_WethInvFr_at_non_C
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State) (C : AccountAddress)
+    (h_handled : handledByEvmYulStep op)
+    (h_ne_sd : op ≠ .SELFDESTRUCT)
+    (h : EvmYul.step op arg s = .ok s')
+    (h_ne : C ≠ s.executionEnv.codeOwner)
+    (hInv : WethInvFr s.accountMap C) :
+    WethInvFr s'.accountMap C := by
+  unfold WethInvFr at *
+  -- storageSum unchanged at C.
+  have hStg : storageSum s'.accountMap C = storageSum s.accountMap C :=
+    EvmYul.step_preserves_storageSum_at_non_codeOwner op arg s s' C
+      h_handled h_ne_sd h h_ne
+  -- balanceOf unchanged at C (any handled non-SD step is a frame at
+  -- every address).
+  have hBal : balanceOf s'.accountMap C = balanceOf s.accountMap C :=
+    EvmYul.step_preserves_balanceOf op arg s s' C h_handled h_ne_sd h
+  rw [hStg, hBal]
+  exact hInv
+
 end Frame
 end EvmYul
