@@ -1,6 +1,7 @@
 import EvmYul.Frame.Projection
 import EvmYul.Frame.StepFrame
 import EvmYul.Frame.SelfdestructFrame
+import EvmYul.Frame.StorageSum
 import EvmYul.EVM.Semantics
 
 /-!
@@ -5988,6 +5989,195 @@ theorem Ξ_balanceOf_ge
       rw [hEqΞ] at hh
       exact hh.1
     | revert _ _ => trivial
+
+/-! ## §H — Invariant-tracking parallel mutual closure (predicates)
+
+This section defines the predicate scaffolding for the parallel mutual
+closure that tracks the **(β ≥ S)** solvency invariant, where
+
+  `S := storageSum σ C`     (sum of all UInt256 values in `σ[C].storage`)
+  `β := balanceOf σ C`      (`σ[C].balance` cast to `ℕ`).
+
+The closure mirrors the existing balance-monotonicity chain
+(`Θ_balanceOf_ge_bdd` / `Λ_balanceOf_ge_bdd` / `Ξ_balanceOf_ge_bundled_bdd`)
+but its conclusion is invariant *preservation* `S(σ') ≤ β(σ')` rather
+than balance *monotonicity* `β(σ') ≥ β(σ)`. The two chains coexist:
+the existing one remains valid for Register-style consumers (whose at-C
+frames preserve balance monotonically); §H is required for Weth-style
+consumers whose at-C `withdraw` block decreases β by exactly the amount
+S also decreases by, so only the relative invariant `S ≤ β` survives.
+
+### Scope of §H.1 (this commit-set)
+
+* **Predicates** — `ΞPreservesInvariantAtC`, `ΞInvariantAtCFrame`,
+  `ΞInvariantFrameAtC` — analogues of `ΞPreservesAtC`, `ΞAtCFrame`,
+  `ΞFrameAtC` whose success-branch conjunct is `WethInv σ' C`
+  (`storageSum σ' C ≤ balanceOf σ' C`) instead of `β` monotonicity.
+* **Structural lemmas** — fuel-monotonicity of the bounded predicates
+  and the unbounded-to-bounded conversion `ΞInvariantAtCFrame_of_witness`.
+* **Equality-driven lift** — `ΞPreservesInvariantAtC` is preserved by
+  `find?`-equal post-states (analogue of `WethInv_of_find?_eq`'s
+  closure under projection equality).
+
+### Out of scope here (§H.2 / Phase A.2-style closure)
+
+The mutual closure's closure proofs — `Θ_invariant_preserved_bdd`,
+`Λ_invariant_preserved_bdd`, `Ξ_invariant_preserved_bundled_bdd`,
+`call_invariant_preserved`, `ΞPreservesInvariantAtC_of_Reachable_general`
+— are NOT included here. Those constitute §H.2 and require the joint
+mutual induction over `Θ`/`Λ`/`Ξ`/`X` at the invariant level, with the
+at-C `CALL` arm dispatching through a new `call_invariant_preserved`
+helper (since `call_balanceOf_ge`'s `h_s : C ≠ src ∨ v = 0` cannot be
+discharged at Weth's at-C CALL where both `src = C` and `v ≠ 0`).
+The predicates landed here let downstream §H.2 work proceed without
+re-litigating the type signatures. -/
+
+/-- The Weth-style relational solvency invariant at address `C`:
+the sum of all `UInt256` values stored at `σ[C].storage` is at most
+`σ[C].balance` (interpreted in `ℕ`).
+
+Lives in the framework so frame predicates can speak about it without
+crossing the EvmSmith ↔ EvmYul boundary. The downstream `WethInv`
+abbreviation in `EvmSmith/Demos/Weth/Invariant.lean` `def`-unfolds to
+this. -/
+def WethInvFr (σ : AccountMap .EVM) (C : AccountAddress) : Prop :=
+  storageSum σ C ≤ balanceOf σ C
+
+/-- The Weth-flavoured `ΞPreservesAtC C` sibling: when Ξ runs at
+`I.codeOwner = C` (i.e. *executing C's own code*), the **invariant**
+`storageSum σ C ≤ balanceOf σ C` is preserved (rather than `balanceOf C`
+monotone, which fails for Weth's withdraw block).
+
+Universal-fuel form. The fuel-bounded sibling `ΞInvariantAtCFrame` below
+mirrors `ΞAtCFrame`'s relationship to `ΞPreservesAtC`. -/
+def ΞPreservesInvariantAtC (C : AccountAddress) : Prop :=
+  ∀ (fuel : ℕ) (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+    (I : ExecutionEnv .EVM),
+    StateWF σ →
+    I.codeOwner = C →
+    (∀ a ∈ createdAccounts, a ≠ C) →
+    WethInvFr σ C →
+    match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+    | .ok (.success (cA', σ', _, _) _) =>
+        WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+    | _ => True
+
+/-- Fuel-bounded sibling of `ΞPreservesInvariantAtC`: at every fuel
+`≤ maxFuel`, the at-`C` Ξ run preserves the invariant + StateWF +
+cA-exclusion at `C`. Mirror of `ΞAtCFrame` for the invariant chain.
+
+Used by the at-`C` proof chain to support strong-fuel induction. When
+proving `Ξ_invariant_preserved_bundled_bdd` at fuel `n+1`, the inner Ξ
+runs at fuels `≤ n` are all covered by `ΞInvariantAtCFrame C n` from
+the strong IH. -/
+def ΞInvariantAtCFrame (C : AccountAddress) (maxFuel : ℕ) : Prop :=
+  ∀ (fuel : ℕ), fuel ≤ maxFuel →
+    ∀ (createdAccounts : RBSet AccountAddress compare)
+      (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+      (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+      (I : ExecutionEnv .EVM),
+      StateWF σ →
+      I.codeOwner = C →
+      (∀ a ∈ createdAccounts, a ≠ C) →
+      WethInvFr σ C →
+      match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+      | .ok (.success (cA', σ', _, _) _) =>
+          WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+      | _ => True
+
+/-- The complement of `ΞInvariantAtCFrame`: at `C ≠ I.codeOwner`, the
+non-at-C Ξ run preserves the invariant at every fuel `≤ maxFuel`.
+
+The closure proof of this (in §H.2) routes through the existing
+balance-monotonicity frame for `β` (β monotone at non-C frames, but
+nested at-C sub-frames may also touch S — handled via mutual recursion
+with the `ΞInvariantAtCFrame` witness). -/
+def ΞInvariantFrameAtC (C : AccountAddress) (maxFuel : ℕ) : Prop :=
+  ∀ (fuel : ℕ), fuel ≤ maxFuel →
+    ∀ (createdAccounts : RBSet AccountAddress compare)
+      (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+      (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+      (I : ExecutionEnv .EVM),
+      StateWF σ →
+      C ≠ I.codeOwner →
+      (∀ a ∈ createdAccounts, a ≠ C) →
+      WethInvFr σ C →
+      match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+      | .ok (.success (cA', σ', _, _) _) =>
+          WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+      | _ => True
+
+/-! ### Structural lemmas for the §H predicates -/
+
+/-- An unbounded `ΞPreservesInvariantAtC C` witness yields
+`ΞInvariantAtCFrame C maxFuel` at any `maxFuel`. Mirror of
+`ΞAtCFrame_of_witness`. -/
+theorem ΞInvariantAtCFrame_of_witness (C : AccountAddress)
+    (hWitness : ΞPreservesInvariantAtC C) (maxFuel : ℕ) :
+    ΞInvariantAtCFrame C maxFuel := by
+  intro fuel _hf cA gbh bs σ σ₀ g A I hWF hCO hNC hInv
+  exact hWitness fuel cA gbh bs σ σ₀ g A I hWF hCO hNC hInv
+
+/-- Monotonicity of `ΞInvariantAtCFrame` in the fuel bound. -/
+theorem ΞInvariantAtCFrame_mono (C : AccountAddress) (a b : ℕ) (hab : b ≤ a)
+    (hA : ΞInvariantAtCFrame C a) : ΞInvariantAtCFrame C b := by
+  intro f hf
+  exact hA f (Nat.le_trans hf hab)
+
+/-- Monotonicity of `ΞInvariantFrameAtC` in the fuel bound. -/
+theorem ΞInvariantFrameAtC_mono (C : AccountAddress) (a b : ℕ) (hab : b ≤ a)
+    (hA : ΞInvariantFrameAtC C a) : ΞInvariantFrameAtC C b := by
+  intro f hf
+  exact hA f (Nat.le_trans hf hab)
+
+/-- `WethInvFr` is preserved by `find?`-equality at `C`. Direct
+projection-equality lemma: if two states agree on `find? C`, they have
+the same `storageSum C` and the same `balanceOf C`, so the invariant
+projects identically. -/
+theorem WethInvFr_of_find?_eq
+    {σ σ' : AccountMap .EVM} {C : AccountAddress}
+    (h : σ'.find? C = σ.find? C)
+    (hInv : WethInvFr σ C) :
+    WethInvFr σ' C := by
+  unfold WethInvFr at *
+  rw [storageSum_of_find?_eq h, balanceOf_of_find?_eq h]
+  exact hInv
+
+/-- Projection: an `ΞInvariantAtCFrame C maxFuel` witness restricted to
+a single fuel level `f ≤ maxFuel` collapses to the same shape as the
+unbounded `ΞPreservesInvariantAtC` predicate at that fuel. Symmetric
+with `ΞAtCFrame_of_witness`'s reverse direction; useful when consumers
+have a per-fuel witness and need the unbounded form. -/
+theorem ΞInvariantAtCFrame_apply (C : AccountAddress) (maxFuel : ℕ)
+    (h : ΞInvariantAtCFrame C maxFuel)
+    (fuel : ℕ) (hf : fuel ≤ maxFuel)
+    (cA : RBSet AccountAddress compare) (gbh : BlockHeader)
+    (bs : ProcessedBlocks) (σ σ₀ : AccountMap .EVM) (g : UInt256)
+    (A : Substate) (I : ExecutionEnv .EVM)
+    (hWF : StateWF σ) (hCO : I.codeOwner = C)
+    (hNC : ∀ a ∈ cA, a ≠ C) (hInv : WethInvFr σ C) :
+    match EVM.Ξ fuel cA gbh bs σ σ₀ g A I with
+    | .ok (.success (cA', σ', _, _) _) =>
+        WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+    | _ => True :=
+  h fuel hf cA gbh bs σ σ₀ g A I hWF hCO hNC hInv
+
+/-- Projection counterpart for `ΞInvariantFrameAtC`. -/
+theorem ΞInvariantFrameAtC_apply (C : AccountAddress) (maxFuel : ℕ)
+    (h : ΞInvariantFrameAtC C maxFuel)
+    (fuel : ℕ) (hf : fuel ≤ maxFuel)
+    (cA : RBSet AccountAddress compare) (gbh : BlockHeader)
+    (bs : ProcessedBlocks) (σ σ₀ : AccountMap .EVM) (g : UInt256)
+    (A : Substate) (I : ExecutionEnv .EVM)
+    (hWF : StateWF σ) (hCO : C ≠ I.codeOwner)
+    (hNC : ∀ a ∈ cA, a ≠ C) (hInv : WethInvFr σ C) :
+    match EVM.Ξ fuel cA gbh bs σ σ₀ g A I with
+    | .ok (.success (cA', σ', _, _) _) =>
+        WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+    | _ => True :=
+  h fuel hf cA gbh bs σ σ₀ g A I hWF hCO hNC hInv
 
 end Frame
 end EvmYul
