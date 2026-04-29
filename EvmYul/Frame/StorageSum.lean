@@ -641,5 +641,65 @@ theorem storageSum_storage_erase_eq
 These thread the `Storage`-level delta lemmas through to `storageSum
 σ C` for the post-`sstore` state. -/
 
+/-- The `storageSum` of `σ.insert C { acc with storage := s' }` equals
+the foldl-sum of `s'`. The container update is at the codeOwner
+address `C`, so `storageSum` reads the new account's storage map. -/
+theorem storageSum_insert_at_C
+    (σ : AccountMap .EVM) (C : AccountAddress) (acc : Account .EVM) :
+    storageSum (σ.insert C acc) C
+      = acc.storage.foldl (fun a _ v => a + v.toNat) 0 := by
+  unfold storageSum
+  rw [find?_insert_self]
+
+/-- `Account.updateStorage` on a `slot ≠ 0` post-state: the new
+storage is `acc.storage.insert slot newVal`. -/
+private theorem updateStorage_storage_of_ne_zero
+    {τ} (acc : Account τ) (slot newVal : UInt256) (h : (newVal == default) = false) :
+    (acc.updateStorage slot newVal).storage = acc.storage.insert slot newVal := by
+  unfold Account.updateStorage
+  simp [h]
+
+/-- `Account.updateStorage` on a `slot = 0` post-state: the new
+storage is `acc.storage.erase slot`. -/
+private theorem updateStorage_storage_of_zero
+    {τ} (acc : Account τ) (slot : UInt256) :
+    (acc.updateStorage slot ⟨0⟩).storage = acc.storage.erase slot := by
+  unfold Account.updateStorage
+  have h : ((⟨0⟩ : UInt256) == default) = true := by decide
+  simp [h]
+
+/-- **SSTORE-replace at C** (insert branch, `newVal ≠ 0`): the
+post-storage-sum at `C` equals the pre-storage-sum at `C` shifted by
+`newVal.toNat - oldVal.toNat` (additive form).
+
+`new_sum + oldVal.toNat = old_sum + newVal.toNat`. -/
+theorem storageSum_sstore_replace_eq
+    (σ : AccountMap .EVM) (C : AccountAddress) (slot newVal oldVal : UInt256)
+    (h_newVal : (newVal == default) = false)
+    (acc : Account .EVM)
+    (h_find : σ.find? C = some acc)
+    (h_old : acc.storage.find? slot = some oldVal) :
+    storageSum (σ.insert C (acc.updateStorage slot newVal)) C + oldVal.toNat
+      = storageSum σ C + newVal.toNat := by
+  rw [storageSum_insert_at_C, storageSum_of_find?_some σ C acc h_find,
+      updateStorage_storage_of_ne_zero acc slot newVal h_newVal]
+  exact storageSum_storage_insert_replace_eq acc.storage slot oldVal newVal h_old
+
+/-- **SSTORE-erase at C** (erase branch, `newVal = 0`): the
+post-storage-sum at `C` equals the pre-storage-sum at `C` minus the
+old slot value.
+
+`new_sum + oldVal.toNat = old_sum`. -/
+theorem storageSum_sstore_erase_eq
+    (σ : AccountMap .EVM) (C : AccountAddress) (slot oldVal : UInt256)
+    (acc : Account .EVM)
+    (h_find : σ.find? C = some acc)
+    (h_old : acc.storage.find? slot = some oldVal) :
+    storageSum (σ.insert C (acc.updateStorage slot ⟨0⟩)) C + oldVal.toNat
+      = storageSum σ C := by
+  rw [storageSum_insert_at_C, storageSum_of_find?_some σ C acc h_find,
+      updateStorage_storage_of_zero acc slot]
+  exact storageSum_storage_erase_eq acc.storage slot oldVal h_old
+
 end Frame
 end EvmYul
