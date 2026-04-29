@@ -13,13 +13,29 @@ import EvmYul.Maps.StorageMap
 at address `C`'s persistent-storage map. It powers the Weth solvency
 invariant `WethInv σ C := storageSum σ C ≤ balanceOf σ C`.
 
-This file establishes the definition together with the simple
-"unchanged-at-other-account" companion that follows directly from
-`find?`-equality. The full `_sstore_eq` / `_old_le` lemmas, which
-require RBMap insert/erase reasoning, live in a downstream extension
-once §H's invariant-tracking closure consumes them; for the purposes
-of `WethInv`'s definition (§2.1) and the SSTORE step lemma (§1.5)
-the def + the unchanged-at-other-account corollary suffice.
+This file establishes:
+
+* The definition of `storageSum`.
+* `storageSum_unchanged_at_other_account` — `find?`-equality framing.
+* `storageSum_of_storage_proj_eq` — projection-equality framing
+  (used by §1.5's storage-only-at-codeOwner lifter).
+* `storageSum_old_le` — single-slot bound via `List.le_sum_of_mem`.
+
+The remaining storage-sum delta lemmas (`storageSum_sstore_decrement`,
+`storageSum_sstore_increment`) characterise the post-SSTORE storage
+sum at the codeOwner's account: the only slot whose value changes is
+`spos`, and the per-slot delta dominates the sum delta. These are
+the workhorses for Weth's PC 60 (decrement) and PC 40 (increment)
+SSTORE arms.
+
+Their proofs require multiset-permutation reasoning over
+`acc.storage.toList` to relate the RBMap pre/post toList (with `slot`
+overwritten or erased), which Batteries' `mem_toList_insert` /
+`mem_toList_erase` only gives at the membership level. A clean
+proof routes through a `Multiset` view; lifting to that form is the
+remaining task. Until then, Weth's Ξ-closure dischargers consume
+these as per-state hypotheses on `WethSStorePreserves` /
+`WethCallSlack` (see `EvmSmith/Demos/Weth/BytecodeFrame.lean`).
 -/
 
 namespace EvmYul
