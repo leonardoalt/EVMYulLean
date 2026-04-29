@@ -1140,6 +1140,31 @@ theorem step_DUP4_shape
   show [hd1, hd2, hd3, hd4].getLast! :: (hd1 :: hd2 :: hd3 :: hd4 :: tl) = hd4 :: s.stack
   rw [hStk]; rfl
 
+/-- DUP5: duplicates the fifth-from-top, `pc += 1`. -/
+theorem step_DUP5_shape
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 hd4 hd5 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: hd4 :: hd5 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.DUP5, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd5 :: s.stack ∧
+    s'.executionEnv = s.executionEnv := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dup at hStep
+  rw [hStk] at hStep
+  simp only [show List.take 5 (hd1 :: hd2 :: hd3 :: hd4 :: hd5 :: tl)
+                = [hd1, hd2, hd3, hd4, hd5] from rfl,
+             show ([hd1, hd2, hd3, hd4, hd5] : List UInt256).length = 5 from rfl,
+             ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, ?_, rfl⟩
+  show [hd1, hd2, hd3, hd4, hd5].getLast!
+        :: (hd1 :: hd2 :: hd3 :: hd4 :: hd5 :: tl) = hd5 :: s.stack
+  rw [hStk]; rfl
+
 /-- SWAP1: swaps the top two stack elements, `pc += 1`. -/
 theorem step_SWAP1_shape
     (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
