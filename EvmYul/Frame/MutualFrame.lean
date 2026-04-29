@@ -4582,6 +4582,111 @@ where
       rw [hEnvCA.2, hCAEq] at haIn
       exact hNC a haIn
 
+/-- **Top-level handled-op helper.** Lifts the `handledHelper` body of
+`step_bundled_invariant_at_C_v0` out to a top-level theorem so that
+both the `_v0` and `_general` variants can call it. Functionally
+identical to the inlined `handledHelper`; never deletes the original. -/
+private theorem step_handled_helper_at_C_general
+    (op : Operation .EVM) (C : AccountAddress) (f : ℕ) (cost₂ : ℕ)
+    (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCC : C = evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hHandled : handledByEvmYulStep op)
+    (hSDne : op ≠ .SELFDESTRUCT)
+    (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C = sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  set s_pre : EVM.State :=
+    { evmState with
+        execLength := evmState.execLength + 1,
+        gasAvailable := evmState.gasAvailable - UInt256.ofNat cost₂ }
+    with hs_pre_def
+  have hAM : s_pre.accountMap = evmState.accountMap := rfl
+  have hCOEq : s_pre.executionEnv = evmState.executionEnv := rfl
+  have hCAEq : s_pre.createdAccounts = evmState.createdAccounts := rfl
+  have hWF_pre : StateWF s_pre.accountMap := by rw [hAM]; exact hWF
+  have hStep' : EvmYul.step op arg s_pre = .ok sstepState := by
+    unfold EVM.step at hStep
+    simp only [bind, Except.bind, pure, Except.pure] at hStep
+    obtain ⟨hne1, hne2, hne3, hne4, hne5, hne6⟩ := hHandled
+    cases op with
+    | StopArith _ => exact hStep
+    | CompBit _ => exact hStep
+    | Keccak _ => exact hStep
+    | Env _ => exact hStep
+    | Block _ => exact hStep
+    | StackMemFlow _ => exact hStep
+    | Push _ => exact hStep
+    | Dup _ => exact hStep
+    | Exchange _ => exact hStep
+    | Log _ => exact hStep
+    | System o =>
+      cases o with
+      | CREATE => exact absurd rfl hne1
+      | CALL => exact absurd rfl hne3
+      | CALLCODE => exact absurd rfl hne4
+      | RETURN => exact hStep
+      | DELEGATECALL => exact absurd rfl hne5
+      | CREATE2 => exact absurd rfl hne2
+      | STATICCALL => exact absurd rfl hne6
+      | REVERT => exact hStep
+      | INVALID => exact hStep
+      | SELFDESTRUCT => exact hStep
+  have hBalEq :=
+    EvmYul.step_preserves_balanceOf op arg s_pre sstepState C hHandled hSDne hStep'
+  have hWFres :=
+    EvmYul_step_preserves_StateWF op arg s_pre sstepState hHandled hSDne hStep' hWF_pre
+  have hEnvCA :=
+    EvmYul.step_preserves_eEnv_cA op arg s_pre sstepState hHandled hStep'
+  refine ⟨?_, hWFres, ?_, ?_⟩
+  · rw [hBalEq, hAM]
+  · rw [hEnvCA.1, hCOEq]; exact hCC
+  · intro a haIn
+    rw [hEnvCA.2, hCAEq] at haIn
+    exact hNC a haIn
+
+/-- **Op-whitelist generalization of `step_bundled_invariant_at_C_v0`.**
+
+Same conclusion as `_v0`, but the 8-op disjunction is replaced with an
+arbitrary `OpAllowedSet : Operation .EVM → Prop` whitelist and a per-op
+dispatcher hypothesis `hDischarge` saying that every allowed op is
+either (a) handled by `EvmYul.step` and not `SELFDESTRUCT`, or (b)
+exactly `.CALL`. The CALL arm uses the existing `step_CALL_arm_at_C_v0`
+(Mode V0 / value=0 routing). Mode INV (value ≠ 0) is left for §H to
+instantiate via a separate `_inv` variant — this generalization
+parameterizes only the op-whitelist, not the CALL routing. -/
+private theorem step_bundled_invariant_at_C_general
+    (OpAllowedSet : Operation .EVM → Prop)
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (op : Operation .EVM)
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCC : C = evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hAtCFrame : ΞAtCFrame C (f + 1))
+    (hFrame : ΞFrameAtC C (f + 1))
+    (hAllowed : OpAllowedSet op)
+    (hDischarge : ∀ op', OpAllowedSet op' →
+        (handledByEvmYulStep op' ∧ op' ≠ .SELFDESTRUCT) ∨ op' = .CALL)
+    (h_v0 : op = .CALL → evmState.stack[2]? = some ⟨0⟩)
+    (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
+    balanceOf sstepState.accountMap C ≥ balanceOf evmState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C = sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  rcases hDischarge op hAllowed with ⟨hHandled, hSDne⟩ | hCall
+  · -- Handled, non-SELFDESTRUCT.
+    exact step_handled_helper_at_C_general op C f cost₂ arg evmState sstepState
+      hWF hCC hNC hHandled hSDne hStep
+  · -- CALL with value=0.
+    subst hCall
+    exact step_CALL_arm_at_C_v0 C f cost₂ arg evmState sstepState
+      hWF hCC hNC hAtCFrame hFrame (h_v0 rfl) hStep
+
 /-- Balance monotonicity across a single step. -/
 private theorem step_balance_mono_at_C
     (C : AccountAddress) (f' : ℕ) (cost₂ : ℕ)
