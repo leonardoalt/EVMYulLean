@@ -7666,5 +7666,178 @@ private theorem step_CALLCODE_arm_invariant
           · simp only [createdAccounts_replaceStackAndIncrPC, ← hStateEq]
             exact hNCes1
 
+/-- CREATE invariant arm: `WethInvFr` is preserved through the CREATE
+step at non-`C` codeOwner. Mirrors `step_CREATE_arm` exactly, with the
+Λ dispatch routed through `Λ_invariant_preserved_bdd`. The `σStar`
+nonce-bump preserves `WethInvFr σ C` because `Iₐ ≠ C`. -/
+private theorem step_CREATE_arm_invariant
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCO : C ≠ evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (_hAtCFrame : ΞInvariantAtCFrame C (f + 1))
+    (hFrame : ΞInvariantFrameAtC C (f + 1))
+    (hInv : WethInvFr evmState.accountMap C)
+    (hStep : EVM.step (f + 1) cost₂ (some (.CREATE, arg)) evmState = .ok sstepState) :
+    WethInvFr sstepState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C ≠ sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  simp only [EVM.step, Operation.CREATE, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
+  set eS2 : EVM.State :=
+    { eS1 with gasAvailable := eS1.gasAvailable - UInt256.ofNat cost₂ } with heS2_def
+  rcases hpop3 : eS2.stack.pop3 with _ | ⟨stack, μ₀, μ₁, μ₂⟩
+  · rw [hpop3] at hStep
+    exact absurd hStep (by simp)
+  · rw [hpop3] at hStep
+    set i : ByteArray := eS2.memory.readWithPadding μ₁.toNat μ₂.toNat with hi_def
+    set Iₐ : AccountAddress := eS2.executionEnv.codeOwner with hIₐ_def
+    set Iₒ : AccountAddress := eS2.executionEnv.sender with hIₒ_def
+    set Iₑ : ℕ := eS2.executionEnv.depth with hIₑ_def
+    set σ : AccountMap .EVM := eS2.accountMap with hσ_def
+    set σ_Iₐ : Account .EVM := σ.find? Iₐ |>.getD default with hσIₐ_def
+    set σStar : AccountMap .EVM :=
+      σ.insert Iₐ { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ } with hσStar_def
+    have hAM2 : eS2.accountMap = evmState.accountMap := by simp [heS2_def, heS1_def]
+    have hEE2 : eS2.executionEnv = evmState.executionEnv := by simp [heS2_def, heS1_def]
+    have hCA2 : eS2.createdAccounts = evmState.createdAccounts := by simp [heS2_def, heS1_def]
+    have hWF2 : StateWF eS2.accountMap := by rw [hAM2]; exact hWF
+    have hCO2 : C ≠ eS2.executionEnv.codeOwner := by rw [hEE2]; exact hCO
+    have hNC2 : ∀ a ∈ eS2.createdAccounts, a ≠ C := by rw [hCA2]; exact hNC
+    have hInv2 : WethInvFr eS2.accountMap C := by rw [hAM2]; exact hInv
+    by_cases hNonceOv : σ_Iₐ.nonce.toNat ≥ 2^64-1
+    · simp only [hNonceOv, if_true] at hStep
+      split at hStep
+      · exact absurd hStep (by simp)
+      · injection hStep with hEq
+        rw [← hEq]
+        refine ⟨?_, ?_, ?_, ?_⟩
+        · simp only [accountMap_replaceStackAndIncrPC]; exact hInv
+        · simp only [accountMap_replaceStackAndIncrPC]; exact hWF
+        · simp only [executionEnv_replaceStackAndIncrPC]; exact hCO
+        · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNC
+    · simp only [hNonceOv, if_false] at hStep
+      by_cases hPreCheck :
+          μ₀ ≤ (σ.find? Iₐ |>.option ⟨0⟩ (·.balance)) ∧ Iₑ < 1024 ∧ i.size ≤ 49152
+      · rw [if_pos hPreCheck] at hStep
+        split at hStep
+        · rename_i a cA σ' g' A' z o hΛ
+          split at hStep
+          · exact absurd hStep (by simp)
+          · injection hStep with hEq
+            rw [← hEq]
+            simp only [accountMap_replaceStackAndIncrPC,
+                       executionEnv_replaceStackAndIncrPC,
+                       createdAccounts_replaceStackAndIncrPC]
+            have hIₐC : Iₐ ≠ C := fun h => hCO2 h.symm
+            have hσStarBalC : balanceOf σStar C = balanceOf σ C := by
+              show balanceOf (σ.insert Iₐ _) C = balanceOf σ C
+              apply balanceOf_of_find?_eq
+              exact find?_insert_ne _ _ _ _ hIₐC
+            have hσStarStgC : storageSum σStar C = storageSum σ C := by
+              show storageSum (σ.insert Iₐ _) C = storageSum σ C
+              apply storageSum_unchanged_at_other_account
+              exact hIₐC
+            have hInvσStar : WethInvFr σStar C := by
+              unfold WethInvFr
+              rw [hσStarStgC, hσStarBalC]
+              exact hInv2
+            have hWFσStar : StateWF σStar := by
+              show StateWF (σ.insert Iₐ _)
+              by_cases hFindIₐ : ∃ acc, σ.find? Iₐ = some acc
+              · obtain ⟨acc, hFind⟩ := hFindIₐ
+                have hσIₐ_eq : σ_Iₐ = acc := by
+                  show (σ.find? Iₐ).getD default = acc
+                  rw [hFind]; rfl
+                refine StateWF_insert_eq_bal σ Iₐ _ acc hFind ?_ hWF2
+                show (σ_Iₐ.balance : UInt256) = acc.balance
+                rw [hσIₐ_eq]
+              · push_neg at hFindIₐ
+                have hFindNone : σ.find? Iₐ = none := by
+                  match hF : σ.find? Iₐ with
+                  | none => rfl
+                  | some acc => exact absurd hF (hFindIₐ acc)
+                have hσIₐ_def_eq : σ_Iₐ = default := by
+                  show (σ.find? Iₐ).getD default = default
+                  rw [hFindNone]; rfl
+                refine ⟨?_⟩
+                have hEq2 := totalETH_insert_of_not_mem σ Iₐ
+                  { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ } hFindNone
+                have h0 : ({ σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ } : Account .EVM).balance.toNat = 0 := by
+                  rw [hσIₐ_def_eq]; rfl
+                rw [h0, Nat.add_zero] at hEq2
+                rw [hEq2]; exact hWF2.boundedTotal
+            have h_funds_at_σStar :
+                ∀ acc, σStar.find? Iₐ = some acc → μ₀.toNat ≤ acc.balance.toNat := by
+              intro acc hFind
+              have hFindEq : σStar.find? Iₐ =
+                  some { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ } := find?_insert_self _ _ _
+              rw [hFindEq] at hFind
+              injection hFind with hAcc
+              subst hAcc
+              have hμ := hPreCheck.1
+              have hU : (σ.find? Iₐ |>.option (⟨0⟩ : UInt256) (·.balance)) = σ_Iₐ.balance := by
+                show (σ.find? Iₐ |>.option (⟨0⟩ : UInt256) (·.balance))
+                       = ((σ.find? Iₐ).getD default).balance
+                cases hF : σ.find? Iₐ with
+                | none => rfl
+                | some acc2 => rfl
+              rw [hU] at hμ
+              exact hμ
+            have hFrame_f : ΞInvariantFrameAtC C f :=
+              ΞInvariantFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+            have hΛFrame :=
+              Λ_invariant_preserved_bdd f
+                eS2.executionEnv.blobVersionedHashes
+                eS2.createdAccounts
+                eS2.genesisBlockHeader
+                eS2.blocks
+                σStar
+                eS2.σ₀
+                eS2.toState.substate
+                Iₐ
+                Iₒ
+                (.ofNat <| L eS2.gasAvailable.toNat)
+                (.ofNat eS2.executionEnv.gasPrice)
+                μ₀ i
+                (.ofNat <| Iₑ + 1)
+                none
+                eS2.executionEnv.header
+                eS2.executionEnv.perm
+                C hWFσStar hCO2
+                (by rw [hCA2]; exact hNC)
+                h_funds_at_σStar hInvσStar hFrame_f
+            rw [hΛ] at hΛFrame
+            obtain ⟨_ha_ne_C, hInvσ', hWFσ', hNCcA⟩ := hΛFrame
+            refine ⟨?_, hWFσ', ?_, ?_⟩
+            · show WethInvFr σ' C
+              exact hInvσ'
+            · show C ≠ ({eS2 with accountMap := σ', substate := A', createdAccounts := cA }).executionEnv.codeOwner
+              rw [hEE2] at hCO2
+              exact hCO
+            · exact hNCcA
+        · rename_i hΛ
+          split at hStep
+          · exact absurd hStep (by simp)
+          · injection hStep with hEq
+            rw [← hEq]
+            refine ⟨?_, ?_, ?_, ?_⟩
+            · simp only [accountMap_replaceStackAndIncrPC]; exact hInv
+            · simp only [accountMap_replaceStackAndIncrPC]; exact hWF
+            · simp only [executionEnv_replaceStackAndIncrPC]; exact hCO
+            · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNC
+      · rw [if_neg hPreCheck] at hStep
+        split at hStep
+        · exact absurd hStep (by simp)
+        · injection hStep with hEq
+          rw [← hEq]
+          refine ⟨?_, ?_, ?_, ?_⟩
+          · simp only [accountMap_replaceStackAndIncrPC]; exact hInv
+          · simp only [accountMap_replaceStackAndIncrPC]; exact hWF
+          · simp only [executionEnv_replaceStackAndIncrPC]; exact hCO
+          · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNC
+
 end Frame
 end EvmYul
