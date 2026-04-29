@@ -70,5 +70,44 @@ theorem storageSum_of_find?_some
       = acc.storage.foldl (fun acc _ v => acc + v.toNat) 0 := by
   unfold storageSum; rw [h]
 
+/-- If two states agree on the *storage projection* `find? C ↦ storage`
+— i.e. on the `Option (StorageMap)` derived from `find? C` — then they
+agree on `storageSum σ C`.
+
+This is the lemma used to lift step-level storage-projection-equality
+(provided by `EvmYul.step_modifies_storage_only_at_codeOwner` at
+non-codeOwner addresses) to `storageSum` equality. -/
+theorem storageSum_of_storage_proj_eq
+    {σ σ' : AccountMap .EVM} {C : AccountAddress}
+    (h : ((σ'.find? C).map (·.storage)) = ((σ.find? C).map (·.storage))) :
+    storageSum σ' C = storageSum σ C := by
+  unfold storageSum
+  -- Case-split on σ.find? C and σ'.find? C; the hypothesis forces the
+  -- two lookups to have the same option-shape, and storage values agree
+  -- when both are `some`.
+  cases hσ : σ.find? C with
+  | none =>
+    -- σ-side: 0. σ'-side must also be `none` (else `(some ?).map …` ≠ `none`).
+    rw [hσ] at h
+    cases hσ' : σ'.find? C with
+    | none => rfl
+    | some acc' =>
+      rw [hσ'] at h
+      -- h : (some acc').map (·.storage) = (none).map (·.storage)
+      -- i.e. some acc'.storage = none — contradiction.
+      simp only [Option.map_some, Option.map_none] at h
+      cases h
+  | some acc =>
+    rw [hσ] at h
+    cases hσ' : σ'.find? C with
+    | none =>
+      rw [hσ'] at h
+      simp only [Option.map_some, Option.map_none] at h
+      cases h
+    | some acc' =>
+      rw [hσ'] at h
+      simp only [Option.map_some, Option.some.injEq] at h
+      simp only [h]
+
 end Frame
 end EvmYul
