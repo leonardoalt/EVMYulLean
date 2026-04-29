@@ -8852,5 +8852,278 @@ private theorem step_bundled_invariant_at_C_invariant_at_C
       rw [hEnvCA.2, hCAEq] at haIn
       exact hNC a haIn
 
+/-- **At-`C` invariant X-induction predicate.** Mirror of
+`X_inv_at_C_general` for the `WethInvFr` chain.
+
+In addition to the structural reachability/closure hypotheses (Z, step,
+decode-some, op ∈ allowed-set), we take a per-step output-invariant
+hypothesis for the SSTORE arm: for every reachable state where the
+fetched instruction is `.SSTORE` and the step succeeds, the post-step
+`WethInvFr` holds. The consumer (Weth's bytecode walk) discharges this
+via decrement-pattern reasoning at concrete bytecode states (PC 60 in
+withdraw zeroes the slot; PC 40 in deposit increments by msg.value
+where the slack came from the Θ-prefix value transfer). -/
+private def X_inv_at_C_invariant (OpAllowedSet : Operation .EVM → Prop)
+    (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
+    (Reachable : EVM.State → Prop)
+    (evmState : EVM.State) : Prop :=
+  StateWF evmState.accountMap →
+  C = evmState.executionEnv.codeOwner →
+  (∀ a ∈ evmState.createdAccounts, a ≠ C) →
+  ΞInvariantAtCFrame C f →
+  ΞInvariantFrameAtC C f →
+  WethInvFr evmState.accountMap C →
+  Reachable evmState →
+  -- Z preserves Reachable.
+  (∀ s : EVM.State, ∀ g : UInt256, Reachable s →
+      Reachable { s with gasAvailable := g }) →
+  -- step preserves Reachable.
+  (∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
+      fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+      EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
+      Reachable s') →
+  -- Reachable ⇒ decode-some.
+  (∀ s : EVM.State, Reachable s →
+      ∃ pair, decode s.executionEnv.code s.pc = some pair) →
+  -- Reachable + decode ⇒ op ∈ OpAllowedSet.
+  (∀ s : EVM.State, ∀ op : Operation .EVM, ∀ arg,
+    Reachable s →
+    fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+    OpAllowedSet op) →
+  -- OpAllowedSet ⇒ strict ∨ op=.CALL ∨ op=.SSTORE.
+  (∀ op', OpAllowedSet op' →
+    strictlyPreservesAccountMap op' ∨ op' = .CALL ∨
+    op' = .StackMemFlow .SSTORE) →
+  -- Reachable + op=.CALL ⇒ stack[2]? = some 0.
+  (∀ s : EVM.State, ∀ arg,
+    Reachable s →
+    fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
+    s.stack[2]? = some ⟨0⟩) →
+  -- Per-step SSTORE output invariant: at every reachable state with
+  -- `op = SSTORE`, the post-step `WethInvFr` is preserved.
+  (∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ arg,
+    Reachable s →
+    StateWF s.accountMap →
+    C = s.executionEnv.codeOwner →
+    WethInvFr s.accountMap C →
+    fetchInstr s.executionEnv s.pc = .ok (.StackMemFlow .SSTORE, arg) →
+    EVM.step (f' + 1) cost (some (.StackMemFlow .SSTORE, arg)) s = .ok s' →
+    WethInvFr s'.accountMap C) →
+  match EVM.X f validJumps evmState with
+  | .ok (.success s' _) =>
+      WethInvFr s'.accountMap C ∧
+      StateWF s'.accountMap ∧
+      (∀ a ∈ s'.createdAccounts, a ≠ C)
+  | _ => True
+
+/-- **Fuel induction for `X_inv_at_C_invariant`.** Mirror of
+`X_inv_at_C_general_holds`. -/
+private theorem X_inv_at_C_invariant_holds
+    (OpAllowedSet : Operation .EVM → Prop)
+    (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
+    (Reachable : EVM.State → Prop)
+    (evmState : EVM.State)
+    (hAtCFrameAll : ∀ f', f' ≤ f → ΞInvariantAtCFrame C f')
+    (hFrame : ∀ f', f' ≤ f → ΞInvariantFrameAtC C f') :
+    X_inv_at_C_invariant OpAllowedSet C f validJumps Reachable evmState := by
+  induction f generalizing evmState with
+  | zero =>
+    intro _ _ _ _ _ _ _ _ _ _ _ _ _ _
+    rw [show EVM.X 0 validJumps evmState = .error .OutOfFuel from rfl]
+    trivial
+  | succ f' IH =>
+    intro hWF hCC hNC _hAtCFrameAtSucc _hFrameAtSucc hInv
+            hReach hReach_Z hReach_step hReach_decodeSome
+            hOpAllowedReach hDischarge h_v0_Reach h_sstore_Reach
+    show match EVM.X (f' + 1) validJumps evmState with
+      | .ok (.success s' _) =>
+          WethInvFr s'.accountMap C ∧
+          StateWF s'.accountMap ∧
+          (∀ a ∈ s'.createdAccounts, a ≠ C)
+      | _ => True
+    generalize hXres : EVM.X (f' + 1) validJumps evmState = xRes
+    cases xRes with
+    | error _ => trivial
+    | ok er =>
+      cases er with
+      | revert _ _ => trivial
+      | success finalState out =>
+        simp only [EVM.X] at hXres
+        split at hXres
+        case h_1 _ _ => exact absurd hXres (by simp)
+        case h_2 _ evmStateZ cost₂ hZ =>
+          have hZ_full :
+              evmStateZ = { evmState with gasAvailable := evmStateZ.gasAvailable } := by
+            simp only [bind, Except.bind, pure, Except.pure] at hZ
+            by_cases hc1 : evmState.gasAvailable.toNat < memoryExpansionCost evmState ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1
+            · rw [if_pos hc1] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc1] at hZ
+            set evmState' : EVM.State :=
+              { evmState with gasAvailable := evmState.gasAvailable - UInt256.ofNat (memoryExpansionCost evmState ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1) } with hevmState'
+            by_cases hc2 : evmState'.gasAvailable.toNat < C' evmState' ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1
+            · rw [if_pos hc2] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc2] at hZ
+            by_cases hc3 : δ ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1 = none
+            · rw [if_pos hc3] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc3] at hZ
+            by_cases hc4 : evmState'.stack.length < (δ ((decode evmState.executionEnv.code evmState.pc).getD (Operation.STOP, none)).1).getD 0
+            · rw [if_pos hc4] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc4] at hZ
+            (split_ifs at hZ;
+              first
+              | exact Except.noConfusion hZ
+              | (injection hZ with h_inj
+                 injection h_inj with h_inj1 _
+                 subst h_inj1
+                 rfl))
+          have hZ_accMap : evmStateZ.accountMap = evmState.accountMap := by rw [hZ_full]
+          have hZ_eEnv : evmStateZ.executionEnv = evmState.executionEnv := by rw [hZ_full]
+          have hZ_cA : evmStateZ.createdAccounts = evmState.createdAccounts := by rw [hZ_full]
+          have hZ_pc : evmStateZ.pc = evmState.pc := by rw [hZ_full]
+          have hWFZ : StateWF evmStateZ.accountMap := by rw [hZ_accMap]; exact hWF
+          have hCCZ : C = evmStateZ.executionEnv.codeOwner := by
+            rw [hZ_eEnv]; exact hCC
+          have hNCZ : ∀ a ∈ evmStateZ.createdAccounts, a ≠ C := by
+            rw [hZ_cA]; exact hNC
+          have hInvZ : WethInvFr evmStateZ.accountMap C := by rw [hZ_accMap]; exact hInv
+          have hReachZ : Reachable evmStateZ := by
+            rw [hZ_full]
+            exact hReach_Z evmState evmStateZ.gasAvailable hReach
+          simp only [bind, Except.bind] at hXres
+          split at hXres
+          case h_1 _ _ => exact absurd hXres (by simp)
+          case h_2 _ sstepState hStep =>
+            match f' with
+            | 0 =>
+              simp only [EVM.step] at hStep
+              exact absurd hStep (by simp)
+            | f'' + 1 =>
+              set decRes : Operation .EVM × Option (UInt256 × Nat) :=
+                (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none) with hDecRes
+              obtain ⟨op, arg⟩ := decRes
+              have hFrameAtSuccF' : ΞInvariantFrameAtC C (f'' + 1) :=
+                ΞInvariantFrameAtC_mono C ((f'' + 1) + 1) (f'' + 1) (Nat.le_succ _) _hFrameAtSucc
+              have hAtCFrameAtSuccF' : ΞInvariantAtCFrame C (f'' + 1) :=
+                ΞInvariantAtCFrame_mono C ((f'' + 1) + 1) (f'' + 1) (Nat.le_succ _) _hAtCFrameAtSucc
+              -- Discharge OpAllowedSet op via reachability + decode-some.
+              have hAllowed : OpAllowedSet op := by
+                cases hDec : decode evmStateZ.executionEnv.code evmStateZ.pc with
+                | none =>
+                  obtain ⟨_, hSome⟩ := hReach_decodeSome evmStateZ hReachZ
+                  rw [hDec] at hSome
+                  exact absurd hSome (by simp)
+                | some pair =>
+                  have hDec' : decode evmState.executionEnv.code evmState.pc = some pair := by
+                    rw [← hZ_eEnv, ← hZ_pc]; exact hDec
+                  have hPair : ((op, arg) : Operation .EVM × Option (UInt256 × Nat)) = pair := by
+                    have : (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                         = pair := by rw [hDec']; rfl
+                    rw [show ((op, arg) : Operation .EVM × Option (UInt256 × Nat))
+                          = (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                        from hDecRes]
+                    exact this
+                  have hFetch : fetchInstr evmStateZ.executionEnv evmStateZ.pc = .ok pair := by
+                    unfold fetchInstr
+                    rw [hDec]; rfl
+                  obtain ⟨op', arg'⟩ := pair
+                  have hOpEq : op = op' := (Prod.mk.inj hPair).1
+                  have hArgEq : arg = arg' := (Prod.mk.inj hPair).2
+                  have hFetch' : fetchInstr evmStateZ.executionEnv evmStateZ.pc = .ok (op, arg) := by
+                    rw [hFetch, hOpEq, hArgEq]
+                  exact hOpAllowedReach evmStateZ op arg hReachZ hFetch'
+              -- Discharge h_v0.
+              have h_v0 : op = .CALL → evmStateZ.stack[2]? = some ⟨0⟩ := by
+                intro hOpCall
+                cases hDec : decode evmStateZ.executionEnv.code evmStateZ.pc with
+                | none =>
+                  obtain ⟨_, hSome⟩ := hReach_decodeSome evmStateZ hReachZ
+                  rw [hDec] at hSome
+                  exact absurd hSome (by simp)
+                | some pair =>
+                  have hDec' : decode evmState.executionEnv.code evmState.pc = some pair := by
+                    rw [← hZ_eEnv, ← hZ_pc]; exact hDec
+                  have hPair : ((op, arg) : Operation .EVM × Option (UInt256 × Nat)) = pair := by
+                    have : (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                         = pair := by rw [hDec']; rfl
+                    rw [show ((op, arg) : Operation .EVM × Option (UInt256 × Nat))
+                          = (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                        from hDecRes]
+                    exact this
+                  obtain ⟨op', arg'⟩ := pair
+                  have hOpEq : op = op' := (Prod.mk.inj hPair).1
+                  have hArgEq : arg = arg' := (Prod.mk.inj hPair).2
+                  have hFetch : fetchInstr evmStateZ.executionEnv evmStateZ.pc
+                              = .ok (.CALL, arg') := by
+                    unfold fetchInstr
+                    rw [hDec]
+                    rw [hOpEq] at hOpCall
+                    rw [hOpCall]
+                    rfl
+                  exact h_v0_Reach evmStateZ arg' hReachZ hFetch
+              -- Discharge h_sstore_post via reachability and h_sstore_Reach.
+              have hFetchOK : fetchInstr evmStateZ.executionEnv evmStateZ.pc = .ok (op, arg) := by
+                cases hDec : decode evmStateZ.executionEnv.code evmStateZ.pc with
+                | none =>
+                  obtain ⟨_, hSome⟩ := hReach_decodeSome evmStateZ hReachZ
+                  rw [hDec] at hSome
+                  exact absurd hSome (by simp)
+                | some pair =>
+                  have hDec' : decode evmState.executionEnv.code evmState.pc = some pair := by
+                    rw [← hZ_eEnv, ← hZ_pc]; exact hDec
+                  have hPair : ((op, arg) : Operation .EVM × Option (UInt256 × Nat)) = pair := by
+                    have : (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                         = pair := by rw [hDec']; rfl
+                    rw [show ((op, arg) : Operation .EVM × Option (UInt256 × Nat))
+                          = (decode evmState.executionEnv.code evmState.pc).getD (.STOP, .none)
+                        from hDecRes]
+                    exact this
+                  obtain ⟨op', arg'⟩ := pair
+                  have hOpEq : op = op' := (Prod.mk.inj hPair).1
+                  have hArgEq : arg = arg' := (Prod.mk.inj hPair).2
+                  unfold fetchInstr; rw [hDec, hOpEq, hArgEq]; rfl
+              have hStep' : EVM.step (f'' + 1) cost₂ (some (op, arg)) evmStateZ
+                          = .ok sstepState := hStep
+              have h_sstore_post : op = .StackMemFlow .SSTORE →
+                  WethInvFr sstepState.accountMap C := by
+                intro hOpSStore
+                rw [hOpSStore] at hFetchOK hStep'
+                exact h_sstore_Reach evmStateZ sstepState f'' cost₂ arg
+                  hReachZ hWFZ hCCZ hInvZ hFetchOK hStep'
+              have hBundle :=
+                step_bundled_invariant_at_C_invariant_at_C OpAllowedSet C f'' cost₂ arg op
+                  evmStateZ sstepState
+                  hWFZ hCCZ hNCZ hAtCFrameAtSuccF' hFrameAtSuccF' hInvZ
+                  hAllowed hDischarge h_v0 h_sstore_post hStep'
+              obtain ⟨hInvSstep, hWFsstep, hCCsstep, hNCsstep⟩ := hBundle
+              have hReachStep : Reachable sstepState :=
+                hReach_step evmStateZ sstepState f'' cost₂ op arg hReachZ hFetchOK hStep'
+              split at hXres
+              case h_1 _ hH_none =>
+                have hFrame' : ∀ f'_1, f'_1 ≤ (f'' + 1) → ΞInvariantFrameAtC C f'_1 :=
+                  fun f1 h1 =>
+                    ΞInvariantFrameAtC_mono C ((f'' + 1) + 1) f1
+                      (Nat.le_trans h1 (Nat.le_succ _)) _hFrameAtSucc
+                have hAtCFrame' : ∀ f'_1, f'_1 ≤ (f'' + 1) → ΞInvariantAtCFrame C f'_1 :=
+                  fun f1 h1 =>
+                    ΞInvariantAtCFrame_mono C ((f'' + 1) + 1) f1
+                      (Nat.le_trans h1 (Nat.le_succ _)) _hAtCFrameAtSucc
+                have IH' : ∀ evmState',
+                    X_inv_at_C_invariant OpAllowedSet C (f'' + 1) validJumps Reachable evmState' :=
+                  fun es => IH es hAtCFrame' hFrame'
+                have hIH := IH' sstepState hWFsstep hCCsstep hNCsstep hAtCFrameAtSuccF'
+                                hFrameAtSuccF' hInvSstep hReachStep hReach_Z hReach_step
+                                hReach_decodeSome hOpAllowedReach hDischarge h_v0_Reach
+                                h_sstore_Reach
+                rw [hXres] at hIH
+                exact hIH
+              case h_2 _ o hH_some =>
+                split at hXres
+                case isTrue _ => exact absurd hXres (by simp)
+                case isFalse _ =>
+                  injection hXres with hXres_inj
+                  injection hXres_inj with hfin _
+                  subst hfin
+                  exact ⟨hInvSstep, hWFsstep, hNCsstep⟩
+
 end Frame
 end EvmYul
