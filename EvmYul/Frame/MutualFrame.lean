@@ -6841,5 +6841,105 @@ private theorem Θ_invariant_preserved_bdd
         createdAccounts genesisBlockHeader blocks σ₀ s o r c_code g p v v' d e H w
         hInv h_σ₁_inv hWF h_WFσ₁ h_newC hAtCFrame' hFrame' hI_co hΘeq
 
+/-! ## §H.2 — `call_invariant_preserved`
+
+The Weth-flavoured sibling of `call_balanceOf_ge`. Tracks `WethInvFr σ
+C` through `EVM.call`'s gate-passing dispatch to `Θ`. The at-C CALL
+helper used by §H.2's at-C step bundle (Weth's withdraw block).
+
+Hypotheses (analogous to `call_balanceOf_ge`, plus `hInv` and the
+slack disjunction):
+* `hWF`, `hNC`: T1, T5.
+* `hAtCFrame`/`hFrame`: dual mutual IHs at smaller fuel for r = C / r ≠ C.
+* `h_vb`/`h_fs`: no-wrap/funds at recipient/source.
+* `hInv`: input invariant.
+* `h_slack`: the at-C debit case requires
+  `v.toNat + storageSum σ C ≤ balanceOf σ C` (the SSTORE-decrement
+  fact at PC 60 in Weth's withdraw block). -/
+private theorem call_invariant_preserved
+    (C : AccountAddress) (fuel : ℕ) (gasCost : ℕ)
+    (gas src rcp t v v' inOff inSize outOff outSize : UInt256)
+    (permission : Bool) (evmState state' : EVM.State) (x : UInt256)
+    (hWF : StateWF evmState.accountMap)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hAtCFrame : ΞInvariantAtCFrame C fuel)
+    (hFrame : ΞInvariantFrameAtC C fuel)
+    (h_vb : ∀ acc,
+        (evmState.accountMap).find? (AccountAddress.ofUInt256 rcp) = some acc →
+        acc.balance.toNat + v.toNat < UInt256.size)
+    (h_fs : v = ⟨0⟩ ∨ ∃ acc,
+              (evmState.accountMap).find? (AccountAddress.ofUInt256 src) = some acc ∧
+              v.toNat ≤ acc.balance.toNat)
+    (h_slack :
+        C ≠ AccountAddress.ofUInt256 src ∨ v = ⟨0⟩ ∨
+        v.toNat + storageSum evmState.accountMap C ≤ balanceOf evmState.accountMap C)
+    (hInv : WethInvFr evmState.accountMap C)
+    (hCall :
+      EVM.call fuel gasCost evmState.executionEnv.blobVersionedHashes
+        gas src rcp t v v' inOff inSize outOff outSize permission evmState
+      = .ok (x, state')) :
+    WethInvFr state'.accountMap C ∧
+    StateWF state'.accountMap ∧
+    state'.executionEnv.codeOwner = evmState.executionEnv.codeOwner ∧
+    (∀ a ∈ state'.createdAccounts, a ≠ C) := by
+  unfold EVM.call at hCall
+  simp only [bind, Except.bind, pure, Except.pure] at hCall
+  cases fuel with
+  | zero =>
+    simp only at hCall
+    exact absurd hCall (by simp)
+  | succ f =>
+    simp only at hCall
+    split at hCall
+    · -- Gate passed. Θ was invoked at fuel f.
+      rename_i hGate
+      split at hCall
+      · exact absurd hCall (by simp)
+      · rename_i hΘ_prod hΘ
+        obtain ⟨cA, σ', g', A', z, o⟩ := hΘ_prod
+        injection hCall with hEq
+        have hAtCFrame_f : ΞInvariantAtCFrame C f :=
+          ΞInvariantAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
+        have hFrame_f : ΞInvariantFrameAtC C f :=
+          ΞInvariantFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+        have hΘFrame :=
+          Θ_invariant_preserved_bdd f
+            evmState.executionEnv.blobVersionedHashes
+            evmState.createdAccounts
+            evmState.genesisBlockHeader
+            evmState.blocks
+            evmState.accountMap
+            evmState.σ₀
+            ((evmState.addAccessedAccount (AccountAddress.ofUInt256 t)).substate)
+            (AccountAddress.ofUInt256 src)
+            evmState.executionEnv.sender
+            (AccountAddress.ofUInt256 rcp)
+            (toExecute .EVM evmState.accountMap (AccountAddress.ofUInt256 t))
+            (.ofNat <| Ccallgas (AccountAddress.ofUInt256 t)
+                                (AccountAddress.ofUInt256 rcp) v gas
+                                evmState.accountMap evmState.toMachineState
+                                evmState.substate)
+            (.ofNat evmState.executionEnv.gasPrice)
+            v v' (evmState.memory.readWithPadding inOff.toNat inSize.toNat)
+            (evmState.executionEnv.depth + 1)
+            evmState.executionEnv.header permission
+            C hWF hNC h_vb h_fs h_slack hInv hAtCFrame_f hFrame_f
+        rw [hΘ] at hΘFrame
+        obtain ⟨hInv', hWF', hCA'⟩ := hΘFrame
+        have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
+        obtain ⟨_hx, hState⟩ := hState_eq
+        rw [← hState]
+        refine ⟨?_, ?_, ?_, ?_⟩
+        · exact hInv'
+        · exact hWF'
+        · rfl
+        · exact hCA'
+    · -- Gate failed. accountMap unchanged.
+      injection hCall with hEq
+      have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
+      obtain ⟨_hx, hState⟩ := hState_eq
+      rw [← hState]
+      refine ⟨hInv, hWF, rfl, hNC⟩
+
 end Frame
 end EvmYul
