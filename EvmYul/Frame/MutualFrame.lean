@@ -9125,5 +9125,149 @@ private theorem X_inv_at_C_invariant_holds
                   subst hfin
                   exact ⟨hInvSstep, hWFsstep, hNCsstep⟩
 
+/-- **Consumer-facing entry point for `ΞPreservesInvariantAtC` (§H.2).**
+
+Mirror of §G.1's `ΞPreservesAtC_of_Reachable_general` for the
+`WethInvFr` chain. Per-bytecode entry point: a consumer (e.g. Weth)
+supplies a `Reachable` predicate witnessing that the bytecode trace at
+`C` stays inside an op-whitelist (strict-handled / `.CALL` /
+`.StackMemFlow .SSTORE`), only emits CALL with `stack[2] = 0`, and
+preserves `WethInvFr` per-step at SSTORE.
+
+The proof structure mirrors `ΞPreservesAtC_of_Reachable_general`:
+strong fuel induction, with the IH supplying `ΞInvariantAtCFrame C f`
+at all `f ≤ n` directly and `ΞInvariantFrameAtC C f'` via the
+bounded-witness conversion through `Ξ_invariant_preserved_bundled_bdd`.
+The at-`C` X-induction step uses `X_inv_at_C_invariant_holds`. -/
+theorem ΞPreservesInvariantAtC_of_Reachable_general
+    (OpAllowedSet : Operation .EVM → Prop)
+    (C : AccountAddress)
+    (Reachable : EVM.State → Prop)
+    (hReach_Z : ∀ s : EVM.State, ∀ g : UInt256, Reachable s →
+        Reachable { s with gasAvailable := g })
+    (hReach_step : ∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
+        Reachable s')
+    (hReach_decodeSome : ∀ s : EVM.State, Reachable s →
+        ∃ pair, decode s.executionEnv.code s.pc = some pair)
+    (hReach_op : ∀ s : EVM.State, ∀ op : Operation .EVM, ∀ arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        OpAllowedSet op)
+    (hDischarge : ∀ op', OpAllowedSet op' →
+        strictlyPreservesAccountMap op' ∨ op' = .CALL ∨
+        op' = .StackMemFlow .SSTORE)
+    (hReach_v0 : ∀ s : EVM.State, ∀ arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
+        s.stack[2]? = some ⟨0⟩)
+    (hReach_sstore : ∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ arg,
+        Reachable s →
+        StateWF s.accountMap →
+        C = s.executionEnv.codeOwner →
+        WethInvFr s.accountMap C →
+        fetchInstr s.executionEnv s.pc = .ok (.StackMemFlow .SSTORE, arg) →
+        EVM.step (f' + 1) cost (some (.StackMemFlow .SSTORE, arg)) s = .ok s' →
+        WethInvFr s'.accountMap C)
+    (hReachInit : ∀ (cA : RBSet AccountAddress compare)
+                    (gbh : BlockHeader) (bs : ProcessedBlocks)
+                    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+                    (I : ExecutionEnv .EVM),
+        I.codeOwner = C →
+        Reachable
+          { (default : EVM.State) with
+              accountMap := σ
+              σ₀ := σ₀
+              executionEnv := I
+              substate := A
+              createdAccounts := cA
+              gasAvailable := g
+              blocks := bs
+              genesisBlockHeader := gbh }) :
+    ΞPreservesInvariantAtC C := by
+  intro fuel
+  induction fuel using Nat.strong_induction_on with
+  | _ n IH =>
+    intro cA gbh bs σ σ₀ g A I hWF hCO hNC hInv
+    match n with
+    | 0 =>
+      rw [show EVM.Ξ 0 cA gbh bs σ σ₀ g A I = .error .OutOfFuel from rfl]
+      trivial
+    | f + 1 =>
+      -- Strong IH gives `ΞInvariantAtCFrame C f'` at all f' ≤ f.
+      have hAtCBdd : ∀ f', f' ≤ f → ΞInvariantAtCFrame C f' := by
+        intro f' hf'
+        intro f'' hf'' cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hCO'' hNC'' hInv''
+        have hlt : f'' < f + 1 := Nat.lt_succ_of_le (Nat.le_trans hf'' hf')
+        exact IH f'' hlt cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hCO'' hNC'' hInv''
+      -- Derive `ΞInvariantFrameAtC C f'` for f' ≤ f.
+      have Ξ_frame_at : ∀ f', f' ≤ f → ΞInvariantFrameAtC C f' := by
+        intro f' hf'
+        intro f'' hf'' cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hCO_ne'' hNC'' hInv''
+        have hf''_le_f : f'' ≤ f := Nat.le_trans hf'' hf'
+        have hAtCSub : ∀ k, k < f'' → ΞInvariantAtCFrame C k := by
+          intro k hk
+          have : k ≤ f := by omega
+          exact hAtCBdd k this
+        exact Ξ_invariant_preserved_bundled_bdd C f'' hAtCSub
+          cA'' gbh'' bs'' σ'' σ₀'' g'' A'' I'' hWF'' hCO_ne'' hNC'' hInv''
+      have hΞ_eq :
+          EVM.Ξ (f + 1) cA gbh bs σ σ₀ g A I
+            = (do
+                let defState : EVM.State := default
+                let freshEvmState : EVM.State :=
+                  { defState with
+                      accountMap := σ
+                      σ₀ := σ₀
+                      executionEnv := I
+                      substate := A
+                      createdAccounts := cA
+                      gasAvailable := g
+                      blocks := bs
+                      genesisBlockHeader := gbh }
+                let result ← EVM.X f (D_J I.code ⟨0⟩) freshEvmState
+                match result with
+                | .success evmState' o =>
+                  let finalGas := evmState'.gasAvailable
+                  .ok (ExecutionResult.success
+                    (evmState'.createdAccounts, evmState'.accountMap,
+                     finalGas, evmState'.substate) o)
+                | .revert g' o => .ok (ExecutionResult.revert g' o)) := rfl
+      rw [hΞ_eq]
+      simp only [bind, Except.bind]
+      generalize hXres : EVM.X f (D_J I.code ⟨0⟩) _ = xRes
+      set freshState : EVM.State :=
+        { (default : EVM.State) with
+            accountMap := σ
+            σ₀ := σ₀
+            executionEnv := I
+            substate := A
+            createdAccounts := cA
+            gasAvailable := g
+            blocks := bs
+            genesisBlockHeader := gbh } with hFresh_def
+      have hWFFresh : StateWF freshState.accountMap := hWF
+      have hCCFresh : C = freshState.executionEnv.codeOwner := hCO.symm
+      have hNCFresh : ∀ a ∈ freshState.createdAccounts, a ≠ C := hNC
+      have hInvFresh : WethInvFr freshState.accountMap C := hInv
+      have hReachFresh : Reachable freshState :=
+        hReachInit cA gbh bs σ σ₀ g A I hCO
+      have hAtCBddF : ΞInvariantAtCFrame C f := hAtCBdd f (Nat.le_refl _)
+      have Ξ_frame_atF : ΞInvariantFrameAtC C f := Ξ_frame_at f (Nat.le_refl _)
+      have hXinv : X_inv_at_C_invariant OpAllowedSet C f (D_J I.code ⟨0⟩) Reachable freshState :=
+        X_inv_at_C_invariant_holds OpAllowedSet C f (D_J I.code ⟨0⟩) Reachable freshState
+          hAtCBdd Ξ_frame_at
+      unfold X_inv_at_C_invariant at hXinv
+      have hRes := hXinv hWFFresh hCCFresh hNCFresh hAtCBddF Ξ_frame_atF hInvFresh
+        hReachFresh hReach_Z hReach_step hReach_decodeSome hReach_op hDischarge
+        hReach_v0 hReach_sstore
+      rw [hXres] at hRes
+      cases xRes with
+      | error _ => trivial
+      | ok er =>
+        cases er with
+        | success evmState' out =>
+          exact hRes
+        | revert _ _ => trivial
+
 end Frame
 end EvmYul
