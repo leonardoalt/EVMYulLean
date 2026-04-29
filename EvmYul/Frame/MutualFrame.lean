@@ -8549,5 +8549,308 @@ theorem Ξ_invariant_preserved_bundled_bdd (C : AccountAddress)
         exact this
       | revert _ _ => trivial
 
+/-! ## §H.2 — At-`C` invariant step bundle (consumer-facing)
+
+Mirror of `step_bundled_invariant_at_C_general` (§G.1) for the
+`WethInvFr` chain. Same op-whitelist parameterization, but the
+conclusion tracks `WethInvFr` preservation rather than `balanceOf`
+monotonicity, and the closure dispatcher recognizes one extra arm:
+the at-`C` SSTORE arm, whose post-state invariant must be supplied as
+a per-step hypothesis (the consumer discharges this at concrete
+bytecode states via decrement-pattern reasoning).
+
+The aggregator routes:
+* Strict (handled, ¬SD, ¬SSTORE, ¬TSTORE) — `accountMap` is preserved
+  literally → invariant projects through verbatim.
+* `.CALL` with `stack[2] = ⟨0⟩` — outbound zero-value call;
+  routed through `call_invariant_preserved` with slack hypothesis
+  `Or.inr (Or.inl rfl)` (i.e., `v = 0`).
+* `.StackMemFlow .SSTORE` — at-`C` storage write. Output invariant
+  flows from a per-step hypothesis `h_sstore_post`.
+
+At-`C` SELFDESTRUCT, TSTORE, and other system ops (CREATE/CREATE2/
+CALLCODE/DELEGATECALL/STATICCALL) are excluded from `OpAllowedSet` by
+the consumer (Weth's bytecode-walk hypothesis). -/
+
+/-- **Strict-handled invariant helper at-`C`.** Mirror of
+`step_handled_helper_at_C_general` (balance side) for the invariant
+chain. For ops that strictly preserve `accountMap` (handled,
+non-SELFDESTRUCT, non-SSTORE, non-TSTORE), the entire `accountMap` is
+preserved literally, so `WethInvFr` projects identically. -/
+private theorem step_handled_strict_helper_at_C_invariant
+    (op : Operation .EVM) (C : AccountAddress) (f : ℕ) (cost₂ : ℕ)
+    (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCC : C = evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hInv : WethInvFr evmState.accountMap C)
+    (hStrict : strictlyPreservesAccountMap op)
+    (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
+    WethInvFr sstepState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C = sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  set s_pre : EVM.State :=
+    { evmState with
+        execLength := evmState.execLength + 1,
+        gasAvailable := evmState.gasAvailable - UInt256.ofNat cost₂ }
+    with hs_pre_def
+  have hAM : s_pre.accountMap = evmState.accountMap := rfl
+  have hCOEq : s_pre.executionEnv = evmState.executionEnv := rfl
+  have hCAEq : s_pre.createdAccounts = evmState.createdAccounts := rfl
+  have hWF_pre : StateWF s_pre.accountMap := by rw [hAM]; exact hWF
+  have hHandled : handledByEvmYulStep op := hStrict.1
+  have hSDne : op ≠ .SELFDESTRUCT := hStrict.2.1
+  -- Reduce EVM.step to EvmYul.step.
+  have hStep' : EvmYul.step op arg s_pre = .ok sstepState := by
+    unfold EVM.step at hStep
+    simp only [bind, Except.bind, pure, Except.pure] at hStep
+    obtain ⟨hne1, hne2, hne3, hne4, hne5, hne6⟩ := hHandled
+    cases op with
+    | StopArith _ => exact hStep
+    | CompBit _ => exact hStep
+    | Keccak _ => exact hStep
+    | Env _ => exact hStep
+    | Block _ => exact hStep
+    | StackMemFlow _ => exact hStep
+    | Push _ => exact hStep
+    | Dup _ => exact hStep
+    | Exchange _ => exact hStep
+    | Log _ => exact hStep
+    | System o =>
+      cases o with
+      | CREATE => exact absurd rfl hne1
+      | CALL => exact absurd rfl hne3
+      | CALLCODE => exact absurd rfl hne4
+      | RETURN => exact hStep
+      | DELEGATECALL => exact absurd rfl hne5
+      | CREATE2 => exact absurd rfl hne2
+      | STATICCALL => exact absurd rfl hne6
+      | REVERT => exact hStep
+      | INVALID => exact hStep
+      | SELFDESTRUCT => exact hStep
+  -- accountMap literally preserved.
+  have hAMeq : sstepState.accountMap = s_pre.accountMap :=
+    EvmYul.step_accountMap_eq_of_strict op arg s_pre sstepState hStrict hStep'
+  -- WethInvFr projects through accountMap-equality.
+  have hInvres : WethInvFr sstepState.accountMap C := by
+    unfold WethInvFr at hInv ⊢
+    rw [hAMeq, hAM]; exact hInv
+  -- StateWF preserved.
+  have hWFres : StateWF sstepState.accountMap :=
+    EvmYul_step_preserves_StateWF op arg s_pre sstepState hHandled hSDne hStep' hWF_pre
+  -- Execution env / created accounts preserved.
+  have hEnvCA :=
+    EvmYul.step_preserves_eEnv_cA op arg s_pre sstepState hHandled hStep'
+  refine ⟨hInvres, hWFres, ?_, ?_⟩
+  · rw [hEnvCA.1, hCOEq]; exact hCC
+  · intro a haIn
+    rw [hEnvCA.2, hCAEq] at haIn
+    exact hNC a haIn
+
+/-- **At-`C` CALL invariant arm with `stack[2] = 0` (outbound v=0).**
+Mirror of `step_CALL_arm_at_C_v0` for the invariant chain. The slack
+disjunction is satisfied via `Or.inr (Or.inl hμ2)` (i.e., `v = 0`).
+The recipient may be any address (including `C` itself, which is
+re-entrancy); since `v = 0`, the inner Ξ frame is the
+`ΞInvariantAtCFrame` (when `r = C`) or `ΞInvariantFrameAtC` (when
+`r ≠ C`) — both already supplied. -/
+private theorem step_CALL_arm_at_C_v0_invariant
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCC : C = evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
+    (hFrame : ΞInvariantFrameAtC C (f + 1))
+    (hInv : WethInvFr evmState.accountMap C)
+    (h_v0 : evmState.stack[2]? = some ⟨0⟩)
+    (hStep : EVM.step (f + 1) cost₂ (some (.CALL, arg)) evmState = .ok sstepState) :
+    WethInvFr sstepState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C = sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  -- Unfold the CALL arm body, mirroring step_CALL_arm_at_C_v0.
+  simp only [EVM.step, Operation.CALL, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { evmState with execLength := evmState.execLength + 1 } with heS1_def
+  split at hStep
+  · exact absurd hStep (by simp)
+  · rename_i p hpop7
+    obtain ⟨stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆⟩ := p
+    have hStackEq : eS1.stack = evmState.stack := rfl
+    have hpop7' : eS1.stack.pop7 = some (stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆) := by
+      cases hP : eS1.stack.pop7 with
+      | none =>
+        rw [hP] at hpop7
+        have hcontra :
+            (Except.error EVM.ExecutionException.StackUnderflow :
+                Except EVM.ExecutionException _)
+              = .ok (stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆) := hpop7
+        cases hcontra
+      | some q =>
+        rw [hP] at hpop7
+        have : (Except.ok q : Except EVM.ExecutionException _) =
+               .ok (stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆) := hpop7
+        injection this with h
+        rw [h]
+    have hμ2 : μ₂ = (⟨0⟩ : UInt256) := by
+      cases hS : eS1.stack with
+      | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+      | cons a₀ rest =>
+        cases rest with
+        | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+        | cons a₁ rest =>
+          cases rest with
+          | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+          | cons a₂ rest =>
+            cases rest with
+            | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+            | cons a₃ rest =>
+              cases rest with
+              | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+              | cons a₄ rest =>
+                cases rest with
+                | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+                | cons a₅ rest =>
+                  cases rest with
+                  | nil => rw [hS] at hpop7'; simp [Stack.pop7] at hpop7'
+                  | cons a₆ tl =>
+                    rw [hS] at hpop7'
+                    simp only [Stack.pop7] at hpop7'
+                    injection hpop7' with hpop7''
+                    have hμ2_eq : a₂ = μ₂ := by
+                      have := hpop7''
+                      simp only [Prod.mk.injEq] at this
+                      exact this.2.2.2.1
+                    rw [hStackEq] at hS
+                    rw [hS] at h_v0
+                    simp at h_v0
+                    rw [← hμ2_eq]; exact h_v0
+    split at hStep
+    · exact absurd hStep (by simp)
+    · rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      have hWFes1 : StateWF eS1.accountMap := hWF
+      have hCCes1 : C = eS1.executionEnv.codeOwner := hCC
+      have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
+      have hInves1 : WethInvFr eS1.accountMap C := hInv
+      -- Discharge h_vb, h_fs, h_slack via μ₂ = 0.
+      have h_vb_call :
+          ∀ acc, (eS1.accountMap).find? (AccountAddress.ofUInt256 μ₁) = some acc →
+            acc.balance.toNat + μ₂.toNat < UInt256.size := by
+        intro acc _
+        rw [hμ2]
+        show acc.balance.toNat + 0 < UInt256.size
+        rw [Nat.add_zero]
+        exact acc.balance.val.isLt
+      have h_fs_call :
+          μ₂ = ⟨0⟩ ∨ ∃ acc,
+              (eS1.accountMap).find? (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner))
+                = some acc ∧ μ₂.toNat ≤ acc.balance.toNat := Or.inl hμ2
+      have h_slack_call :
+          C ≠ AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner) ∨
+              μ₂ = ⟨0⟩ ∨
+              μ₂.toNat + storageSum eS1.accountMap C ≤ balanceOf eS1.accountMap C :=
+        Or.inr (Or.inl hμ2)
+      have hAtCFrame_f : ΞInvariantAtCFrame C f :=
+        ΞInvariantAtCFrame_mono C (f + 1) f (Nat.le_succ _) hAtCFrame
+      have hFrame_f : ΞInvariantFrameAtC C f :=
+        ΞInvariantFrameAtC_mono C (f + 1) f (Nat.le_succ _) hFrame
+      have hBundle :=
+        call_invariant_preserved C f cost₂ μ₀ (.ofNat eS1.executionEnv.codeOwner)
+          μ₁ μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆ eS1.executionEnv.perm eS1 state' x
+          hWFes1 hNCes1 hAtCFrame_f hFrame_f h_vb_call h_fs_call h_slack_call hInves1 hCallRes
+      obtain ⟨hInvres, hWFres, hCOres, hNCres⟩ := hBundle
+      refine ⟨?_, ?_, ?_, ?_⟩
+      · simp only [accountMap_replaceStackAndIncrPC]; exact hInvres
+      · simp only [accountMap_replaceStackAndIncrPC]; exact hWFres
+      · simp only [executionEnv_replaceStackAndIncrPC]; rw [hCOres]; exact hCCes1
+      · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNCres
+
+/-- **At-`C` invariant step bundle.** Op-whitelist generalization
+mirroring `step_bundled_invariant_at_C_general` (§G.1) for the
+`WethInvFr` chain.
+
+Allowed op-classes (per `hDischarge`):
+* Strict-handled (handled, ¬SD, ¬SSTORE, ¬TSTORE) — preserves
+  invariant via `accountMap` equality.
+* `.CALL` — outbound v=0 routing via `step_CALL_arm_at_C_v0_invariant`.
+* `.StackMemFlow .SSTORE` — at-`C` SSTORE; per-step output invariant
+  supplied via `h_sstore_post`.
+
+The consumer (Weth's bytecode walk) supplies `h_sstore_post`
+per-state by decrement-pattern reasoning (withdraw: val=0 ⇒ slot
+zeroed ⇒ invariant trivially) or by msg.value-credit slack (deposit:
+SSTORE follows a Θ-prefix that credited C with msg.value, so the
+storage-sum increment is matched by the balance increment). -/
+private theorem step_bundled_invariant_at_C_invariant_at_C
+    (OpAllowedSet : Operation .EVM → Prop)
+    (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
+    (op : Operation .EVM)
+    (evmState sstepState : EVM.State)
+    (hWF : StateWF evmState.accountMap)
+    (hCC : C = evmState.executionEnv.codeOwner)
+    (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
+    (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
+    (hFrame : ΞInvariantFrameAtC C (f + 1))
+    (hInv : WethInvFr evmState.accountMap C)
+    (hAllowed : OpAllowedSet op)
+    (hDischarge : ∀ op', OpAllowedSet op' →
+        strictlyPreservesAccountMap op' ∨ op' = .CALL ∨
+        op' = .StackMemFlow .SSTORE)
+    (h_v0 : op = .CALL → evmState.stack[2]? = some ⟨0⟩)
+    (h_sstore_post : op = .StackMemFlow .SSTORE →
+        WethInvFr sstepState.accountMap C)
+    (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
+    WethInvFr sstepState.accountMap C ∧
+    StateWF sstepState.accountMap ∧
+    (C = sstepState.executionEnv.codeOwner) ∧
+    (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
+  rcases hDischarge op hAllowed with hStrict | hCall | hSStore
+  · -- Strict-handled op.
+    exact step_handled_strict_helper_at_C_invariant op C f cost₂ arg evmState sstepState
+      hWF hCC hNC hInv hStrict hStep
+  · -- CALL with v=0.
+    subst hCall
+    exact step_CALL_arm_at_C_v0_invariant C f cost₂ arg evmState sstepState
+      hWF hCC hNC hAtCFrame hFrame hInv (h_v0 rfl) hStep
+  · -- SSTORE: invariant flows via the per-step hypothesis. We still
+    -- need to derive StateWF, codeOwner, and createdAccounts preservation
+    -- from the underlying EvmYul.step.
+    subst hSStore
+    have hInvres : WethInvFr sstepState.accountMap C := h_sstore_post rfl
+    -- Reduce EVM.step to EvmYul.step (SSTORE is handled, ¬SD).
+    have hHandled : handledByEvmYulStep (.StackMemFlow .SSTORE : Operation .EVM) := by
+      refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
+    have hSDne : (.StackMemFlow .SSTORE : Operation .EVM) ≠ .SELFDESTRUCT := by decide
+    set s_pre : EVM.State :=
+      { evmState with
+          execLength := evmState.execLength + 1,
+          gasAvailable := evmState.gasAvailable - UInt256.ofNat cost₂ }
+      with hs_pre_def
+    have hAM : s_pre.accountMap = evmState.accountMap := rfl
+    have hCOEq : s_pre.executionEnv = evmState.executionEnv := rfl
+    have hCAEq : s_pre.createdAccounts = evmState.createdAccounts := rfl
+    have hWF_pre : StateWF s_pre.accountMap := by rw [hAM]; exact hWF
+    have hStep' : EvmYul.step (.StackMemFlow .SSTORE : Operation .EVM) arg s_pre
+                = .ok sstepState := by
+      unfold EVM.step at hStep
+      simp only [bind, Except.bind, pure, Except.pure] at hStep
+      exact hStep
+    have hWFres : StateWF sstepState.accountMap :=
+      EvmYul_step_preserves_StateWF (.StackMemFlow .SSTORE) arg s_pre sstepState
+        hHandled hSDne hStep' hWF_pre
+    have hEnvCA :=
+      EvmYul.step_preserves_eEnv_cA (.StackMemFlow .SSTORE) arg s_pre sstepState
+        hHandled hStep'
+    refine ⟨hInvres, hWFres, ?_, ?_⟩
+    · rw [hEnvCA.1, hCOEq]; exact hCC
+    · intro a haIn
+      rw [hEnvCA.2, hCAEq] at haIn
+      exact hNC a haIn
+
 end Frame
 end EvmYul
