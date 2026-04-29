@@ -6240,5 +6240,27 @@ theorem EvmYul_step_preserves_WethInvFr_at_non_C
   rw [hStg, hBal]
   exact hInv
 
+/-- `WethInvFr σ C` is preserved by any handled step that strictly
+preserves `accountMap` (i.e. neither SSTORE / TSTORE / SELFDESTRUCT
+nor a CALL/CREATE-family op). At the at-C codeOwner, this is the
+non-SSTORE / non-CALL part of §H.2's at-C step bundle: every "boring"
+opcode (arithmetic, stack manipulation, environment query, jump,
+log, …) preserves the invariant trivially because the whole
+`accountMap` is preserved. -/
+theorem EvmYul_step_preserves_WethInvFr_of_strict
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State) (C : AccountAddress)
+    (hStrict : strictlyPreservesAccountMap op)
+    (h : EvmYul.step op arg s = .ok s')
+    (hInv : WethInvFr s.accountMap C) :
+    WethInvFr s'.accountMap C := by
+  -- accountMap is literally unchanged.
+  have hAM : s'.accountMap = s.accountMap :=
+    EvmYul.step_accountMap_eq_of_strict op arg s s' hStrict h
+  -- The invariant projects through accountMap-equality verbatim.
+  unfold WethInvFr at *
+  rw [hAM]
+  exact hInv
+
 end Frame
 end EvmYul
