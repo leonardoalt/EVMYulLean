@@ -73,6 +73,18 @@ private theorem balanceOf_increaseBalance_ne
   · exact balanceOf_insert_ne _ _ _ _ hk
   · exact balanceOf_insert_ne _ _ _ _ hk
 
+/-- Storage-sum companion: `AccountMap.increaseBalance` at `k ≠ C`
+preserves `storageSum C`. The proof is identical in structure to
+`balanceOf_increaseBalance_ne` — both internal branches reduce to an
+insert at `k ≠ C`, which preserves `find? C` and hence `storageSum C`. -/
+private theorem storageSum_increaseBalance_ne
+    (σ : AccountMap .EVM) (k C : AccountAddress) (v : UInt256) (hk : k ≠ C) :
+    storageSum (σ.increaseBalance .EVM k v) C = storageSum σ C := by
+  unfold AccountMap.increaseBalance
+  split
+  · exact storageSum_unchanged_at_other_account _ _ _ _ hk
+  · exact storageSum_unchanged_at_other_account _ _ _ _ hk
+
 /-! ## Narrow T4-extension lemmas (pure RBMap folds / maps)
 
 Each lemma is structurally pinned to a concrete map-manipulation that
@@ -461,6 +473,95 @@ private theorem balanceOf_tstorage_wipe_eq_aux
     -- Now: (σ₁.insert a' {acc with tstorage := ∅}).find? C = some {acc with tstorage := ∅}
     exact Batteries.RBMap.find?_insert_of_eq _ haEq
 
+/-- Storage-sum companion of `balanceOf_tstorage_wipe_eq_aux`:
+the tstorage-wipe map preserves `storageSum C`. The wipe replaces
+`tstorage` with `∅` and leaves `.storage` untouched, so the foldl-sum
+over `.storage` is unchanged at every account. -/
+private theorem storageSum_tstorage_wipe_eq_aux
+    (σ : AccountMap .EVM) (C : AccountAddress) :
+    storageSum
+      (σ.map fun (addr, acc) => (addr, { acc with tstorage := RBMap.empty })) C
+      = storageSum σ C := by
+  -- Same machinery as `balanceOf_tstorage_wipe_eq_aux`, but reduce to
+  -- `storageSum`'s find?+foldl-over-storage shape.
+  have hMapEq :
+      (σ.map fun (addr, acc) => (addr, { acc with tstorage := (RBMap.empty : Storage) }))
+        = σ.toList.foldl
+            (fun m p => m.insert p.1 { p.2 with tstorage := (RBMap.empty : Storage) })
+            (∅ : AccountMap .EVM) := by
+    show Batteries.RBSet.map σ _ = _
+    unfold Batteries.RBSet.map
+    rw [Batteries.RBSet.foldl_eq_foldl_toList]
+    rfl
+  rw [hMapEq]
+  -- It suffices to show find?-equality up to the (·.storage) projection.
+  suffices h : (σ.toList.foldl
+      (fun m p => m.insert p.1 { p.2 with tstorage := (RBMap.empty : Storage) })
+      (∅ : AccountMap .EVM)).find? C
+    = (σ.find? C).map
+        (fun (a : Account .EVM) =>
+          ({ a with tstorage := (RBMap.empty : Storage) } : Account .EVM)) by
+    unfold storageSum
+    rw [h]
+    rcases σ.find? C with _ | a
+    · rfl
+    · rfl
+  rcases hf : σ.find? C with _ | acc
+  · -- none: foldl result has find? C = none.
+    have h_ne : ∀ p ∈ σ.toList, compare C p.1 ≠ .eq := by
+      intro p hp heq
+      have : σ.findEntry? C = some p := Batteries.RBMap.findEntry?_some.mpr ⟨hp, heq⟩
+      have h2 : σ.find? C = some p.2 := by
+        show (σ.findEntry? C).map Prod.snd = some p.2
+        rw [this]; rfl
+      rw [hf] at h2; cases h2
+    rw [find?_foldl_genericInsert_ne σ.toList
+      (F := fun p => { p.2 with tstorage := (RBMap.empty : Storage) })
+      ∅ C h_ne]
+    rfl
+  · -- some acc: foldl result has find? C = some {acc with tstorage := ∅}.
+    obtain ⟨a', haMem, haEq⟩ := Batteries.RBMap.find?_some_mem_toList hf
+    obtain ⟨L, R, hSplit⟩ := List.append_of_mem haMem
+    have hNodup : σ.toList.Nodup := by
+      have hp := Batteries.RBMap.toList_sorted (t := σ)
+      refine hp.imp ?_
+      intro x y hxy hxy_eq
+      obtain ⟨hxy'⟩ := hxy
+      have : compare x.1 x.1 = .lt := hxy_eq ▸ hxy'
+      have hrefl : compare x.1 x.1 = .eq := Std.ReflCmp.compare_self
+      rw [hrefl] at this; cases this
+    have hLR_ne : ∀ p ∈ L ++ R, compare C p.1 ≠ .eq := by
+      intro p hp hEq
+      have hpInσ : p ∈ σ.toList := by
+        rw [hSplit]
+        rcases List.mem_append.mp hp with h | h
+        · exact List.mem_append_left _ h
+        · exact List.mem_append_right L (List.mem_cons_of_mem _ h)
+      have h2 : compare p.1 a' = .eq := by
+        have hpEq : compare p.1 C = .eq := Std.OrientedCmp.eq_comm.mp hEq
+        exact Std.TransCmp.eq_trans hpEq haEq
+      have hpq : p = (a', acc) :=
+        Batteries.RBMap.mem_toList_unique hpInσ haMem h2
+      rw [hSplit] at hNodup
+      rw [List.nodup_append] at hNodup
+      obtain ⟨hndL, hndR, hdisj⟩ := hNodup
+      rw [List.nodup_cons] at hndR
+      rcases List.mem_append.mp hp with hpL | hpR
+      · have hMemL : (a', acc) ∈ L := hpq ▸ hpL
+        exact hdisj (a', acc) hMemL (a', acc) (by simp) rfl
+      · have hMemR : (a', acc) ∈ R := hpq ▸ hpR
+        exact hndR.1 hMemR
+    rw [hSplit]
+    rw [List.foldl_append, List.foldl_cons]
+    have hR_ne : ∀ p ∈ R, compare C p.1 ≠ .eq := fun p hp =>
+      hLR_ne p (List.mem_append_right _ hp)
+    rw [find?_foldl_genericInsert_ne R _ _ C hR_ne]
+    -- The insert at `a'` with key compare-eq `C` lands at `find? C`.
+    rw [Batteries.RBMap.find?_insert_of_eq _ haEq]
+    -- Goal: some {acc with tstorage := ∅}.storage.map _ = some acc.storage.map _
+    -- Both are `acc.storage` because tstorage update doesn't touch storage.
+    rfl
+
 end Internal
 
 /-- Foldl of `erase` over an `RBNode AccountAddress` whose elements
@@ -514,6 +615,18 @@ theorem balanceOf_tstorage_wipe_eq
       (σ.map fun (addr, acc) => (addr, { acc with tstorage := RBMap.empty })) C
       = balanceOf σ C := by
   exact Internal.balanceOf_tstorage_wipe_eq_aux σ C
+
+/-- Companion of `balanceOf_tstorage_wipe_eq` for `storageSum`.
+
+The tstorage-wipe `σ.map (·.tstorage := ∅)` preserves persistent
+`storage` at every account, hence `storageSum` is unchanged. This is
+the §1.3 storage-side lemma used by `Υ_tail_storageSum_eq`. -/
+theorem storageSum_tstorage_wipe_eq
+    (σ : AccountMap .EVM) (C : AccountAddress) :
+    storageSum
+      (σ.map fun (addr, acc) => (addr, { acc with tstorage := RBMap.empty })) C
+      = storageSum σ C := by
+  exact Internal.storageSum_tstorage_wipe_eq_aux σ C
 
 /-! ## Υ output balance frame (theorem, proved by tail + factorisation)
 
@@ -838,6 +951,107 @@ private theorem Υ_tail_balanceOf_ge
   · rw [balanceOf_increaseBalance_ne _ _ _ _ hBen.symm,
         balanceOf_increaseBalance_ne _ _ _ _ hS_T.symm]
   · rw [balanceOf_increaseBalance_ne _ _ _ _ hS_T.symm]
+
+/-! ## §1.3 — Storage-sum side of Υ's tail
+
+Mirrors the balance-side helpers above, but for `storageSum`. The
+arithmetic is simpler because storageSum at `C` is **strictly
+preserved** (not just monotone) by every step of the tail: the two
+`increaseBalance` calls at `S_T ≠ C` and `H.beneficiary ≠ C` don't
+touch persistent storage at any other account; the SD/dead foldl
+erases skip `C`; and the final tstorage wipe only modifies the
+`.tstorage` field, leaving `.storage` intact. -/
+
+/-- Storage-sum analogue of `balanceOf_tail_generic`: for any σ_F
+satisfying the SD/dead invariants at C, the tail-transformed state
+has the same storageSum at C. -/
+private theorem storageSum_tail_generic
+    (σ_F : AccountMap .EVM) (A : Substate) (C : AccountAddress)
+    (hSD_ne : ∀ k ∈ A.selfDestructSet.1.toList, k ≠ C)
+    (hDead_ne : ∀ k ∈ A.touchedAccounts.filter (State.dead σ_F ·), k ≠ C) :
+    storageSum
+      ((A.touchedAccounts.filter (State.dead σ_F ·)).foldl Batteries.RBMap.erase
+        (A.selfDestructSet.1.foldl Batteries.RBMap.erase σ_F)
+        |>.map (fun (addr, acc) => (addr, { acc with tstorage := RBMap.empty }))) C
+      = storageSum σ_F C := by
+  rw [storageSum_tstorage_wipe_eq]
+  rw [storageSum_of_find?_eq (find?_erase_rbset_foldl_ne _ _ C hDead_ne)]
+  rw [storageSum_of_find?_eq (find?_erase_rbnode_foldl_ne _ _ C hSD_ne)]
+
+/-- The pure tail of Υ preserves `storageSum C` under: `C ≠ S_T`, `C
+≠ H.beneficiary`, the SD-set excludes `C`, and the dead-filter (at
+σStar', the post-fee state) excludes `C`.
+
+Storage-side mirror of `Υ_tail_balanceOf_ge`. The structure is
+identical — same case split on `benFee != 0` for σStar' — but each
+balance lemma is replaced by its storageSum companion:
+
+* `balanceOf_increaseBalance_ne` ↦ `storageSum_increaseBalance_ne`,
+* `balanceOf_tail_generic` ↦ `storageSum_tail_generic`.
+
+Note: unlike the balance side, no `State.dead σ_P C = false`
+hypothesis is needed for the conclusion itself. We do still require
+the `hDeadGated` clause to apply at the concrete σStar', and that
+clause is gated by `dead σStar' C = false`. To avoid burdening callers
+with an additional structural fact, we accept `hDead_σP : State.dead
+σ_P C = false` (same as the balance side) and use it to derive
+`dead σStar' C = false` via `dead_increaseBalance_ne`. -/
+private theorem Υ_tail_storageSum_eq
+    (σ_P : AccountMap .EVM) (g' : UInt256) (A : Substate)
+    (H : BlockHeader) (H_f : ℕ) (tx : Transaction)
+    (S_T C : AccountAddress)
+    (hS_T : C ≠ S_T)
+    (hBen : C ≠ H.beneficiary)
+    (hSD : ∀ k ∈ A.selfDestructSet.1.toList, k ≠ C)
+    (hDeadGated :
+       ∀ σ_F : AccountMap .EVM, State.dead σ_F C = false →
+         ∀ k ∈ A.touchedAccounts.filter (State.dead σ_F ·), k ≠ C)
+    (hDead_σP : State.dead σ_P C = false) :
+    storageSum (Υ_tail_state σ_P g' A H H_f tx S_T) C = storageSum σ_P C := by
+  unfold Υ_tail_state
+  simp only
+  generalize
+    ((g' + min ((tx.base.gasLimit - g') / ⟨5⟩) A.refundBalance) *
+      (match tx with
+       | .legacy t | .access t => t.gasPrice
+       | .dynamic _ | .blob _ =>
+            (match tx with
+             | .legacy t | .access t => t.gasPrice - .ofNat H_f
+             | .dynamic t | .blob t =>
+                   min t.maxPriorityFeePerGas (t.maxFeePerGas - .ofNat H_f)) +
+            .ofNat H_f)) = payFee
+  generalize
+    ((tx.base.gasLimit -
+        (g' + min ((tx.base.gasLimit - g') / ⟨5⟩) A.refundBalance)) *
+       (match tx with
+        | .legacy t | .access t => t.gasPrice - .ofNat H_f
+        | .dynamic t | .blob t =>
+              min t.maxPriorityFeePerGas (t.maxFeePerGas - .ofNat H_f))) = benFee
+  -- The σ_F at which the dead-filter is taken is σStar'.
+  set σStar' : AccountMap .EVM :=
+    if benFee != ⟨0⟩
+      then (σ_P.increaseBalance .EVM S_T payFee).increaseBalance .EVM
+            H.beneficiary benFee
+      else σ_P.increaseBalance .EVM S_T payFee with hσStar'_def
+  -- Both increaseBalance updates are at addresses ≠ C, so dead at C is
+  -- preserved from σ_P.
+  have hDead_σStar' : State.dead σStar' C = false := by
+    rw [hσStar'_def]
+    split
+    · rw [dead_increaseBalance_ne _ _ _ _ hBen.symm,
+          dead_increaseBalance_ne _ _ _ _ hS_T.symm]
+      exact hDead_σP
+    · rw [dead_increaseBalance_ne _ _ _ _ hS_T.symm]
+      exact hDead_σP
+  have hDead_at := hDeadGated σStar' hDead_σStar'
+  rw [storageSum_tail_generic _ A C hSD hDead_at]
+  -- Now reduce the `if` at the storageSum level.
+  show storageSum σStar' C = storageSum σ_P C
+  rw [hσStar'_def]
+  split
+  · rw [storageSum_increaseBalance_ne _ _ _ _ hBen.symm,
+        storageSum_increaseBalance_ne _ _ _ _ hS_T.symm]
+  · rw [storageSum_increaseBalance_ne _ _ _ _ hS_T.symm]
 
 /-- Hypothesis form of Υ's body factorisation.
 
