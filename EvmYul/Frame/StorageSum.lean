@@ -43,6 +43,47 @@ namespace Frame
 
 open Batteries
 
+/-! ## UInt256 `compare` order-class instances
+
+`UInt256` is `Ord`-derived but not `TransCmp`/`OrientedCmp`/`ReflCmp` —
+these are needed throughout this file's RBMap-level reasoning. The
+`EvmSmith.Lemmas.UInt256Order` file proves equivalent instances at
+the EvmSmith layer; we re-derive them here so this file (which lives
+in `EvmYul`) is self-contained. -/
+
+namespace UInt256Cmp
+
+private theorem compare_eq_val (a b : EvmYul.UInt256) :
+    compare a b = compare a.val b.val := by
+  obtain ⟨a⟩ := a
+  obtain ⟨b⟩ := b
+  show (compare a b).then Ordering.eq = compare a b
+  cases compare a b <;> rfl
+
+instance : Std.OrientedCmp (compare : EvmYul.UInt256 → EvmYul.UInt256 → Ordering) where
+  eq_swap {x y} := by
+    rw [compare_eq_val, compare_eq_val]
+    exact Std.OrientedCmp.eq_swap
+
+instance : Std.TransCmp (compare : EvmYul.UInt256 → EvmYul.UInt256 → Ordering) where
+  isLE_trans {x y z} h1 h2 := by
+    rw [compare_eq_val] at h1 h2 ⊢
+    exact Std.TransCmp.isLE_trans h1 h2
+
+instance : Std.ReflCmp (compare : EvmYul.UInt256 → EvmYul.UInt256 → Ordering) where
+  compare_self {x} := by
+    rw [compare_eq_val]
+    exact Std.ReflCmp.compare_self
+
+end UInt256Cmp
+
+/-- `Std.TransCmp` for the pair-level key comparator on
+`UInt256 × UInt256`. Required by `RBMap.mem_toList_unique` and
+`del_toList_filter_pair`. -/
+private instance pair_keyCmp_TransCmp :
+    Std.TransCmp (fun (x y : EvmYul.UInt256 × EvmYul.UInt256) => compare x.1 y.1) :=
+  inferInstanceAs (Std.TransCmp (Ordering.byKey Prod.fst compare))
+
 /-- `storageSum σ C` is `Σ_slot σ[C].storage[slot]` cast to `ℕ`.
 
 When `C` has no account, the sum is `0` (consistent with
@@ -183,6 +224,422 @@ theorem storageSum_old_le
     have hIn : oldVal.toNat ∈ acc.storage.toList.map (fun p => p.2.toNat) :=
       List.mem_map.mpr ⟨(slot', oldVal), hMem, rfl⟩
     exact List.le_sum_of_mem hIn
+
+/-! ## §1.5 — `storageSum`-delta laws (SSTORE-replace / SSTORE-erase)
+
+The single-slot delta of `storageSum` under `Account.updateStorage`.
+Two cases match `updateStorage`'s `if v == default then erase else
+insert` shape:
+
+* `storageSum_sstore_replace_eq` — replacing slot `k`'s value `oldVal`
+  with `newVal ≠ 0`: `new_sum + oldVal.toNat = old_sum + newVal.toNat`.
+* `storageSum_sstore_erase_eq` — erasing a present slot `k`:
+  `new_sum + oldVal.toNat = old_sum`.
+
+The proofs route through Batteries' `exists_insert_toList_zoom_node`
+(insert) / a custom `del_toList_filter` (erase) at the `RBNode`
+level, lifted via list-`sum`. Direct structural induction over
+`RBNode`'s cases (red/black/leaf + balance branches) is bundled
+inside Batteries' / our toList-level lemmas. -/
+
+/-- Helper: the `Storage` foldl over `(fun acc _k v => acc + v.toNat)`
+equals `(toList.map (·.2.toNat)).sum`. Uniform for all `RBMap UInt256
+UInt256 compare`. -/
+private theorem storageSum_foldl_eq_sum
+    (m : Storage) :
+    m.foldl (fun a _ v => a + v.toNat) 0
+      = (m.toList.map (fun p => p.2.toNat)).sum := by
+  rw [Batteries.RBMap.foldl_eq_foldl_toList]
+  generalize m.toList = L
+  suffices h : ∀ (init : ℕ),
+      L.foldl (fun init p => init + p.2.toNat) init
+        = init + (L.map (fun p => p.2.toNat)).sum by
+    simpa using h 0
+  intro init
+  induction L generalizing init with
+  | nil => simp
+  | cons x xs ih =>
+    simp [List.foldl_cons, List.map_cons, List.sum_cons, ih]
+    ring
+
+/-- A list factored as `L = L₁ ++ x :: L₂` and reformed as `L₁ ++ y :: L₂`
+shifts the value-sum: `new_sum + g x.2 = old_sum + g y.2`. Used by
+the SSTORE-replace branch. -/
+private theorem list_sum_factor_replace
+    {α β : Type*} (L₁ L₂ : List (α × β)) (x y : α × β) (g : β → ℕ) :
+    ((L₁ ++ y :: L₂).map (fun p => g p.2)).sum + g x.2
+      = ((L₁ ++ x :: L₂).map (fun p => g p.2)).sum + g y.2 := by
+  simp only [List.map_append, List.map_cons, List.sum_append, List.sum_cons]
+  ring
+
+/-- A list factored as `L = L₁ ++ x :: L₂` reformed as `L₁ ++ L₂`
+loses `g x.2`: `new_sum + g x.2 = old_sum`. Used by SSTORE-erase. -/
+private theorem list_sum_factor_remove
+    {α β : Type*} (L₁ L₂ : List (α × β)) (x : α × β) (g : β → ℕ) :
+    ((L₁ ++ L₂).map (fun p => g p.2)).sum + g x.2
+      = ((L₁ ++ x :: L₂).map (fun p => g p.2)).sum := by
+  simp only [List.map_append, List.map_cons, List.sum_append, List.sum_cons]
+  ring
+
+/-- Inserting at a present key in a `Storage` shifts the foldl-sum
+by `newVal.toNat - oldVal.toNat` (additive form):
+`new_sum + oldVal.toNat = old_sum + newVal.toNat`.
+
+Routes through Batteries' `exists_insert_toList_zoom_node`. -/
+theorem storageSum_storage_insert_replace_eq
+    (s : Storage) (k oldVal newVal : UInt256)
+    (h_find : s.find? k = some oldVal) :
+    (s.insert k newVal).foldl (fun a _ v => a + v.toNat) 0
+        + oldVal.toNat
+      = s.foldl (fun a _ v => a + v.toNat) 0
+        + newVal.toNat := by
+  rw [storageSum_foldl_eq_sum s, storageSum_foldl_eq_sum (s.insert k newVal)]
+  -- Extract balanced witness and orderedness from `s.2 : RBSet.WF`.
+  obtain ⟨hOrd, _, _, hBal⟩ := s.2.out
+  -- Zoom with cut = `Ordering.byKey Prod.fst compare (k, newVal)` (i.e. the
+  -- exact cut used by `RBSet.insert (k, newVal)`).
+  match e : Batteries.RBNode.zoom (Ordering.byKey Prod.fst compare (k, newVal))
+            s.1 with
+  | (.nil, _p) =>
+    -- nil case: contradicts `find? k = some oldVal`.
+    exfalso
+    have hzn : Batteries.RBNode.find?
+        (Ordering.byKey Prod.fst compare (k, newVal)) s.1 = none := by
+      rw [Batteries.RBNode.find?_eq_zoom, e]; rfl
+    have h_find' : s.find? k = none := by
+      show (s.1.find? (fun p => compare k p.1)).map (·.2) = none
+      -- The cut `Ordering.byKey Prod.fst compare (k, newVal)` is
+      -- definitionally `fun p => compare (k, newVal).1 p.1 = compare k p.1`.
+      have : Batteries.RBNode.find?
+              (fun p => compare k p.1) s.1 = none := hzn
+      rw [this]; rfl
+    rw [h_find'] at h_find
+    cases h_find
+  | (.node c l (kE, vE) r, p) =>
+    obtain ⟨L₁, L₂, hToL_orig, hToL_ins⟩ :=
+      Batteries.RBNode.exists_insert_toList_zoom_node hBal e (v := (k, newVal))
+    -- The `OnRoot` form of `zoom_zoomed₁` says cut (kE, vE) = .eq.
+    have hCutEq : Ordering.byKey Prod.fst compare (k, newVal) (kE, vE) = .eq :=
+      (Batteries.RBNode.Path.zoom_zoomed₁ e :
+        (Batteries.RBNode.node c l (kE, vE) r :
+            Batteries.RBNode (UInt256 × UInt256)).OnRoot _)
+    -- Bridge `s.toList` and `(s.insert k newVal).toList` to the underlying
+    -- `s.1.toList` form.
+    have hsToList : s.toList = s.1.toList := rfl
+    have hsInsToList :
+        (s.insert k newVal).toList
+          = (s.1.insert (Ordering.byKey Prod.fst compare)
+              (k, newVal)).toList := rfl
+    rw [hsToList, hsInsToList, hToL_orig, hToL_ins]
+    -- Identify vE with oldVal via `mem_toList_unique` + `find?_some_mem_toList`.
+    have hMemSetToList : (kE, vE) ∈ s.toList := by
+      change (kE, vE) ∈ s.1.toList
+      rw [hToL_orig]
+      exact List.mem_append.mpr (.inr (List.mem_cons.mpr (Or.inl rfl)))
+    obtain ⟨y, hMemY, hYeq⟩ := Batteries.RBMap.find?_some_mem_toList h_find
+    -- `compare k kE = .eq` (from hCutEq) and `compare k y = .eq` ⇒ `compare kE y = .eq`.
+    have hKeyEq : compare kE y = .eq := by
+      have h1 : compare k kE = .eq := hCutEq
+      have h2 : compare k y = .eq := hYeq
+      have h1' : compare kE k = .eq := (Std.OrientedCmp.eq_comm (cmp := compare)).mp h1
+      exact Std.TransCmp.eq_trans h1' h2
+    have hPairUniq : (kE, vE) = (y, oldVal) :=
+      Batteries.RBMap.mem_toList_unique hMemSetToList hMemY hKeyEq
+    have hVEeq : vE = oldVal := by
+      simp only [Prod.mk.injEq] at hPairUniq
+      exact hPairUniq.2
+    -- Apply the list-level factor; replace vE by oldVal in the goal explicitly.
+    rw [hVEeq]
+    exact list_sum_factor_replace L₁ L₂ (kE, oldVal) (k, newVal) (fun v => v.toNat)
+
+/-! ### Erase branch — needs an RBNode-level `del_toList_filter`
+
+`del_toList_filter` (used in `EvmYul/Frame/UpsilonFrame.lean`'s
+`erase_toList_filter`) characterizes `(t.del cut).toList` as the
+`toList`-filter that drops compare-eq entries. Mirror the proof here. -/
+
+private theorem filter_eq_self_of_all
+    {α} {L : List α} {Q : α → Bool}
+    (h : ∀ x ∈ L, Q x = true) : L.filter Q = L := by
+  induction L with
+  | nil => rfl
+  | cons a L ih =>
+    have ha : Q a = true := h a (by simp)
+    have ih' := ih fun x hx => h x (by simp [hx])
+    simp [List.filter_cons, ha, ih']
+
+/-- `RBNode.append` distributes over `toList`. Mirror of
+`Layer1.append_toList`. -/
+private theorem append_toList_storage :
+    ∀ (l r : Batteries.RBNode (UInt256 × UInt256)),
+      (l.append r).toList = l.toList ++ r.toList
+  | .nil, r => by simp [Batteries.RBNode.append]
+  | .node _ _ _ _, .nil => by simp [Batteries.RBNode.append]
+  | .node .red a x b, .node .red c y d => by
+    have ih := append_toList_storage b c
+    unfold Batteries.RBNode.append
+    match hbc : b.append c with
+    | .node .red b' z c' =>
+      have ih' : b'.toList ++ z :: c'.toList = b.toList ++ c.toList := by
+        have := ih; rw [hbc] at this; simpa using this
+      simp only [Batteries.RBNode.toList_node]
+      have : b'.toList ++ z :: (c'.toList ++ y :: d.toList)
+           = b.toList ++ c.toList ++ y :: d.toList := by
+        rw [show b'.toList ++ z :: (c'.toList ++ y :: d.toList)
+              = (b'.toList ++ z :: c'.toList) ++ y :: d.toList from by
+            simp [List.append_assoc], ih']
+      simp [this, List.append_assoc]
+    | .nil =>
+      have ih' : b.toList ++ c.toList = [] := by
+        have := ih; rw [hbc] at this; simpa using this
+      simp only [Batteries.RBNode.toList_node]
+      have hb : b.toList = [] := List.append_eq_nil_iff.mp ih' |>.1
+      have hc : c.toList = [] := List.append_eq_nil_iff.mp ih' |>.2
+      simp [hb, hc]
+    | .node .black a' x' b' =>
+      have ih' :
+          (Batteries.RBNode.node .black a' x' b' :
+              Batteries.RBNode (UInt256 × UInt256)).toList
+            = b.toList ++ c.toList := by
+        have := ih; rw [hbc] at this; exact this
+      simp only [Batteries.RBNode.toList_node]
+      have : (Batteries.RBNode.node .black a' x' b' :
+                Batteries.RBNode (UInt256 × UInt256)).toList
+              ++ y :: d.toList
+           = b.toList ++ c.toList ++ y :: d.toList := by rw [ih']
+      simp only [Batteries.RBNode.toList_node] at this
+      simp [this, List.append_assoc]
+  | .node .black a x b, .node .black c y d => by
+    have ih := append_toList_storage b c
+    unfold Batteries.RBNode.append
+    match hbc : b.append c with
+    | .node .red b' z c' =>
+      have ih' : b'.toList ++ z :: c'.toList = b.toList ++ c.toList := by
+        have := ih; rw [hbc] at this; simpa using this
+      simp only [Batteries.RBNode.toList_node]
+      have : b'.toList ++ z :: (c'.toList ++ y :: d.toList)
+           = b.toList ++ c.toList ++ y :: d.toList := by
+        rw [show b'.toList ++ z :: (c'.toList ++ y :: d.toList)
+              = (b'.toList ++ z :: c'.toList) ++ y :: d.toList from by
+            simp [List.append_assoc], ih']
+      simp [this, List.append_assoc]
+    | .nil =>
+      have ih' : b.toList ++ c.toList = [] := by
+        have := ih; rw [hbc] at this; simpa using this
+      simp only [Batteries.RBNode.toList_node, Batteries.RBNode.balLeft_toList]
+      have hb : b.toList = [] := List.append_eq_nil_iff.mp ih' |>.1
+      have hc : c.toList = [] := List.append_eq_nil_iff.mp ih' |>.2
+      simp [hb, hc]
+    | .node .black a' x' b' =>
+      have ih' :
+          (Batteries.RBNode.node .black a' x' b' :
+              Batteries.RBNode (UInt256 × UInt256)).toList
+            = b.toList ++ c.toList := by
+        have := ih; rw [hbc] at this; exact this
+      simp only [Batteries.RBNode.toList_node, Batteries.RBNode.balLeft_toList]
+      have : (Batteries.RBNode.node .black a' x' b' :
+                Batteries.RBNode (UInt256 × UInt256)).toList
+              ++ y :: d.toList
+           = b.toList ++ c.toList ++ y :: d.toList := by rw [ih']
+      simp only [Batteries.RBNode.toList_node] at this
+      simp [this, List.append_assoc]
+  | .node .black a x b, .node .red c y d => by
+    unfold Batteries.RBNode.append
+    have ih := append_toList_storage (Batteries.RBNode.node .black a x b) c
+    simp [Batteries.RBNode.toList_node, ih]
+  | .node .red a x b, .node .black c y d => by
+    unfold Batteries.RBNode.append
+    have ih := append_toList_storage b (Batteries.RBNode.node .black c y d)
+    simp [Batteries.RBNode.toList_node, ih]
+  termination_by l r => l.size + r.size
+  decreasing_by
+    all_goals (simp only [Batteries.RBNode.size]; omega)
+
+/-- `del cut` removes exactly the entries with `cut = .eq`. Mirror of
+`Layer1.del_toList_filter`. -/
+private theorem del_toList_filter_pair
+    {cmp : UInt256 × UInt256 → UInt256 × UInt256 → Ordering}
+    {cut : UInt256 × UInt256 → Ordering}
+    [Std.TransCmp cmp] [Batteries.RBNode.IsStrictCut cmp cut]
+    (t : Batteries.RBNode (UInt256 × UInt256)) (ht : t.Ordered cmp) :
+    (t.del cut).toList
+      = t.toList.filter (fun p => decide (cut p ≠ .eq)) := by
+  induction t with
+  | nil => simp [Batteries.RBNode.del]
+  | node c a y b iha ihb =>
+    obtain ⟨ay, yb, hoa, hob⟩ := ht
+    have iha' := iha hoa
+    have ihb' := ihb hob
+    have hAll_a_lt_y : ∀ z ∈ a.toList, cmp z y = .lt := by
+      intro z hz
+      have hmem := Batteries.RBNode.mem_toList.mp hz
+      have := Batteries.RBNode.All_def.1 ay z hmem
+      obtain ⟨h⟩ := this
+      exact h
+    have hAll_y_lt_b : ∀ z ∈ b.toList, cmp y z = .lt := by
+      intro z hz
+      have hmem := Batteries.RBNode.mem_toList.mp hz
+      have := Batteries.RBNode.All_def.1 yb z hmem
+      obtain ⟨h⟩ := this
+      exact h
+    unfold Batteries.RBNode.del
+    simp only [Batteries.RBNode.toList_node, List.filter_append, List.filter_cons]
+    match hcy : cut y with
+    | .lt =>
+      have hbFilter :
+          b.toList.filter (fun p => decide (cut p ≠ .eq)) = b.toList := by
+        apply filter_eq_self_of_all
+        intro z hz
+        have hcz : cut z = .lt :=
+          Batteries.RBNode.IsCut.lt_trans (hAll_y_lt_b z hz) hcy
+        simp [hcz]
+      have hy : decide (cut y ≠ .eq) = true := by simp [hcy]
+      simp only [hcy]
+      split
+      all_goals
+        simp only [Batteries.RBNode.balLeft_toList,
+                   Batteries.RBNode.toList_node, hy, hbFilter, iha']
+        simp [if_true]
+    | .gt =>
+      have haFilter :
+          a.toList.filter (fun p => decide (cut p ≠ .eq)) = a.toList := by
+        apply filter_eq_self_of_all
+        intro z hz
+        have hcz : cut z = .gt :=
+          Batteries.RBNode.IsCut.gt_trans (hAll_a_lt_y z hz) hcy
+        simp [hcz]
+      have hy : decide (cut y ≠ .eq) = true := by simp [hcy]
+      simp only [hcy]
+      split
+      all_goals
+        simp only [Batteries.RBNode.balRight_toList,
+                   Batteries.RBNode.toList_node, hy, haFilter, ihb']
+        simp [if_true]
+    | .eq =>
+      have haFilter :
+          a.toList.filter (fun p => decide (cut p ≠ .eq)) = a.toList := by
+        apply filter_eq_self_of_all
+        intro z hz
+        have hcz : cut z = .gt := by
+          have hE := Batteries.RBNode.IsStrictCut.exact (cmp := cmp) (y := z) hcy
+          have hzy : cmp z y = .lt := hAll_a_lt_y z hz
+          have hyz : cmp y z = .gt := Std.OrientedCmp.gt_iff_lt.mpr hzy
+          rw [hyz] at hE; exact hE.symm
+        simp [hcz]
+      have hbFilter :
+          b.toList.filter (fun p => decide (cut p ≠ .eq)) = b.toList := by
+        apply filter_eq_self_of_all
+        intro z hz
+        have hcz : cut z = .lt := by
+          have hE := Batteries.RBNode.IsStrictCut.exact (cmp := cmp) (y := z) hcy
+          have hyz : cmp y z = .lt := hAll_y_lt_b z hz
+          rw [hyz] at hE; exact hE.symm
+        simp [hcz]
+      have hy : decide (cut y ≠ .eq) = false := by simp [hcy]
+      simp only [hcy, append_toList_storage, haFilter, hbFilter, hy]
+      simp
+
+/-- `RBMap UInt256 UInt256 compare`-level erase characterisation: the
+post-erase `toList` is the pre-erase `toList` with compare-eq entries
+filtered out. -/
+private theorem storage_erase_toList_filter
+    (s : Storage) (k : UInt256) :
+    (s.erase k).toList
+      = s.toList.filter (fun p => decide (compare k p.1 ≠ .eq)) := by
+  show (s.1.erase (fun p => compare k p.1)).toList
+       = s.1.toList.filter _
+  rw [show
+        ((s.1.erase (fun p => compare k p.1)) :
+            Batteries.RBNode (UInt256 × UInt256)) =
+          (s.1.del (fun p => compare k p.1)).setBlack from rfl,
+      Batteries.RBNode.setBlack_toList]
+  exact del_toList_filter_pair (cmp := Ordering.byKey Prod.fst compare)
+    (cut := fun p => compare k p.1) s.1 s.2.out.1
+
+/-- For `Storage`, `toList` is `Nodup` (implied by sortedness +
+reflexive cmp). Used by erase-of-mem to factor out the unique
+removed entry. -/
+private theorem storage_toList_nodup (s : Storage) : s.toList.Nodup := by
+  have hp := Batteries.RBMap.toList_sorted (t := s)
+  have : s.toList.Pairwise (fun p q => p ≠ q) := by
+    refine hp.imp ?_
+    intro a b hab heq
+    subst heq
+    obtain ⟨hab'⟩ := hab
+    have hv : compare a.1 a.1 = .lt := hab'
+    have hrefl : compare a.1 a.1 = .eq := Std.ReflCmp.compare_self
+    rw [hrefl] at hv; cases hv
+  exact this
+
+/-- Erasing a present key in a `Storage` decreases the foldl-sum by
+exactly that key's value: `new_sum + oldVal.toNat = old_sum`.
+
+This is the SSTORE-`v=0`-erase branch of `Account.updateStorage`. -/
+theorem storageSum_storage_erase_eq
+    (s : Storage) (k oldVal : UInt256)
+    (h_find : s.find? k = some oldVal) :
+    (s.erase k).foldl (fun a _ v => a + v.toNat) 0
+        + oldVal.toNat
+      = s.foldl (fun a _ v => a + v.toNat) 0 := by
+  rw [storageSum_foldl_eq_sum s, storageSum_foldl_eq_sum (s.erase k)]
+  -- s.toList factors as `L ++ (k', oldVal) :: R` for some k' compare-eq to k.
+  obtain ⟨y, hMemY, hKeq⟩ := Batteries.RBMap.find?_some_mem_toList h_find
+  obtain ⟨L, R, hSplit⟩ := List.append_of_mem hMemY
+  -- (s.erase k).toList = (L ++ (y, oldVal) :: R).filter (compare k ·.1 ≠ .eq).
+  rw [storage_erase_toList_filter, hSplit]
+  -- Show the filter drops only the (y, oldVal) entry.
+  -- Step 1: every element in L ++ R has compare k ·.1 ≠ .eq (else by Nodup
+  -- + uniqueness, it would coincide with (y, oldVal)).
+  have hNoEq : ∀ p ∈ L ++ R, compare k p.1 ≠ .eq := by
+    intro p hp hpEq
+    have hpIn : p ∈ s.toList := by
+      rw [hSplit]
+      rcases List.mem_append.mp hp with h | h
+      · exact List.mem_append_left _ h
+      · exact List.mem_append_right L (List.mem_cons_of_mem _ h)
+    have h2 : compare p.1 k = .eq := by
+      rw [Std.OrientedCmp.eq_comm]; exact hpEq
+    have hpk : compare p.1 y = .eq := Std.TransCmp.eq_trans h2 hKeq
+    have hpEq2 : p = (y, oldVal) :=
+      Batteries.RBMap.mem_toList_unique hpIn hMemY hpk
+    have hNodup := storage_toList_nodup s
+    rw [hSplit] at hNodup
+    have hNotInLR : (y, oldVal) ∉ L ++ R := by
+      rw [List.nodup_append] at hNodup
+      obtain ⟨_, hndR, hdisj⟩ := hNodup
+      simp only [List.nodup_cons] at hndR
+      intro hmem
+      rcases List.mem_append.mp hmem with hL | hR
+      · exact hdisj (y, oldVal) hL (y, oldVal) (by simp) rfl
+      · exact hndR.1 hR
+    apply hNotInLR; rw [← hpEq2]; exact hp
+  -- Step 2: filter drops the middle (y, oldVal) and keeps L ++ R intact.
+  have hKeyDec : decide (compare k y ≠ .eq) = false := by simp [hKeq]
+  have hL_ok : L.filter (fun p => decide (compare k p.1 ≠ .eq)) = L := by
+    apply filter_eq_self_of_all
+    intro p hp
+    have := hNoEq p (List.mem_append_left R hp)
+    simp [this]
+  have hR_ok : R.filter (fun p => decide (compare k p.1 ≠ .eq)) = R := by
+    apply filter_eq_self_of_all
+    intro p hp
+    have := hNoEq p (List.mem_append_right L hp)
+    simp [this]
+  rw [show (L ++ (y, oldVal) :: R) = (L ++ [(y, oldVal)]) ++ R from by simp,
+      List.filter_append, List.filter_append, List.filter_cons]
+  simp only [hKeyDec, List.filter_nil, hL_ok, hR_ok]
+  -- Goal: ((L ++ (if false ... else []) ++ R).map ...).sum + oldVal.toNat
+  --     = ((L ++ (y, oldVal) :: R).map ...).sum.
+  -- The remaining `if false = true then [...] else []` reduces to `[]`.
+  simp only [show (false = true) = False from by simp, if_false]
+  simp only [List.map_append, List.map_cons, List.sum_append, List.sum_cons,
+             List.append_nil, List.map_nil, List.sum_nil]
+  ring
+
+/-! ### `Account.updateStorage`-shape lifters at the `AccountMap` level
+
+These thread the `Storage`-level delta lemmas through to `storageSum
+σ C` for the post-`sstore` state. -/
 
 end Frame
 end EvmYul
