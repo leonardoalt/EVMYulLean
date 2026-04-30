@@ -1282,6 +1282,83 @@ theorem step_JUMPI_at_pc_strong
     s'.accountMap = s.accountMap := by
   step_at_pc_via step_JUMPI_shape_strong with hd1, hd2, tl, hStk, hStep
 
+theorem step_JUMPDEST_at_pc_strong
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.JUMPDEST, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = s.stack ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  step_at_pc_via step_JUMPDEST_shape_strong with hStep
+
+theorem step_POP_at_pc_strong
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hd : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd :: tl)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.POP, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = tl ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  step_at_pc_via step_POP_shape_strong with hd, tl, hStk, hStep
+
+theorem step_CALLER_at_pc_strong
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.CALLER, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    (∃ v, s'.stack = v :: s.stack) ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  step_at_pc_via step_CALLER_shape_strong with hStep
+
+theorem step_CALLVALUE_at_pc_strong
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.CALLVALUE, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    (∃ v, s'.stack = v :: s.stack) ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  step_at_pc_via step_CALLVALUE_shape_strong with hStep
+
+theorem step_ADD_at_pc_strong
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.ADD, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    (∃ v, s'.stack = v :: tl) ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  step_at_pc_via step_ADD_shape_strong with hd1, hd2, tl, hStk, hStep
+
 end AtPcWrappers
 
 end EvmYul.Frame
