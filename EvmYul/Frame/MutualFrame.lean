@@ -10470,5 +10470,314 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch
           exact hRes
         | revert _ _ => trivial
 
+/-! ## §I — Account-presence preservation through Θ
+
+This section adds the "domain-monotonicity" framework theorem
+`Θ_preserves_account_at_a`: if the input state σ has an account at
+some address `a`, then so does Θ's output σ'. The result is
+unconditional in the codeOwner (unlike the balance-monotonicity at
+`C` chain): account presence is preserved by every operation in the
+EVM stepping chain because σ is only ever modified via `insert` (and
+even SELFDESTRUCT inside a transaction only zeroes the balance via
+`insert`; the actual deletion happens in `Υ`'s post-tx
+`A.selfDestructSet.foldl Batteries.RBMap.erase`).
+
+### Predicates
+
+* `accountPresentAt σ a` — `∃ acc, σ.find? a = some acc`. Monotone
+  under `insert`.
+* `ΞPreservesAccountAt a` — Ξ at fuel-bounded recursion preserves
+  presence at `a`. Discharged by mutual induction with X (deferred —
+  see `Θ_preserves_account_at_a_with_witness` below).
+* `ΛPreservesAccountAt a` — Λ analogue.
+
+### Provided here
+
+* Leaf lemmas: `accountPresentAt_insert`, `theta_σ'₁_preserves_present`,
+  `theta_σ₁_preserves_present`, `theta_σ'_clamp_preserves_present`.
+* `Θ_preserves_account_at_a_with_witness` — Θ's body, taking a
+  witness `ΞPreservesAccountAt a` (and a Λ witness, unused for non-CREATE
+  arms but kept symmetric) and proving Θ-level preservation.
+
+### Deferred
+
+* Discharging the witness `ΞPreservesAccountAt a` framework-side via
+  Reachable-style mutual closure (mirror of
+  `ΞPreservesAtC_of_Reachable`). Phase J. -/
+
+/-- Account presence: `∃ acc, σ.find? a = some acc`. Monotone under
+the `insert` operations used by every Θ/Λ/Ξ/step path. -/
+def accountPresentAt (σ : AccountMap .EVM) (a : AccountAddress) : Prop :=
+  ∃ acc : Account .EVM, σ.find? a = some acc
+
+/-- Inserting at any key preserves presence at any address. -/
+theorem accountPresentAt_insert
+    (σ : AccountMap .EVM) (k a : AccountAddress) (acc : Account .EVM)
+    (h : accountPresentAt σ a) :
+    accountPresentAt (σ.insert k acc) a := by
+  by_cases hka : k = a
+  · subst hka
+    exact ⟨acc, find?_insert_self _ _ _⟩
+  · obtain ⟨acc', hFind⟩ := h
+    refine ⟨acc', ?_⟩
+    rw [find?_insert_ne σ k a acc hka]
+    exact hFind
+
+/-- Θ's σ → σ'₁ credit-prefix preserves presence at any `a`. -/
+theorem theta_σ'₁_preserves_present
+    (σ : AccountMap .EVM) (r a : AccountAddress) (v : UInt256)
+    (h : accountPresentAt σ a) :
+    let σ'₁ :=
+      match σ.find? r with
+        | none =>
+          if v != ⟨0⟩ then
+            σ.insert r { (default : Account .EVM) with balance := v }
+          else σ
+        | some acc => σ.insert r { acc with balance := acc.balance + v }
+    accountPresentAt σ'₁ a := by
+  simp only
+  split
+  · split
+    · exact accountPresentAt_insert σ r a _ h
+    · exact h
+  · exact accountPresentAt_insert σ r a _ h
+
+/-- Θ's σ'₁ → σ₁ debit-prefix preserves presence at any `a`. -/
+theorem theta_σ₁_preserves_present
+    (σ'₁ : AccountMap .EVM) (s a : AccountAddress) (v : UInt256)
+    (h : accountPresentAt σ'₁ a) :
+    let σ₁ :=
+      match σ'₁.find? s with
+        | none => σ'₁
+        | some acc => σ'₁.insert s { acc with balance := acc.balance - v }
+    accountPresentAt σ₁ a := by
+  simp only
+  split
+  · exact h
+  · exact accountPresentAt_insert σ'₁ s a _ h
+
+/-- Θ's σ'-clamp `σ' = if σ'' == ∅ then σ else σ''` preserves presence
+at `a` provided either branch does. -/
+theorem theta_σ'_clamp_preserves_present
+    (σ σ'' : AccountMap .EVM) (a : AccountAddress)
+    (hσ : accountPresentAt σ a)
+    (hσ'' : (σ'' == ∅) = false → accountPresentAt σ'' a) :
+    accountPresentAt (if σ'' == ∅ then σ else σ'') a := by
+  cases h : (σ'' == ∅) with
+  | true => simp only [if_true]; exact hσ
+  | false => simp only [Bool.false_eq_true, if_false]; exact hσ'' h
+
+/-- Strengthened clamp using the case analysis `σ'' = σ₁ ∨ σ'' = ∅`,
+mirroring `theta_σ'_clamp_invariant_of_σ₁_or_empty`. -/
+theorem theta_σ'_clamp_preserves_present_of_σ₁_or_empty
+    (σ σ₁ σ'' : AccountMap .EVM) (a : AccountAddress)
+    (hσ : accountPresentAt σ a)
+    (hσ₁ : accountPresentAt σ₁ a)
+    (hσ''_cases : σ'' = σ₁ ∨ σ'' = ∅) :
+    accountPresentAt (if σ'' == ∅ then σ else σ'') a := by
+  apply theta_σ'_clamp_preserves_present _ _ _ hσ
+  intro hNotEmpty
+  rcases hσ''_cases with heq | heq
+  · rw [heq]; exact hσ₁
+  · exfalso
+    rw [heq] at hNotEmpty
+    have hTrue : ((∅ : AccountMap .EVM) == ∅) = true := rfl
+    rw [hTrue] at hNotEmpty
+    exact Bool.noConfusion hNotEmpty
+
+/-- Witness predicate: Ξ at any fuel preserves account presence at
+`a`. Discharged downstream (Phase J) via the mutual closure with X.
+
+The witness is **uniform in fuel and inputs**: presence preservation
+doesn't depend on the codeOwner (unlike `ΞPreservesAtC` which is
+parameterized on `C`'s code). It IS true unconditionally — the proof
+is by induction over X's fuel and case-split on each step. -/
+def ΞPreservesAccountAt (a : AccountAddress) : Prop :=
+  ∀ (fuel : ℕ) (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+    (I : ExecutionEnv .EVM),
+    accountPresentAt σ a →
+    match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
+    | .ok (.success (_, σ', _, _) _) => accountPresentAt σ' a
+    | _ => True
+
+/-- Witness predicate for Λ: Λ at any fuel preserves account presence at
+`a`. -/
+def ΛPreservesAccountAt (a : AccountAddress) : Prop :=
+  ∀ (fuel : ℕ) (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (A : Substate)
+    (s o : AccountAddress) (g p v : UInt256) (i : ByteArray) (e : UInt256)
+    (ζ : Option ByteArray) (H : BlockHeader) (w : Bool),
+    accountPresentAt σ a →
+    match EVM.Lambda fuel blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o g p v i e ζ H w with
+    | .ok (_, _, σ', _, _, _, _) => accountPresentAt σ' a
+    | .error _ => True
+
+/-- **Framework theorem: `Θ` preserves account presence at any `a`.**
+
+Given:
+* `h_present : accountPresentAt σ a` (the input state has `a` present),
+* `hΞ : ΞPreservesAccountAt a` (witness — Ξ preserves presence),
+
+The output of `EVM.Θ` either errors (vacuous) or succeeds with σ'
+that has `a` still present.
+
+This is the framework's domain-monotonicity result for Θ. The witness
+`ΞPreservesAccountAt a` is dischargeable via the Reachable-style
+mutual closure (Phase J).
+
+For Weth's `WethAccountAtC C` discharge: at PC 72 (outbound CALL), the
+caller invokes `EVM.call → Θ`. With `a := C` (the Weth contract
+address), `h_present` follows from the inductive WethReachable
+hypothesis, and the output's `accountPresentAt σ' C` is exactly what
+the WethAccountAtC step needs. -/
+theorem Θ_preserves_account_at_a
+    (a : AccountAddress) (hΞ : ΞPreservesAccountAt a)
+    (fuel : ℕ) (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (A : Substate)
+    (s o r : AccountAddress) (c : ToExecute .EVM)
+    (g p v v' : UInt256) (d : ByteArray) (e : Nat)
+    (H : BlockHeader) (w : Bool)
+    (h_present : accountPresentAt σ a) :
+    match EVM.Θ fuel blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o r c g p v v' d e H w with
+    | .ok (_, σ', _, _, _, _) => accountPresentAt σ' a
+    | .error _ => True := by
+  match fuel with
+  | 0 =>
+    rw [show EVM.Θ 0 blobVersionedHashes createdAccounts genesisBlockHeader
+                  blocks σ σ₀ A s o r c g p v v' d e H w = .error .OutOfFuel from rfl]
+    trivial
+  | fuel' + 1 =>
+    -- Establish `accountPresentAt σ'₁ a`.
+    have h_σ'₁ := theta_σ'₁_preserves_present σ r a v h_present
+    set σ'₁ : AccountMap .EVM :=
+      match σ.find? r with
+        | none =>
+          if v != ⟨0⟩ then
+            σ.insert r
+              { nonce := (default : Account .EVM).nonce
+                balance := v
+                storage := (default : Account .EVM).storage
+                code := (default : Account .EVM).code
+                tstorage := (default : Account .EVM).tstorage }
+          else σ
+        | some acc =>
+          σ.insert r
+            { nonce := acc.nonce
+              balance := acc.balance + v
+              storage := acc.storage
+              code := acc.code
+              tstorage := acc.tstorage }
+      with hσ'₁_def
+    set σ₁ : AccountMap .EVM :=
+      match σ'₁.find? s with
+        | none => σ'₁
+        | some acc =>
+          σ'₁.insert s
+            { nonce := acc.nonce
+              balance := acc.balance - v
+              storage := acc.storage
+              code := acc.code
+              tstorage := acc.tstorage }
+      with hσ₁_def
+    -- Establish `accountPresentAt σ₁ a`.
+    have h_σ₁ : accountPresentAt σ₁ a :=
+      theta_σ₁_preserves_present σ'₁ s a v h_σ'₁
+    -- Execution env I.
+    set I : ExecutionEnv .EVM :=
+      { codeOwner := r, sender := o, source := s, weiValue := v', calldata := d,
+        code :=
+          match c with
+            | ToExecute.Precompiled _ => default
+            | ToExecute.Code code => code,
+        gasPrice := p.toNat, header := H, depth := e, perm := w,
+        blobVersionedHashes := blobVersionedHashes }
+      with hI_def
+    cases c with
+    | Precompiled pc =>
+      have hΘeq :
+          EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                genesisBlockHeader blocks σ σ₀ A s o r
+                (ToExecute.Precompiled pc) g p v v' d e H w
+            = (do
+                let y ← EVM.applyPrecompile pc σ₁ g A I
+                match y with
+                | (cA'', z, σ'', g', A'', out) =>
+                  let σ' := if (σ'' == ∅) then σ else σ''
+                  let A' := if (σ'' == ∅) then A else A''
+                  pure (cA'', σ', g', A', z, out)) := by
+        show _ = _
+        rfl
+      rw [hΘeq]
+      obtain ⟨tup, hTup, hCases, _hcA_empty⟩ := applyPrecompile_bundled pc σ₁ g A I
+      rw [hTup]
+      -- σ' = if (tup.2.2.1 == ∅) then σ else tup.2.2.1.
+      show accountPresentAt (if (tup.2.2.1 == ∅) = true then σ else tup.2.2.1) a
+      exact theta_σ'_clamp_preserves_present_of_σ₁_or_empty
+              σ σ₁ tup.2.2.1 a h_present h_σ₁ hCases
+    | Code c_code =>
+      have hΘeq :
+          EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
+                genesisBlockHeader blocks σ σ₀ A s o r
+                (ToExecute.Code c_code) g p v v' d e H w
+            = (do
+                let y ←
+                  match EVM.Ξ fuel' createdAccounts genesisBlockHeader blocks
+                          σ₁ σ₀ g A I with
+                  | .error e =>
+                    if e == .OutOfFuel then throw .OutOfFuel
+                    else pure (createdAccounts, false, σ, ⟨0⟩, A, .empty)
+                  | .ok (.revert g' o) =>
+                    pure (createdAccounts, false, σ, g', A, o)
+                  | .ok (.success (a, b, c', d) o) =>
+                    pure (a, true, b, c', d, o)
+                match y with
+                | (cA'', z, σ'', g', A'', out) =>
+                  let σ' := if (σ'' == ∅) then σ else σ''
+                  let A' := if (σ'' == ∅) then A else A''
+                  pure (cA'', σ', g', A', z, out)) := by
+        show _ = _
+        rfl
+      rw [hΘeq]
+      have hΞ_pres :=
+        hΞ fuel' createdAccounts genesisBlockHeader blocks σ₁ σ₀ g A I h_σ₁
+      cases hΞeq : EVM.Ξ fuel' createdAccounts genesisBlockHeader blocks σ₁ σ₀ g A I with
+      | error err =>
+        by_cases hErr : err = EVM.ExecutionException.OutOfFuel
+        · subst hErr
+          simp only [bind, Except.bind, pure, Except.pure]
+          trivial
+        · have hBEq : (err == EVM.ExecutionException.OutOfFuel) = false := by
+            cases err
+            all_goals first
+              | (exfalso; exact hErr rfl)
+              | rfl
+          simp only [bind, Except.bind, pure, Except.pure, hBEq,
+                     Bool.false_eq_true, if_false]
+          -- σ' = if (σ == ∅) then σ else σ.
+          show accountPresentAt (if (σ == ∅) = true then σ else σ) a
+          split_ifs <;> exact h_present
+      | ok res =>
+        cases res with
+        | revert g' o_out =>
+          simp only [bind, Except.bind, pure, Except.pure]
+          show accountPresentAt (if (σ == ∅) = true then σ else σ) a
+          split_ifs <;> exact h_present
+        | success details out =>
+          obtain ⟨cA', σ_Ξ, g', A_Ξ⟩ := details
+          simp only [bind, Except.bind, pure, Except.pure]
+          show accountPresentAt (if (σ_Ξ == ∅) = true then σ else σ_Ξ) a
+          rw [hΞeq] at hΞ_pres
+          -- hΞ_pres : accountPresentAt σ_Ξ a
+          apply theta_σ'_clamp_preserves_present _ _ _ h_present
+          intro _; exact hΞ_pres
+
 end Frame
 end EvmYul
