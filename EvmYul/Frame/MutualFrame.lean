@@ -12071,5 +12071,99 @@ theorem Ξ_preserves_account_at_a_of_Reachable
         | success s' out => exact hX
         | revert _ _ => trivial
 
+/-! ### §J.7 — Reachable-closure wrappers
+
+Convenience: Θ and EVM.call's preservation lemmas with the Ξ witness
+auto-supplied via `Ξ_preserves_account_at_a_of_Reachable`. -/
+
+theorem Θ_preserves_account_at_a_of_Reachable
+    (a : AccountAddress)
+    (Reachable : EVM.State → Prop)
+    (hReach_Z : ∀ s : EVM.State, ∀ g : UInt256, Reachable s →
+        Reachable { s with gasAvailable := g })
+    (hReach_step : ∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
+        Reachable s')
+    (hReach_decodeSome : ∀ s : EVM.State, Reachable s →
+        ∃ pair, decode s.executionEnv.code s.pc = some pair)
+    (hReach_no_create : ∀ s : EVM.State, ∀ op : Operation .EVM, ∀ arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        op ≠ .CREATE ∧ op ≠ .CREATE2)
+    (hReachInit : ∀ (cA : RBSet AccountAddress compare)
+                    (gbh : BlockHeader) (bs : ProcessedBlocks)
+                    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+                    (I : ExecutionEnv .EVM),
+        Reachable
+          { (default : EVM.State) with
+              accountMap := σ
+              σ₀ := σ₀
+              executionEnv := I
+              substate := A
+              createdAccounts := cA
+              gasAvailable := g
+              blocks := bs
+              genesisBlockHeader := gbh })
+    (fuel : ℕ) (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (A : Substate)
+    (s o r : AccountAddress) (c : ToExecute .EVM)
+    (g p v v' : UInt256) (d : ByteArray) (e : Nat)
+    (H : BlockHeader) (w : Bool)
+    (h_present : accountPresentAt σ a) :
+    match EVM.Θ fuel blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o r c g p v v' d e H w with
+    | .ok (_, σ', _, _, _, _) => accountPresentAt σ' a
+    | .error _ => True :=
+  Θ_preserves_account_at_a a
+    (Ξ_preserves_account_at_a_of_Reachable a Reachable
+      hReach_Z hReach_step hReach_decodeSome hReach_no_create hReachInit)
+    fuel blobVersionedHashes createdAccounts genesisBlockHeader blocks
+    σ σ₀ A s o r c g p v v' d e H w h_present
+
+theorem EVM_call_preserves_account_at_a_of_Reachable
+    (a : AccountAddress)
+    (Reachable : EVM.State → Prop)
+    (hReach_Z : ∀ s : EVM.State, ∀ g : UInt256, Reachable s →
+        Reachable { s with gasAvailable := g })
+    (hReach_step : ∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
+        Reachable s')
+    (hReach_decodeSome : ∀ s : EVM.State, Reachable s →
+        ∃ pair, decode s.executionEnv.code s.pc = some pair)
+    (hReach_no_create : ∀ s : EVM.State, ∀ op : Operation .EVM, ∀ arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        op ≠ .CREATE ∧ op ≠ .CREATE2)
+    (hReachInit : ∀ (cA : RBSet AccountAddress compare)
+                    (gbh : BlockHeader) (bs : ProcessedBlocks)
+                    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+                    (I : ExecutionEnv .EVM),
+        Reachable
+          { (default : EVM.State) with
+              accountMap := σ
+              σ₀ := σ₀
+              executionEnv := I
+              substate := A
+              createdAccounts := cA
+              gasAvailable := g
+              blocks := bs
+              genesisBlockHeader := gbh })
+    (fuel gasCost : ℕ)
+    (gas src rcp t v v' inOff inSize outOff outSize : UInt256)
+    (permission : Bool) (evmState state' : EVM.State) (x : UInt256)
+    (h_present : accountPresentAt evmState.accountMap a)
+    (hCall :
+      EVM.call fuel gasCost evmState.executionEnv.blobVersionedHashes
+        gas src rcp t v v' inOff inSize outOff outSize permission evmState
+      = .ok (x, state')) :
+    accountPresentAt state'.accountMap a :=
+  EVM_call_preserves_account_at_a a
+    (Ξ_preserves_account_at_a_of_Reachable a Reachable
+      hReach_Z hReach_step hReach_decodeSome hReach_no_create hReachInit)
+    fuel gasCost gas src rcp t v v' inOff inSize outOff outSize
+    permission evmState state' x h_present hCall
+
 end Frame
 end EvmYul
