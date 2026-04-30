@@ -10779,5 +10779,74 @@ theorem Θ_preserves_account_at_a
           apply theta_σ'_clamp_preserves_present _ _ _ h_present
           intro _; exact hΞ_pres
 
+/-- **EVM.call wrapper of `Θ_preserves_account_at_a`.**
+
+`EVM.call` either (a) takes the gate-fail branch (returning the input
+`accountMap` unchanged), or (b) invokes `Θ`. Both branches preserve
+presence at `a`.
+
+For Weth's PC 72 outbound CALL: with `a := C` (the Weth contract
+address), if `s.accountMap.find? C = some _` then post-call
+`state'.accountMap.find? C = some _`. -/
+theorem EVM_call_preserves_account_at_a
+    (a : AccountAddress) (hΞ : ΞPreservesAccountAt a)
+    (fuel gasCost : ℕ)
+    (gas src rcp t v v' inOff inSize outOff outSize : UInt256)
+    (permission : Bool) (evmState state' : EVM.State) (x : UInt256)
+    (h_present : accountPresentAt evmState.accountMap a)
+    (hCall :
+      EVM.call fuel gasCost evmState.executionEnv.blobVersionedHashes
+        gas src rcp t v v' inOff inSize outOff outSize permission evmState
+      = .ok (x, state')) :
+    accountPresentAt state'.accountMap a := by
+  unfold EVM.call at hCall
+  simp only [bind, Except.bind, pure, Except.pure] at hCall
+  cases fuel with
+  | zero =>
+    simp only at hCall
+    exact absurd hCall (by simp)
+  | succ f =>
+    simp only at hCall
+    split at hCall
+    · -- Gate passed. Θ was invoked at fuel f.
+      split at hCall
+      · exact absurd hCall (by simp)
+      · rename_i hΘ_prod hΘ
+        obtain ⟨cA, σ', g', A', z, o⟩ := hΘ_prod
+        injection hCall with hEq
+        have hΘPres :=
+          Θ_preserves_account_at_a a hΞ f
+            evmState.executionEnv.blobVersionedHashes
+            evmState.createdAccounts
+            evmState.genesisBlockHeader
+            evmState.blocks
+            evmState.accountMap
+            evmState.σ₀
+            ((evmState.addAccessedAccount (AccountAddress.ofUInt256 t)).substate)
+            (AccountAddress.ofUInt256 src)
+            evmState.executionEnv.sender
+            (AccountAddress.ofUInt256 rcp)
+            (toExecute .EVM evmState.accountMap (AccountAddress.ofUInt256 t))
+            (.ofNat <| Ccallgas (AccountAddress.ofUInt256 t)
+                                (AccountAddress.ofUInt256 rcp) v gas
+                                evmState.accountMap evmState.toMachineState
+                                evmState.substate)
+            (.ofNat evmState.executionEnv.gasPrice)
+            v v' (evmState.memory.readWithPadding inOff.toNat inSize.toNat)
+            (evmState.executionEnv.depth + 1)
+            evmState.executionEnv.header permission h_present
+        rw [hΘ] at hΘPres
+        simp only at hΘPres
+        have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
+        obtain ⟨_hx, hState⟩ := hState_eq
+        rw [← hState]
+        exact hΘPres
+    · -- Gate failed. accountMap unchanged.
+      injection hCall with hEq
+      have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
+      obtain ⟨_hx, hState⟩ := hState_eq
+      rw [← hState]
+      exact h_present
+
 end Frame
 end EvmYul
