@@ -1518,4 +1518,66 @@ theorem step_ADD_shape_strong
   subst hStep
   refine ⟨rfl, ⟨_, rfl⟩, rfl, rfl⟩
 
+/-- DUP5 strong: like `step_DUP5_shape`, additionally proves `accountMap`
+preservation. -/
+theorem step_DUP5_shape_strong
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 hd4 hd5 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: hd4 :: hd5 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.DUP5, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd5 :: s.stack ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dup at hStep
+  rw [hStk] at hStep
+  simp only [show List.take 5 (hd1 :: hd2 :: hd3 :: hd4 :: hd5 :: tl) =
+               [hd1, hd2, hd3, hd4, hd5] from rfl,
+             show ([hd1, hd2, hd3, hd4, hd5] : List UInt256).length = 5 from rfl,
+             ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, ?_, rfl, rfl⟩
+  show [hd1, hd2, hd3, hd4, hd5].getLast! :: (hd1 :: hd2 :: hd3 :: hd4 :: hd5 :: tl)
+       = hd5 :: s.stack
+  rw [hStk]; rfl
+
+/-- GAS strong: like `step_GAS_shape`, additionally proves `accountMap`
+preservation. -/
+theorem step_GAS_shape_strong
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hStep : EVM.step (f' + 1) cost (some (.GAS, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    (∃ v, s'.stack = v :: s.stack) ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dispatchMachineStateOp EVM.machineStateOp at hStep
+  simp only [Id_run_ok, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, ⟨_, rfl⟩, rfl, rfl⟩
+
+/-- PUSH1 strong: like `step_PUSH1_shape`, additionally proves `accountMap`
+preservation. -/
+theorem step_PUSH1_shape_strong
+    (s s' : EVM.State) (f' cost : ℕ) (v : UInt256)
+    (hStep : EVM.step (f' + 1) cost (some (.Push .PUSH1, some (v, 1))) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 2 ∧
+    s'.stack = v :: s.stack ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  injection hStep with hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl, rfl⟩
+
 end EvmYul.Frame
