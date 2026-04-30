@@ -10495,9 +10495,10 @@ even SELFDESTRUCT inside a transaction only zeroes the balance via
 
 * Leaf lemmas: `accountPresentAt_insert`, `theta_σ'₁_preserves_present`,
   `theta_σ₁_preserves_present`, `theta_σ'_clamp_preserves_present`.
-* `Θ_preserves_account_at_a_with_witness` — Θ's body, taking a
-  witness `ΞPreservesAccountAt a` (and a Λ witness, unused for non-CREATE
-  arms but kept symmetric) and proving Θ-level preservation.
+* `Θ_preserves_account_at_a` — Θ's body, taking a
+  witness `ΞPreservesAccountAt a` and proving Θ-level preservation.
+* `EVM_call_preserves_account_at_a` — `EVM.call` wrapper of the Θ
+  result, used by every CALL/CALLCODE/DELEGATECALL/STATICCALL arm.
 
 ### Deferred
 
