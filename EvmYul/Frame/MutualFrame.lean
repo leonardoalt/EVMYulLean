@@ -11049,5 +11049,64 @@ theorem evmYul_step_preserves_present
     rw [h_eq]
     exact h_pres
 
+/-! ### §J.3 — EVM.step preserves presence
+
+`EVM.step` dispatches as:
+* CREATE / CREATE2: invokes Λ (Lambda).
+* CALL / CALLCODE / DELEGATECALL / STATICCALL: invokes EVM.call.
+* otherwise: falls through to EvmYul.step.
+
+Each dispatch path preserves presence via the corresponding witness. -/
+
+/-- For any handled (non-CREATE/CALL family) op, EVM.step preserves
+`accountPresentAt`. Bridges from `EVM.step f cost (some (op, arg)) s = .ok s'`
+to `EvmYul.step op arg s_pre = .ok s'` (where s_pre is s with adjusted
+gas+execLength) and dispatches to `evmYul_step_preserves_present`. -/
+theorem EVM_step_handled_preserves_present
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (a : AccountAddress) (f cost : ℕ)
+    (s s' : EVM.State)
+    (hHandled : handledByEvmYulStep op)
+    (hStep : EVM.step (f + 1) cost (some (op, arg)) s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  -- Mirror of step_handled_helper_at_C_general's bridge construction.
+  set s_pre : EVM.State :=
+    { s with
+        execLength := s.execLength + 1,
+        gasAvailable := s.gasAvailable - UInt256.ofNat cost }
+    with hs_pre_def
+  have hAM : s_pre.accountMap = s.accountMap := rfl
+  have hStep' : EvmYul.step op arg s_pre = .ok s' := by
+    unfold EVM.step at hStep
+    simp only [bind, Except.bind, pure, Except.pure] at hStep
+    obtain ⟨hne1, hne2, hne3, hne4, hne5, hne6⟩ := hHandled
+    cases op with
+    | StopArith _ => exact hStep
+    | CompBit _ => exact hStep
+    | Keccak _ => exact hStep
+    | Env _ => exact hStep
+    | Block _ => exact hStep
+    | StackMemFlow _ => exact hStep
+    | Push _ => exact hStep
+    | Dup _ => exact hStep
+    | Exchange _ => exact hStep
+    | Log _ => exact hStep
+    | System o =>
+      cases o with
+      | CREATE => exact absurd rfl hne1
+      | CALL => exact absurd rfl hne3
+      | CALLCODE => exact absurd rfl hne4
+      | RETURN => exact hStep
+      | DELEGATECALL => exact absurd rfl hne5
+      | CREATE2 => exact absurd rfl hne2
+      | STATICCALL => exact absurd rfl hne6
+      | REVERT => exact hStep
+      | INVALID => exact hStep
+      | SELFDESTRUCT => exact hStep
+  have h_pres_pre : accountPresentAt s_pre.accountMap a := by
+    rw [hAM]; exact h_pres
+  exact evmYul_step_preserves_present op arg s_pre s' a hHandled hStep' h_pres_pre
+
 end Frame
 end EvmYul
