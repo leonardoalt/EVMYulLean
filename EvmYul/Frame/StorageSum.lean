@@ -726,7 +726,7 @@ The proof case-splits on `find? slot`:
 /-- Erase-of-absent-slot preserves the storage foldl-sum: when `slot`
 is not present, the `toList`-filter drops nothing. Used for the
 `find? slot = none` case in the `findD`-flavored bridge. -/
-private theorem storageSum_storage_erase_eq_of_find?_none
+theorem storageSum_storage_erase_eq_of_find?_none
     (s : Storage) (k : UInt256)
     (h : s.find? k = none) :
     (s.erase k).foldl (fun a _ v => a + v.toNat) 0
@@ -841,6 +841,46 @@ theorem storageSum_sstore_replace_eq_findD
     rw [storageSum_insert_at_C, storageSum_of_find?_some σ C acc h_find,
         updateStorage_storage_of_zero acc slot]
     rw [storageSum_storage_erase_eq_of_find?_none acc.storage slot h_find_slot]
+
+/-! ### `findD`-flavored insert-absent helper for the deposit slack form
+
+Inserting at a key absent in the storage shifts the foldl-sum by
+`+ newVal.toNat`. Used by the PC 40 deposit SSTORE discharger for the
+absent-slot case (first-time depositors). -/
+
+theorem storageSum_storage_insert_absent_eq
+    (s : Storage) (k newVal : UInt256)
+    (h_find : s.find? k = none) :
+    (s.insert k newVal).foldl (fun a _ v => a + v.toNat) 0
+      = s.foldl (fun a _ v => a + v.toNat) 0 + newVal.toNat := by
+  rw [storageSum_foldl_eq_sum s, storageSum_foldl_eq_sum (s.insert k newVal)]
+  obtain ⟨hOrd, _, _, hBal⟩ := s.2.out
+  set cut : UInt256 × UInt256 → Ordering :=
+    Ordering.byKey Prod.fst compare (k, newVal) with hcut_def
+  match e : Batteries.RBNode.zoom cut s.1 with
+  | (.nil, _p) =>
+    obtain ⟨L₁, L₂, hToL_orig, hToL_ins⟩ :=
+      Batteries.RBNode.exists_insert_toList_zoom_nil
+        (cmp := Ordering.byKey Prod.fst compare) hBal e (v := (k, newVal))
+    have hsToList : s.toList = s.1.toList := rfl
+    have hsInsToList :
+        (s.insert k newVal).toList
+          = (s.1.insert (cmp := Ordering.byKey Prod.fst compare) (k, newVal)).toList := rfl
+    rw [hsToList, hToL_orig, hsInsToList, hToL_ins]
+    rw [List.map_append, List.map_cons, List.sum_append, List.sum_cons,
+        List.map_append, List.sum_append]
+    ring
+  | (.node _c _l ⟨kE, vE⟩ _r, _p) =>
+    -- Node case: contradicts `find? k = none`.
+    exfalso
+    have hroot : s.1.find? cut = some (kE, vE) := by
+      rw [Batteries.RBNode.find?_eq_zoom (p := .root), e]; rfl
+    have h_find' : s.find? k = some vE := by
+      show (s.1.find? (fun p => compare k p.1)).map (·.2) = some vE
+      have hroot' : s.1.find? (fun p => compare k p.1) = some (kE, vE) := hroot
+      rw [hroot']; rfl
+    rw [h_find'] at h_find
+    cases h_find
 
 end Frame
 end EvmYul
