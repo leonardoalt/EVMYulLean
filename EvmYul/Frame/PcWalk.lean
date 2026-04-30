@@ -692,6 +692,27 @@ theorem step_SLOAD_at_pc
     s'.executionEnv = s.executionEnv := by
   step_at_pc_via step_SLOAD_shape with hd, tl, hStk, hStep
 
+/-- `step_SLOAD_shape_strong` at a known PC: exposes the pushed value
+as the storage lookup at the contract's own address and proves
+`accountMap` preservation. -/
+theorem step_SLOAD_at_pc_strong
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hd : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd :: tl)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.SLOAD, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack =
+      (s.lookupAccount s.executionEnv.codeOwner
+        |>.option ⟨0⟩ (Account.lookupStorage (k := hd))) :: tl ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  step_at_pc_via step_SLOAD_shape_strong with hd, tl, hStk, hStep
+
 /-- `step_MLOAD_shape` at a known PC. -/
 theorem step_MLOAD_at_pc
     (s s' : EVM.State) (f' cost : ℕ)
