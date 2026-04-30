@@ -10849,5 +10849,67 @@ theorem EVM_call_preserves_account_at_a
       rw [← hState]
       exact h_present
 
+/-! ## §J — Discharging `ΞPreservesAccountAt a`
+
+This section discharges the `ΞPreservesAccountAt a` witness universally
+via mutual induction with X. The witness is uniformly true because
+every operation in Ξ/X/EvmYul.step modifies σ only via `insert`, which
+preserves presence by `accountPresentAt_insert`. SELFDESTRUCT inside Θ
+zeroes balance via insert but does NOT delete the account from σ; the
+actual deletion happens in Υ's post-tx SD-set processing (outside Θ).
+
+### Roadmap
+
+* §J.1 — `EvmYul.State.sstore`/`tstore`/`selfDestruct` preserve presence.
+* §J.2 — `EvmYul.step op arg s = .ok s'` preserves presence at any `a`
+  (for all handled ops, including SELFDESTRUCT).
+* §J.3 — `EVM.step f cost (some (op, arg)) s = .ok s'` preserves
+  presence at any `a`, given a `ΛPreservesAccountAt a` witness for the
+  CREATE arms and `ΞPreservesAccountAt a` witness for the CALL arms.
+* §J.4 — X-loop preservation via induction on fuel.
+* §J.5 — Ξ-wrapper: `Ξ_preserves_account_at_a_universal`.
+* §J.6 — Unconditional wrappers for Θ and EVM.call. -/
+
+/-! ### §J.1 — Leaf preservation lemmas for state updates
+
+These are the key building blocks: the state operations `sstore`,
+`tstore`, and the EvmYul SELFDESTRUCT body all modify `accountMap`
+only via `insert`. -/
+
+/-- `sstore` preserves `accountPresentAt`. -/
+theorem sstore_preserves_present
+    (self : EvmYul.State .EVM) (spos sval : UInt256) (a : AccountAddress)
+    (h : accountPresentAt self.accountMap a) :
+    accountPresentAt (EvmYul.State.sstore self spos sval).accountMap a := by
+  unfold EvmYul.State.sstore
+  simp only [EvmYul.State.lookupAccount]
+  match hFind : self.accountMap.find? self.executionEnv.codeOwner with
+  | none => simp [Option.option]; exact h
+  | some acc =>
+    simp only [Option.option]
+    -- The body is `self.setAccount … |>.addAccessedStorageKey …`
+    -- followed by a record update of `substate.refundBalance`.
+    -- All of these leave `accountMap = self.accountMap.insert codeOwner …`.
+    show accountPresentAt
+      (self.accountMap.insert self.executionEnv.codeOwner
+        (acc.updateStorage spos sval)) a
+    exact accountPresentAt_insert self.accountMap _ a _ h
+
+/-- `tstore` preserves `accountPresentAt`. -/
+theorem tstore_preserves_present
+    (self : EvmYul.State .EVM) (spos sval : UInt256) (a : AccountAddress)
+    (h : accountPresentAt self.accountMap a) :
+    accountPresentAt (EvmYul.State.tstore self spos sval).accountMap a := by
+  unfold EvmYul.State.tstore
+  simp only [EvmYul.State.lookupAccount]
+  match hFind : self.accountMap.find? self.executionEnv.codeOwner with
+  | none => simp [Option.option]; exact h
+  | some acc =>
+    simp only [Option.option]
+    show accountPresentAt
+      (self.accountMap.insert self.executionEnv.codeOwner
+        (acc.updateTransientStorage spos sval)) a
+    exact accountPresentAt_insert self.accountMap _ a _ h
+
 end Frame
 end EvmYul
