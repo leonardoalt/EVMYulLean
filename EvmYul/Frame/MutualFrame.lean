@@ -11108,5 +11108,113 @@ theorem EVM_step_handled_preserves_present
     rw [hAM]; exact h_pres
   exact evmYul_step_preserves_present op arg s_pre s' a hHandled hStep' h_pres_pre
 
+/-- CALL arm: EVM.step at CALL preserves `accountPresentAt`. -/
+theorem EVM_step_CALL_preserves_present
+    (a : AccountAddress) (hΞ : ΞPreservesAccountAt a)
+    (arg : Option (UInt256 × Nat))
+    (f cost : ℕ) (s s' : EVM.State)
+    (hStep : EVM.step (f + 1) cost (some (.CALL, arg)) s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  -- Unfold CALL arm body.
+  simp only [EVM.step, Operation.CALL, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { s with execLength := s.execLength + 1 } with heS1_def
+  split at hStep
+  · exact absurd hStep (by simp)
+  · rename_i p hpop7
+    obtain ⟨stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆⟩ := p
+    split at hStep
+    · exact absurd hStep (by simp)
+    · rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      -- accountMap (state'.replaceStackAndIncrPC ...) = state'.accountMap.
+      show accountPresentAt state'.accountMap a
+      have hPresES1 : accountPresentAt eS1.accountMap a := h_pres
+      exact EVM_call_preserves_account_at_a a hΞ f cost
+        μ₀ (.ofNat eS1.executionEnv.codeOwner) μ₁ μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆
+        eS1.executionEnv.perm eS1 state' x hPresES1 hCallRes
+
+/-- CALLCODE arm: EVM.step at CALLCODE preserves `accountPresentAt`. -/
+theorem EVM_step_CALLCODE_preserves_present
+    (a : AccountAddress) (hΞ : ΞPreservesAccountAt a)
+    (arg : Option (UInt256 × Nat))
+    (f cost : ℕ) (s s' : EVM.State)
+    (hStep : EVM.step (f + 1) cost (some (.CALLCODE, arg)) s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  simp only [EVM.step, Operation.CALLCODE, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { s with execLength := s.execLength + 1 } with heS1_def
+  split at hStep
+  · exact absurd hStep (by simp)
+  · rename_i p hpop7
+    obtain ⟨stack, μ₀, μ₁, μ₂, μ₃, μ₄, μ₅, μ₆⟩ := p
+    split at hStep
+    · exact absurd hStep (by simp)
+    · rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      show accountPresentAt state'.accountMap a
+      have hPresES1 : accountPresentAt eS1.accountMap a := h_pres
+      exact EVM_call_preserves_account_at_a a hΞ f cost
+        μ₀ (.ofNat eS1.executionEnv.codeOwner) (.ofNat eS1.executionEnv.codeOwner)
+        μ₁ μ₂ μ₂ μ₃ μ₄ μ₅ μ₆
+        eS1.executionEnv.perm eS1 state' x hPresES1 hCallRes
+
+/-- DELEGATECALL arm: EVM.step at DELEGATECALL preserves `accountPresentAt`. -/
+theorem EVM_step_DELEGATECALL_preserves_present
+    (a : AccountAddress) (hΞ : ΞPreservesAccountAt a)
+    (arg : Option (UInt256 × Nat))
+    (f cost : ℕ) (s s' : EVM.State)
+    (hStep : EVM.step (f + 1) cost (some (.DELEGATECALL, arg)) s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  simp only [EVM.step, Operation.DELEGATECALL, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { s with execLength := s.execLength + 1 } with heS1_def
+  split at hStep
+  · exact absurd hStep (by simp)
+  · rename_i p hpop6
+    obtain ⟨stack, μ₀, μ₁, μ₃, μ₄, μ₅, μ₆⟩ := p
+    split at hStep
+    · exact absurd hStep (by simp)
+    · rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      show accountPresentAt state'.accountMap a
+      have hPresES1 : accountPresentAt eS1.accountMap a := h_pres
+      exact EVM_call_preserves_account_at_a a hΞ f cost
+        μ₀ (.ofNat eS1.executionEnv.source) (.ofNat eS1.executionEnv.codeOwner)
+        μ₁ ⟨0⟩ eS1.executionEnv.weiValue μ₃ μ₄ μ₅ μ₆
+        eS1.executionEnv.perm eS1 state' x hPresES1 hCallRes
+
+/-- STATICCALL arm: EVM.step at STATICCALL preserves `accountPresentAt`. -/
+theorem EVM_step_STATICCALL_preserves_present
+    (a : AccountAddress) (hΞ : ΞPreservesAccountAt a)
+    (arg : Option (UInt256 × Nat))
+    (f cost : ℕ) (s s' : EVM.State)
+    (hStep : EVM.step (f + 1) cost (some (.STATICCALL, arg)) s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  simp only [EVM.step, Operation.STATICCALL, bind, Except.bind, pure, Except.pure] at hStep
+  set eS1 : EVM.State := { s with execLength := s.execLength + 1 } with heS1_def
+  split at hStep
+  · exact absurd hStep (by simp)
+  · rename_i p hpop6
+    obtain ⟨stack, μ₀, μ₁, μ₃, μ₄, μ₅, μ₆⟩ := p
+    split at hStep
+    · exact absurd hStep (by simp)
+    · rename_i p_call hCallRes
+      obtain ⟨x, state'⟩ := p_call
+      injection hStep with hEq
+      rw [← hEq]
+      show accountPresentAt state'.accountMap a
+      have hPresES1 : accountPresentAt eS1.accountMap a := h_pres
+      exact EVM_call_preserves_account_at_a a hΞ f cost
+        μ₀ (.ofNat eS1.executionEnv.codeOwner) μ₁ μ₁ ⟨0⟩ ⟨0⟩ μ₃ μ₄ μ₅ μ₆
+        false eS1 state' x hPresES1 hCallRes
+
 end Frame
 end EvmYul
