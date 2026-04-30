@@ -10911,5 +10911,93 @@ theorem tstore_preserves_present
         (acc.updateTransientStorage spos sval)) a
     exact accountPresentAt_insert self.accountMap _ a _ h
 
+/-- `binaryStateOp`-dispatched preservation: if the underlying op preserves
+presence at `a`, so does the dispatched binary state-op. Used for SSTORE
+and TSTORE. -/
+theorem binaryStateOp_preserves_present
+    {op : EvmYul.State .EVM → UInt256 → UInt256 → EvmYul.State .EVM}
+    {s s' : EVM.State} {a : AccountAddress}
+    (hOp : ∀ u v, accountPresentAt s.accountMap a →
+                  accountPresentAt (op s.toState u v).accountMap a)
+    (h : EVM.binaryStateOp op s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  unfold EVM.binaryStateOp at h
+  split at h
+  · simp only [Id_run_ok, Except.ok.injEq] at h
+    subst h
+    show accountPresentAt (op s.toState _ _).accountMap a
+    exact hOp _ _ h_pres
+  · exact absurd h (by simp)
+
+/-- The EvmYul SELFDESTRUCT body preserves `accountPresentAt` at any `a`.
+SELFDESTRUCT modifies σ via a chain of (at most two) inserts; each
+preserves presence by `accountPresentAt_insert`. The "delete" of
+codeOwner happens only in Υ's post-tx SD-set processing, NOT here. -/
+theorem selfDestruct_preserves_present
+    (s s' : EVM.State) (arg : Option (UInt256 × Nat)) (a : AccountAddress)
+    (h : EvmYul.step (.System .SELFDESTRUCT : Operation .EVM) arg s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  unfold EvmYul.step at h
+  simp only [Id.run] at h
+  -- Body destructures stack.pop and dispatches.
+  split at h
+  case _ stk_pop =>
+    rename_i s_top μ₁
+    split at h
+    case isTrue _ =>
+      -- createdAccounts.contains Iₐ branch.
+      simp only [Except.ok.injEq] at h
+      subst h
+      -- accountMap' is determined by the inner double-match.
+      -- accountMap projection passes through replaceStackAndIncrPC.
+      show accountPresentAt _ a
+      -- Iterate over the four sub-cases of the accountMap' definition.
+      split
+      · -- lookupAccount Iₐ = none
+        exact h_pres
+      · -- lookupAccount Iₐ = some σ_Iₐ
+        rename_i σ_Iₐ _
+        split
+        · -- lookupAccount r = none
+          split
+          · -- balance == 0
+            exact h_pres
+          · -- not zero — chain of two inserts
+            apply accountPresentAt_insert
+            apply accountPresentAt_insert
+            exact h_pres
+        · -- lookupAccount r = some σ_r
+          split
+          · -- r ≠ Iₐ
+            apply accountPresentAt_insert
+            apply accountPresentAt_insert
+            exact h_pres
+          · -- r = Iₐ
+            apply accountPresentAt_insert
+            apply accountPresentAt_insert
+            exact h_pres
+    case isFalse _ =>
+      simp only [Except.ok.injEq] at h
+      subst h
+      -- accountMap projection passes through replaceStackAndIncrPC.
+      show accountPresentAt _ a
+      split
+      · exact h_pres
+      · split
+        · split
+          · exact h_pres
+          · apply accountPresentAt_insert
+            apply accountPresentAt_insert
+            exact h_pres
+        · split
+          · apply accountPresentAt_insert
+            apply accountPresentAt_insert
+            exact h_pres
+          · exact h_pres
+  case _ _ =>
+    exact absurd h (by simp)
+
 end Frame
 end EvmYul
