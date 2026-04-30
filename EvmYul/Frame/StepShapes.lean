@@ -1295,4 +1295,135 @@ theorem step_SWAP3_shape
   subst hStep
   refine ⟨rfl, rfl, rfl⟩
 
+/-! ## Strong shape lemmas (with `accountMap` preservation)
+
+These mirror the corresponding non-strong shape lemmas but additionally
+expose `s'.accountMap = s.accountMap`. Used by Weth's withdraw-cascade
+threading to propagate the storage equation across non-storage opcodes
+(PCs 49..59 between SLOAD and SSTORE). -/
+
+theorem step_DUP1_shape_strong
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.DUP1, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd :: s.stack ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dup at hStep
+  rw [hStk] at hStep
+  simp only [show List.take 1 (hd :: tl) = [hd] from rfl,
+             List.length_singleton, ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, ?_, rfl, rfl⟩
+  show [hd].getLast! :: (hd :: tl) = hd :: s.stack
+  rw [hStk]; rfl
+
+theorem step_DUP2_shape_strong
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.DUP2, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd2 :: s.stack ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dup at hStep
+  rw [hStk] at hStep
+  simp only [show List.take 2 (hd1 :: hd2 :: tl) = [hd1, hd2] from rfl,
+             show ([hd1, hd2] : List UInt256).length = 2 from rfl,
+             ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, ?_, rfl, rfl⟩
+  show [hd1, hd2].getLast! :: (hd1 :: hd2 :: tl) = hd2 :: s.stack
+  rw [hStk]; rfl
+
+theorem step_DUP3_shape_strong
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 hd3 : UInt256) (tl : Stack UInt256)
+    (hStk : s.stack = hd1 :: hd2 :: hd3 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.DUP3, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd3 :: s.stack ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold dup at hStep
+  rw [hStk] at hStep
+  simp only [show List.take 3 (hd1 :: hd2 :: hd3 :: tl) = [hd1, hd2, hd3] from rfl,
+             show ([hd1, hd2, hd3] : List UInt256).length = 3 from rfl,
+             ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, ?_, rfl, rfl⟩
+  show [hd1, hd2, hd3].getLast! :: (hd1 :: hd2 :: hd3 :: tl) = hd3 :: s.stack
+  rw [hStk]; rfl
+
+theorem step_SWAP1_shape_strong
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.SWAP1, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = hd2 :: hd1 :: tl ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  unfold swap at hStep
+  rw [hStk] at hStep
+  simp only [show List.take (1 + 1) (hd1 :: hd2 :: tl) = [hd1, hd2] from rfl,
+             show List.drop (1 + 1) (hd1 :: hd2 :: tl) = tl from rfl,
+             show ([hd1, hd2] : List UInt256).length = 1 + 1 from rfl,
+             ↓reduceIte, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl, rfl⟩
+
+theorem step_PUSH_shape_strong
+    (s s' : EVM.State) (f' cost : ℕ) (op : Operation.POp)
+    (hOpNeq : op ≠ .PUSH0)
+    (v : UInt256) (n : Nat)
+    (hStep : EVM.step (f' + 1) cost (some (.Push op, some (v, n))) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat (n + 1) ∧
+    s'.stack = v :: s.stack ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  cases op
+  · exact absurd rfl hOpNeq
+  all_goals (
+    simp only [Id.run] at hStep
+    injection hStep with hStep
+    subst hStep
+    refine ⟨rfl, rfl, rfl, rfl⟩)
+
+theorem step_JUMPI_shape_strong
+    (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hStep : EVM.step (f' + 1) cost (some (.JUMPI, arg)) s = .ok s') :
+    s'.pc = (if hd2 != ⟨0⟩ then hd1 else s.pc + ⟨1⟩) ∧
+    s'.stack = tl ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  unfold EVM.step at hStep
+  simp only [bind, Except.bind, pure, Except.pure] at hStep
+  unfold EvmYul.step at hStep
+  simp only [Id.run] at hStep
+  rw [hStk] at hStep
+  simp only [Stack.pop2, Except.ok.injEq] at hStep
+  subst hStep
+  refine ⟨rfl, rfl, rfl, rfl⟩
+
 end EvmYul.Frame
