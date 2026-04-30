@@ -11247,5 +11247,154 @@ theorem EVM_step_preserves_present_no_create
     refine ⟨h_nc1, h_nc2, h_call, h_callcode, h_dcall, h_scall⟩
   exact EVM_step_handled_preserves_present op arg a f cost s s' h_handled hStep h_pres
 
+/-! ### §J.4 — X-loop preservation (Reachable + non-CREATE)
+
+X is the iterative driver. Each iteration calls EVM.step. Under a
+`Reachable` predicate that ensures decoded ops are never CREATE/CREATE2,
+the X-loop preserves `accountPresentAt`. -/
+
+/-- X preserves `accountPresentAt` at `a`, given:
+* `hΞ : ΞPreservesAccountAt a` for the call-family arms,
+* `Reachable` is closed under Z-state and step,
+* every Reachable state's decoded op is non-CREATE/CREATE2. -/
+theorem X_preserves_account_at_a
+    (a : AccountAddress) (hΞ : ΞPreservesAccountAt a)
+    (Reachable : EVM.State → Prop)
+    (hReach_Z : ∀ s : EVM.State, ∀ g : UInt256, Reachable s →
+        Reachable { s with gasAvailable := g })
+    (hReach_step : ∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
+        Reachable s')
+    (hReach_decodeSome : ∀ s : EVM.State, Reachable s →
+        ∃ pair, decode s.executionEnv.code s.pc = some pair)
+    (hReach_no_create : ∀ s : EVM.State, ∀ op : Operation .EVM, ∀ arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        op ≠ .CREATE ∧ op ≠ .CREATE2)
+    (fuel : ℕ) (validJumps : Array UInt256) (s : EVM.State)
+    (hReach : Reachable s)
+    (h_pres : accountPresentAt s.accountMap a) :
+    match EVM.X fuel validJumps s with
+    | .ok (.success s' _) => accountPresentAt s'.accountMap a
+    | _ => True := by
+  induction fuel generalizing s with
+  | zero =>
+    rw [show EVM.X 0 validJumps s = .error .OutOfFuel from rfl]
+    trivial
+  | succ f' IH =>
+    -- Mirror of X_inv_at_C_v0_holds.
+    show match EVM.X (f' + 1) validJumps s with
+      | .ok (.success s' _) => accountPresentAt s'.accountMap a
+      | _ => True
+    generalize hXres : EVM.X (f' + 1) validJumps s = xRes
+    cases xRes with
+    | error _ => trivial
+    | ok er =>
+      cases er with
+      | revert _ _ => trivial
+      | success finalState out =>
+        simp only [EVM.X] at hXres
+        split at hXres
+        case h_1 _ _ => exact absurd hXres (by simp)
+        case h_2 _ sZ cost₂ hZ =>
+          -- Z preserves accountMap (only changes gasAvailable).
+          have hZ_full :
+              sZ = { s with gasAvailable := sZ.gasAvailable } := by
+            simp only [bind, Except.bind, pure, Except.pure] at hZ
+            by_cases hc1 : s.gasAvailable.toNat <
+                memoryExpansionCost s ((decode s.executionEnv.code s.pc).getD (Operation.STOP, none)).1
+            · rw [if_pos hc1] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc1] at hZ
+            set s' : EVM.State :=
+              { s with gasAvailable := s.gasAvailable -
+                  UInt256.ofNat (memoryExpansionCost s
+                    ((decode s.executionEnv.code s.pc).getD (Operation.STOP, none)).1) } with hs'
+            by_cases hc2 : s'.gasAvailable.toNat <
+                C' s' ((decode s.executionEnv.code s.pc).getD (Operation.STOP, none)).1
+            · rw [if_pos hc2] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc2] at hZ
+            by_cases hc3 :
+                δ ((decode s.executionEnv.code s.pc).getD (Operation.STOP, none)).1 = none
+            · rw [if_pos hc3] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc3] at hZ
+            by_cases hc4 : s'.stack.length <
+                (δ ((decode s.executionEnv.code s.pc).getD (Operation.STOP, none)).1).getD 0
+            · rw [if_pos hc4] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc4] at hZ
+            (split_ifs at hZ;
+              first
+              | exact Except.noConfusion hZ
+              | (injection hZ with h_inj
+                 injection h_inj with h_inj1 _
+                 subst h_inj1
+                 rfl))
+          have hZ_accMap : sZ.accountMap = s.accountMap := by rw [hZ_full]
+          have hZ_eEnv : sZ.executionEnv = s.executionEnv := by rw [hZ_full]
+          have hZ_pc : sZ.pc = s.pc := by rw [hZ_full]
+          have hPresZ : accountPresentAt sZ.accountMap a := by rw [hZ_accMap]; exact h_pres
+          have hReachZ : Reachable sZ := by
+            rw [hZ_full]
+            exact hReach_Z s sZ.gasAvailable hReach
+          simp only [bind, Except.bind] at hXres
+          split at hXres
+          case h_1 _ _ => exact absurd hXres (by simp)
+          case h_2 _ sstep hStep =>
+            -- f' could be 0 or succ.
+            match f' with
+            | 0 =>
+              simp only [EVM.step] at hStep
+              exact absurd hStep (by simp)
+            | f'' + 1 =>
+              -- The X-loop's `instr` is destructured: `decode I_b sZ.pc |>.getD (.STOP, .none)`.
+              -- Extract its components.
+              set decRes : Operation .EVM × Option (UInt256 × Nat) :=
+                (decode s.executionEnv.code s.pc).getD (.STOP, .none) with hDecRes
+              obtain ⟨op, arg⟩ := decRes
+              -- decode at sZ.pc must be some (Reachable + decodeSome).
+              have hReachDec : ∃ pair, decode sZ.executionEnv.code sZ.pc = some pair :=
+                hReach_decodeSome sZ hReachZ
+              obtain ⟨pair, hDec⟩ := hReachDec
+              have hDecS : decode s.executionEnv.code s.pc = some pair := by
+                rw [← hZ_eEnv, ← hZ_pc]; exact hDec
+              have hPair : ((op, arg) : Operation .EVM × Option (UInt256 × Nat)) = pair := by
+                have : (decode s.executionEnv.code s.pc).getD (.STOP, .none) = pair := by
+                  rw [hDecS]; rfl
+                rw [show ((op, arg) : Operation .EVM × Option (UInt256 × Nat))
+                      = (decode s.executionEnv.code s.pc).getD (.STOP, .none) from hDecRes]
+                exact this
+              -- fetchInstr at sZ.
+              have hFetch : fetchInstr sZ.executionEnv sZ.pc = .ok (op, arg) := by
+                obtain ⟨op', arg'⟩ := pair
+                have hOpEq : op = op' := (Prod.mk.inj hPair).1
+                have hArgEq : arg = arg' := (Prod.mk.inj hPair).2
+                unfold fetchInstr; rw [hDec, hOpEq, hArgEq]; rfl
+              -- non-CREATE.
+              have h_no_create := hReach_no_create sZ op arg hReachZ hFetch
+              -- Bridge: hStep already has (some (op, arg)) since `instr` was destructured.
+              have hStep' : EVM.step (f'' + 1) cost₂ (some (op, arg)) sZ = .ok sstep := hStep
+              -- Per-step preservation.
+              have hPresStep : accountPresentAt sstep.accountMap a :=
+                EVM_step_preserves_present_no_create a hΞ op arg f'' cost₂ sZ sstep
+                  h_no_create hStep' hPresZ
+              -- Reachable propagates.
+              have hReachStep : Reachable sstep :=
+                hReach_step sZ sstep f'' cost₂ op arg hReachZ hFetch hStep'
+              -- H decides whether we recurse via X or halt.
+              split at hXres
+              case h_1 _ hH_none =>
+                -- Recurse via IH.
+                have hIH := IH sstep hReachStep hPresStep
+                rw [hXres] at hIH
+                exact hIH
+              case h_2 _ o hH_some =>
+                split at hXres
+                · -- REVERT path: produces `.revert`, contradicting outer .success.
+                  exact absurd hXres (by simp)
+                · -- non-REVERT halt: .ok (.success sstep o).
+                  simp only [Except.ok.injEq] at hXres
+                  injection hXres with hres _
+                  rw [← hres]
+                  exact hPresStep
+
 end Frame
 end EvmYul
