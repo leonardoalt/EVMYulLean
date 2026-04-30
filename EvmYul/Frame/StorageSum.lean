@@ -701,5 +701,146 @@ theorem storageSum_sstore_erase_eq
       updateStorage_storage_of_zero acc slot]
   exact storageSum_storage_erase_eq acc.storage slot oldVal h_old
 
+/-! ### `findD`-flavored bridge — matches SLOAD-strong's pushed-value shape
+
+The SLOAD-strong wrapper exposes the pushed value as
+`acc.storage.findD slot ⟨0⟩` (the EVM SSTORE-after-SLOAD semantics
+where SLOAD-of-missing returns `0`). The cascade-fact predicates that
+flow from a strong-walk SLOAD therefore carry a `findD slot ⟨0⟩ =
+oldVal` shape rather than the strict `find? slot = some oldVal` form.
+
+`storageSum_sstore_replace_eq_findD` is the `findD`-flavored sibling
+of `storageSum_sstore_replace_eq` / `storageSum_sstore_erase_eq`,
+proving the **`≤`-form** (sufficient for invariant preservation) under
+a `findD slot ⟨0⟩ = oldVal` hypothesis and the bound `newVal ≤ oldVal`.
+
+The proof case-splits on `find? slot`:
+
+* `some oldVal'`: `findD = oldVal'`, so `oldVal' = oldVal`. Reduces to
+  the strict `_replace_eq` / `_erase_eq` law (depending on `newVal == 0`).
+* `none`: `findD = ⟨0⟩`, so `oldVal = ⟨0⟩` and the bound forces `newVal
+  = ⟨0⟩`. The SSTORE-erase post-state's storage is `acc.storage.erase
+  slot`; with `slot` absent, the erase is a `toList`-no-op, so
+  `storageSum` is preserved (`new = old`). -/
+
+/-- Erase-of-absent-slot preserves the storage foldl-sum: when `slot`
+is not present, the `toList`-filter drops nothing. Used for the
+`find? slot = none` case in the `findD`-flavored bridge. -/
+private theorem storageSum_storage_erase_eq_of_find?_none
+    (s : Storage) (k : UInt256)
+    (h : s.find? k = none) :
+    (s.erase k).foldl (fun a _ v => a + v.toNat) 0
+      = s.foldl (fun a _ v => a + v.toNat) 0 := by
+  rw [storageSum_foldl_eq_sum s, storageSum_foldl_eq_sum (s.erase k)]
+  rw [storage_erase_toList_filter]
+  -- Show the filter keeps the entire list (no entry has compare k ·.1 = .eq).
+  have hAll : ∀ p ∈ s.toList,
+      decide (compare k p.1 ≠ .eq) = true := by
+    intro p hp
+    have hpEq : compare k p.1 ≠ .eq := by
+      intro hkp
+      -- compare k p.1 = .eq means key compare-eq, so find? k must succeed.
+      -- Use the storage's order/sortedness to derive a contradiction.
+      have hpIn : p ∈ s.toList := hp
+      have hpkey : compare p.1 k = .eq := by
+        rw [Std.OrientedCmp.eq_comm]; exact hkp
+      -- find? k goes through the underlying RBMap via `findCore?`; with the
+      -- key ordering and a member with cmp-eq, find? returns `some _`.
+      have hp_find : s.find? k = some p.2 := by
+        -- `find?_some` characterizes find? = some at the RBSet level.
+        -- We use Batteries.RBMap.findEntry?_eq_some (which is equivalent).
+        -- Construct via mem_toList → mem and ordered + eq key.
+        unfold Batteries.RBMap.find?
+        unfold Batteries.RBMap.findEntry?
+        -- Reduce to RBSet.findP?; need to find a unique element with cmp-eq.
+        -- `RBSet.find?_some` is the cleanest tool here, but findEntry?
+        -- is easier: it returns the first matching entry by cut.
+        -- Strategy: use Batteries.RBMap.find?_some_iff via the ordered set.
+        have hSorted := Batteries.RBMap.toList_sorted (t := s)
+        -- Build the find? = some using the ordered uniqueness. Use the
+        -- simpler `find?_some_iff_findCore?_some` chain.
+        -- Actually: use Ordered.find?_some on the underlying RBSet.
+        have hOrd : s.1.Ordered (Ordering.byKey Prod.fst compare) := s.2.out.1
+        have hMem : p ∈ s.1 := Batteries.RBNode.mem_toList.mp hpIn
+        have hCut_eq :
+            (Ordering.byKey Prod.fst compare (p.1, p.2) p) = .eq := by
+          unfold Ordering.byKey; simp
+        -- The cut for `find? k` is `fun e => compare k e.1`. We need to
+        -- show `find? (cut := compare k ·.1) s.1 = some p`.
+        have hCut_p : (fun e : UInt256 × UInt256 => compare k e.1) p = .eq := by
+          show compare k p.1 = .eq; exact hkp
+        have h_findR :
+            (s.1.find? (fun e : UInt256 × UInt256 => compare k e.1)) = some p := by
+          apply (hOrd.find?_some
+            (cut := fun e : UInt256 × UInt256 => compare k e.1)).mpr
+          exact ⟨hMem, hCut_p⟩
+        show (s.1.find? (fun e : UInt256 × UInt256 => compare k e.1)).map _
+              = some p.2
+        rw [h_findR]
+        rfl
+      rw [h] at hp_find
+      cases hp_find
+    simp [hpEq]
+  -- Filter with all-true predicate equals the original list.
+  rw [filter_eq_self_of_all hAll]
+
+/-- **`findD`-flavored SSTORE bridge** (`≤`-form). Given the
+`findD slot ⟨0⟩ = oldVal` shape produced by SLOAD-strong walks,
+plus the bound `newVal ≤ oldVal`, the post-SSTORE storage-sum is
+bounded by the pre-SSTORE storage-sum at `C`. Uniform in the
+`newVal == 0` branch (erase) and `newVal ≠ 0` branch (replace). -/
+theorem storageSum_sstore_replace_eq_findD
+    (σ : AccountMap .EVM) (C : AccountAddress) (slot newVal oldVal : UInt256)
+    (acc : Account .EVM)
+    (h_find : σ.find? C = some acc)
+    (h_findD : acc.storage.findD slot ⟨0⟩ = oldVal)
+    (h_le : newVal.toNat ≤ oldVal.toNat) :
+    storageSum (σ.insert C (acc.updateStorage slot newVal)) C
+      ≤ storageSum σ C := by
+  -- Case-split on `find? slot`.
+  unfold Batteries.RBMap.findD at h_findD
+  cases h_find_slot : acc.storage.find? slot with
+  | some oldVal' =>
+    rw [h_find_slot, Option.getD] at h_findD
+    subst h_findD
+    -- Decide on newVal == 0.
+    by_cases hNewZero : (newVal == default) = true
+    · -- Erase branch: post-storage is `acc.storage.erase slot`.
+      have h_post_storage :
+          (acc.updateStorage slot newVal).storage = acc.storage.erase slot := by
+        unfold Account.updateStorage; simp [hNewZero]
+      rw [storageSum_insert_at_C, h_post_storage,
+          storageSum_of_find?_some σ C acc h_find]
+      have h_delta := storageSum_storage_erase_eq acc.storage slot oldVal' h_find_slot
+      omega
+    · -- Replace branch.
+      have hNonZero : (newVal == default) = false := by
+        cases h : (newVal == default) with
+        | true => exact absurd h hNewZero
+        | false => rfl
+      have h_delta := storageSum_sstore_replace_eq σ C slot newVal oldVal' hNonZero
+                        acc h_find h_find_slot
+      omega
+  | none =>
+    rw [h_find_slot, Option.getD] at h_findD
+    -- h_findD : (⟨0⟩ : UInt256) = oldVal.
+    subst h_findD
+    -- newVal.toNat ≤ ⟨0⟩.toNat = 0, so newVal = ⟨0⟩.
+    have h0 : (⟨0⟩ : UInt256).toNat = 0 := rfl
+    rw [h0] at h_le
+    have hNewZero : newVal.toNat = 0 := Nat.le_zero.mp h_le
+    have hNewVal_zero : newVal = ⟨0⟩ := by
+      cases newVal with
+      | mk v =>
+        simp [UInt256.toNat] at hNewZero
+        cases v
+        simp_all
+    subst hNewVal_zero
+    -- Post-state storage is `acc.storage.erase slot`; with slot absent,
+    -- the storage foldl-sum is preserved.
+    rw [storageSum_insert_at_C, storageSum_of_find?_some σ C acc h_find,
+        updateStorage_storage_of_zero acc slot]
+    rw [storageSum_storage_erase_eq_of_find?_none acc.storage slot h_find_slot]
+
 end Frame
 end EvmYul
