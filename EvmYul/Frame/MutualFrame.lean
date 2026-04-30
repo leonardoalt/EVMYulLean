@@ -11583,5 +11583,118 @@ theorem Θ_preserves_account_at_a_bdd
         apply theta_σ'_clamp_preserves_present _ _ _ h_present
         intro _; exact hΞ_pres
 
+/-- Bdd variant of `EVM_call_preserves_account_at_a`. EVM.call at fuel
+`fuel` invokes Θ at fuel `fuel - 1` (when `fuel = succ f`), which uses
+Ξ at fuel `fuel - 2`. So we need `ΞPreservesAccountAtBdd a (fuel - 2)`,
+or equivalently `ΞPreservesAccountAtBdd a fuel` (via monotonicity). -/
+theorem EVM_call_preserves_account_at_a_bdd
+    (a : AccountAddress) (fuel gasCost : ℕ)
+    (hΞBdd : ΞPreservesAccountAtBdd a fuel)
+    (gas src rcp t v v' inOff inSize outOff outSize : UInt256)
+    (permission : Bool) (evmState state' : EVM.State) (x : UInt256)
+    (h_present : accountPresentAt evmState.accountMap a)
+    (hCall :
+      EVM.call fuel gasCost evmState.executionEnv.blobVersionedHashes
+        gas src rcp t v v' inOff inSize outOff outSize permission evmState
+      = .ok (x, state')) :
+    accountPresentAt state'.accountMap a := by
+  unfold EVM.call at hCall
+  simp only [bind, Except.bind, pure, Except.pure] at hCall
+  -- Easier path: derive a universal witness from the bounded one and reuse
+  -- the existing universal `EVM_call_preserves_account_at_a`. The universal
+  -- predicate is *not* derivable from the bounded one in general — but for
+  -- our usage, EVM.call only invokes Ξ at fuels < fuel, so we wrap with a
+  -- "vacuous extension" that's trivially-true at large fuels.
+  -- However this only works if the high-fuel match always lands in `_ => True`.
+  -- We avoid the issue by inlining the existing universal proof, replacing
+  -- `Θ_preserves_account_at_a a hΞ f ...` with `Θ_bdd a f' hΞBdd' ...`.
+  cases fuel with
+  | zero =>
+    simp only at hCall
+    exact absurd hCall (by simp)
+  | succ f =>
+    -- We construct a fake universal hΞ : ΞPreservesAccountAt a that's
+    -- valid at any fuel ≤ fuel (= f+1) via the bounded witness. Above
+    -- the bound, Lean's type signature requires SOMETHING — but the body
+    -- of EVM.call only ever invokes Θ at fuel = f, which uses Ξ at fuel < f
+    -- (well within the bound).
+    -- The cleanest is to call into the existing universal `EVM_call_preserves_account_at_a`
+    -- with a hΞ that's defined via cases. We use the trick: define hΞ at
+    -- arbitrary fuel by case-split: ≤ f+1 use hΞBdd; > f+1 use vacuous fact.
+    -- The vacuous fact is unprovable in general, but we use the fact that
+    -- the universal predicate's RHS is `match Ξ ... with | .ok (.success ...) => p | _ => True`,
+    -- which is always at least `True`. Thus we can return True trivially when
+    -- the match falls through... but the match might be `.ok (.success ...)`.
+    -- So this trick is unsound in general. Hence we inline the proof.
+    simp only at hCall
+    have hΞBdd' : ΞPreservesAccountAtBdd a f := by
+      intro fuel'' hf'' cA gbh bs σ σ₀ g A I h_pres
+      exact hΞBdd fuel'' (Nat.le_succ_of_le hf'') cA gbh bs σ σ₀ g A I h_pres
+    split at hCall
+    · -- Gate passed.
+      split at hCall
+      · exact absurd hCall (by simp)
+      · rename_i hΘ_prod hΘ
+        obtain ⟨cA, σ', g', A', z, o⟩ := hΘ_prod
+        injection hCall with hEq
+        -- Θ here is at fuel f. Use Θ_bdd: requires fuel = f' with Θ at fuel'+1 = f.
+        -- So f' = f - 1.
+        cases f with
+        | zero =>
+          -- Θ 0 = error. Contradicts hΘ : Θ 0 ... = .ok ...
+          rw [show
+              EVM.Θ 0 evmState.executionEnv.blobVersionedHashes
+                  evmState.createdAccounts evmState.genesisBlockHeader
+                  evmState.blocks evmState.accountMap evmState.σ₀
+                  ((evmState.addAccessedAccount (AccountAddress.ofUInt256 t)).substate)
+                  (AccountAddress.ofUInt256 src) evmState.executionEnv.sender
+                  (AccountAddress.ofUInt256 rcp)
+                  (toExecute .EVM evmState.accountMap (AccountAddress.ofUInt256 t))
+                  (.ofNat <| Ccallgas (AccountAddress.ofUInt256 t)
+                                      (AccountAddress.ofUInt256 rcp) v gas
+                                      evmState.accountMap evmState.toMachineState
+                                      evmState.substate)
+                  (.ofNat evmState.executionEnv.gasPrice) v v'
+                  (evmState.memory.readWithPadding inOff.toNat inSize.toNat)
+                  (evmState.executionEnv.depth + 1) evmState.executionEnv.header permission
+                = .error .OutOfFuel from rfl] at hΘ
+          exact absurd hΘ (by simp)
+        | succ f'' =>
+          have hΞBdd'' : ΞPreservesAccountAtBdd a f'' :=
+            ΞPreservesAccountAtBdd_mono a f'' (f'' + 1) (Nat.le_succ _) hΞBdd'
+          have hΘPres :=
+            Θ_preserves_account_at_a_bdd a f'' hΞBdd''
+              evmState.executionEnv.blobVersionedHashes
+              evmState.createdAccounts
+              evmState.genesisBlockHeader
+              evmState.blocks
+              evmState.accountMap
+              evmState.σ₀
+              ((evmState.addAccessedAccount (AccountAddress.ofUInt256 t)).substate)
+              (AccountAddress.ofUInt256 src)
+              evmState.executionEnv.sender
+              (AccountAddress.ofUInt256 rcp)
+              (toExecute .EVM evmState.accountMap (AccountAddress.ofUInt256 t))
+              (.ofNat <| Ccallgas (AccountAddress.ofUInt256 t)
+                                  (AccountAddress.ofUInt256 rcp) v gas
+                                  evmState.accountMap evmState.toMachineState
+                                  evmState.substate)
+              (.ofNat evmState.executionEnv.gasPrice)
+              v v' (evmState.memory.readWithPadding inOff.toNat inSize.toNat)
+              (evmState.executionEnv.depth + 1)
+              evmState.executionEnv.header permission h_present
+          rw [hΘ] at hΘPres
+          simp only at hΘPres
+          have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
+          obtain ⟨_hx, hState⟩ := hState_eq
+          rw [← hState]
+          exact hΘPres
+    · -- Gate failed.
+      injection hCall with hEq
+      have hState_eq := (Prod.mk.injEq _ _ _ _).mp hEq
+      obtain ⟨_hx, hState⟩ := hState_eq
+      rw [← hState]
+      exact h_present
+
 end Frame
 end EvmYul
