@@ -11396,5 +11396,45 @@ theorem X_preserves_account_at_a
                   rw [← hres]
                   exact hPresStep
 
+/-! ### §J.5 — Bounded variant for strong-induction closure
+
+The universal `ΞPreservesAccountAt a` cannot be discharged by strong
+induction on its own type signature (the IH at outer fuel `n+1` only
+gives us the predicate at fuels `< n+1`, which doesn't compose into a
+universal predicate).
+
+Solution: a bounded predicate `ΞPreservesAccountAtBdd a maxFuel`.
+Strong induction on `n` builds `ΞPreservesAccountAtBdd a n` for every
+`n`. The inner X-loop / call-arm chain only invokes `Ξ` at fuels strictly
+less than the outer fuel, so the bounded witness suffices. -/
+
+/-- Per-fuel-bounded variant of `ΞPreservesAccountAt`. -/
+def ΞPreservesAccountAtBdd (a : AccountAddress) (maxFuel : ℕ) : Prop :=
+  ∀ (fuel : ℕ), fuel ≤ maxFuel →
+    ∀ (cA : RBSet AccountAddress compare)
+      (gbh : BlockHeader) (bs : ProcessedBlocks)
+      (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+      (I : ExecutionEnv .EVM),
+    accountPresentAt σ a →
+    match EVM.Ξ fuel cA gbh bs σ σ₀ g A I with
+    | .ok (.success (_, σ', _, _) _) => accountPresentAt σ' a
+    | _ => True
+
+/-- A `ΞPreservesAccountAt a` witness gives `ΞPreservesAccountAtBdd a maxFuel`
+at any `maxFuel`. -/
+theorem ΞPreservesAccountAtBdd_of_witness
+    (a : AccountAddress) (h : ΞPreservesAccountAt a) (maxFuel : ℕ) :
+    ΞPreservesAccountAtBdd a maxFuel := by
+  intro fuel _hf cA gbh bs σ σ₀ g A I h_pres
+  exact h fuel cA gbh bs σ σ₀ g A I h_pres
+
+/-- Monotonicity: a Bdd witness at `a` implies the same at any smaller bound. -/
+theorem ΞPreservesAccountAtBdd_mono
+    (a : AccountAddress) (m n : ℕ) (hmn : m ≤ n)
+    (h : ΞPreservesAccountAtBdd a n) :
+    ΞPreservesAccountAtBdd a m := by
+  intro fuel hf
+  exact h fuel (Nat.le_trans hf hmn)
+
 end Frame
 end EvmYul
