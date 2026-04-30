@@ -894,6 +894,25 @@ theorem step_SUB_at_pc
     s'.executionEnv = s.executionEnv := by
   step_at_pc_via step_SUB_shape with hd1, hd2, tl, hStk, hStep
 
+/-- `step_SUB_shape_strong` at a known PC: exposes the pushed value as
+`UInt256.sub hd1 hd2` (top - second-from-top) and proves `accountMap`
+preservation. -/
+theorem step_SUB_at_pc_strong
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.SUB, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = UInt256.sub hd1 hd2 :: tl ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  step_at_pc_via step_SUB_shape_strong with hd1, hd2, tl, hStk, hStep
+
 /-- `step_MUL_shape` at a known PC. -/
 theorem step_MUL_at_pc
     (s s' : EVM.State) (f' cost : ℕ)
@@ -973,6 +992,25 @@ theorem step_LT_at_pc
     (∃ v, s'.stack = v :: tl) ∧
     s'.executionEnv = s.executionEnv := by
   step_at_pc_via step_LT_shape with hd1, hd2, tl, hStk, hStep
+
+/-- `step_LT_shape_strong` at a known PC: exposes the pushed value as
+`UInt256.lt hd1 hd2` (`1` if top < second, else `0`) and proves
+`accountMap` preservation. -/
+theorem step_LT_at_pc_strong
+    (s s' : EVM.State) (f' cost : ℕ)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (expArg : Option (UInt256 × Nat))
+    (hd1 hd2 : UInt256) (tl : Stack UInt256) (hStk : s.stack = hd1 :: hd2 :: tl)
+    (hFetch : fetchInstr s.executionEnv s.pc = .ok (op, arg))
+    (hCode : s.executionEnv.code = code)
+    (hpc : s.pc = UInt256.ofNat N)
+    (hDecode : decode code (UInt256.ofNat N) = some (.LT, expArg))
+    (hStep : EVM.step (f' + 1) cost (some (op, arg)) s = .ok s') :
+    s'.pc = s.pc + UInt256.ofNat 1 ∧
+    s'.stack = UInt256.lt hd1 hd2 :: tl ∧
+    s'.executionEnv = s.executionEnv ∧
+    s'.accountMap = s.accountMap := by
+  step_at_pc_via step_LT_shape_strong with hd1, hd2, tl, hStk, hStep
 
 /-- `step_GT_shape` at a known PC. -/
 theorem step_GT_at_pc
