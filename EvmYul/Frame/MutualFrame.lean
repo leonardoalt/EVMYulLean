@@ -11971,5 +11971,105 @@ theorem X_preserves_account_at_a_bdd
                   rw [← hres]
                   exact hPresStep
 
+/-! ### §J.6 — Universal Ξ closure via strong induction
+
+Strong induction on fuel discharges `ΞPreservesAccountAt a` universally.
+At outer fuel `f+1`, the strong IH gives us `ΞPreservesAccountAtBdd a f`
+(via combining IH at all fuels ≤ f). Plug into `X_preserves_bdd` and
+unfold Ξ. -/
+
+theorem Ξ_preserves_account_at_a_of_Reachable
+    (a : AccountAddress)
+    (Reachable : EVM.State → Prop)
+    (hReach_Z : ∀ s : EVM.State, ∀ g : UInt256, Reachable s →
+        Reachable { s with gasAvailable := g })
+    (hReach_step : ∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
+        Reachable s')
+    (hReach_decodeSome : ∀ s : EVM.State, Reachable s →
+        ∃ pair, decode s.executionEnv.code s.pc = some pair)
+    (hReach_no_create : ∀ s : EVM.State, ∀ op : Operation .EVM, ∀ arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        op ≠ .CREATE ∧ op ≠ .CREATE2)
+    (hReachInit : ∀ (cA : RBSet AccountAddress compare)
+                    (gbh : BlockHeader) (bs : ProcessedBlocks)
+                    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+                    (I : ExecutionEnv .EVM),
+        Reachable
+          { (default : EVM.State) with
+              accountMap := σ
+              σ₀ := σ₀
+              executionEnv := I
+              substate := A
+              createdAccounts := cA
+              gasAvailable := g
+              blocks := bs
+              genesisBlockHeader := gbh }) :
+    ΞPreservesAccountAt a := by
+  intro fuel
+  induction fuel using Nat.strong_induction_on with
+  | _ n IH =>
+    intro cA gbh bs σ σ₀ g A I h_present
+    match n with
+    | 0 =>
+      rw [show EVM.Ξ 0 cA gbh bs σ σ₀ g A I = .error .OutOfFuel from rfl]
+      trivial
+    | f + 1 =>
+      -- Build ΞPreservesAccountAtBdd a f from strong IH at fuels ≤ f.
+      have hΞBdd : ΞPreservesAccountAtBdd a f := by
+        intro fuel' hf cA' gbh' bs' σ' σ₀' g' A' I' h_pres'
+        have hlt : fuel' < f + 1 := Nat.lt_succ_of_le hf
+        exact IH fuel' hlt cA' gbh' bs' σ' σ₀' g' A' I' h_pres'
+      -- Reduce Ξ (f+1) via X.
+      have hΞ_eq :
+          EVM.Ξ (f + 1) cA gbh bs σ σ₀ g A I
+            = (do
+                let defState : EVM.State := default
+                let freshEvmState : EVM.State :=
+                  { defState with
+                      accountMap := σ
+                      σ₀ := σ₀
+                      executionEnv := I
+                      substate := A
+                      createdAccounts := cA
+                      gasAvailable := g
+                      blocks := bs
+                      genesisBlockHeader := gbh }
+                let result ← EVM.X f (D_J I.code ⟨0⟩) freshEvmState
+                match result with
+                | .success evmState' o =>
+                  let finalGas := evmState'.gasAvailable
+                  .ok (ExecutionResult.success
+                    (evmState'.createdAccounts, evmState'.accountMap,
+                     finalGas, evmState'.substate) o)
+                | .revert g' o => .ok (ExecutionResult.revert g' o)) := rfl
+      rw [hΞ_eq]
+      simp only [bind, Except.bind]
+      generalize hXres : EVM.X f (D_J I.code ⟨0⟩) _ = xRes
+      set freshState : EVM.State :=
+        { (default : EVM.State) with
+            accountMap := σ
+            σ₀ := σ₀
+            executionEnv := I
+            substate := A
+            createdAccounts := cA
+            gasAvailable := g
+            blocks := bs
+            genesisBlockHeader := gbh } with hFresh_def
+      have h_pres_fresh : accountPresentAt freshState.accountMap a := h_present
+      have hReachFresh : Reachable freshState :=
+        hReachInit cA gbh bs σ σ₀ g A I
+      have hX := X_preserves_account_at_a_bdd a Reachable hReach_Z hReach_step
+        hReach_decodeSome hReach_no_create f hΞBdd (D_J I.code ⟨0⟩) freshState
+        hReachFresh h_pres_fresh
+      rw [hXres] at hX
+      cases xRes with
+      | error _ => trivial
+      | ok er =>
+        cases er with
+        | success s' out => exact hX
+        | revert _ _ => trivial
+
 end Frame
 end EvmYul
