@@ -12415,5 +12415,130 @@ theorem EVM_call_preserves_account_at_a_of_Reachable
     fuel gasCost gas src rcp t v v' inOff inSize outOff outSize
     permission evmState state' x h_present hCall
 
+/-! ### §J.8 — `Ξ` preservation under a C-restricted Reachable
+
+Variant of `Ξ_preserves_account_at_a_of_Reachable_op_conditional` whose
+`hReachInit` is restricted to executions with `I.codeOwner = C`.
+Combined with an external witness `hΞ_other` covering Ξ invocations
+on other contracts (`I.codeOwner ≠ C`), the proof concludes the
+universal `ΞPreservesAccountAt a`.
+
+This unblocks contract-specific `Reachable` predicates that depend on
+the executing contract's bytecode (e.g. `WethReachable` requires
+`I.codeOwner = C` to even type-check the `WethTrace` disjuncts):
+the `hReachInit` closure only needs to be discharged for `I.codeOwner = C`
+states, while the non-C case is delegated to `hΞ_other`.
+
+The proof mirrors `Ξ_preserves_account_at_a_of_Reachable_op_conditional`
+but case-splits on `I.codeOwner = C` at each fuel level: the C arm
+uses the Reachable-based discharge as before; the non-C arm dispatches
+directly to `hΞ_other`. -/
+theorem Ξ_preserves_account_at_a_of_Reachable_for_C
+    (C a : AccountAddress)
+    (Reachable : EVM.State → Prop)
+    (hReach_Z : ∀ s : EVM.State, ∀ g : UInt256, Reachable s →
+        Reachable { s with gasAvailable := g })
+    (hReach_step : ∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ op arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
+        op ≠ .RETURN → op ≠ .REVERT → op ≠ .STOP → op ≠ .SELFDESTRUCT →
+        Reachable s')
+    (hReach_decodeSome : ∀ s : EVM.State, Reachable s →
+        ∃ pair, decode s.executionEnv.code s.pc = some pair)
+    (hReach_no_create : ∀ s : EVM.State, ∀ op : Operation .EVM, ∀ arg, Reachable s →
+        fetchInstr s.executionEnv s.pc = .ok (op, arg) →
+        op ≠ .CREATE ∧ op ≠ .CREATE2)
+    (hReachInit : ∀ (cA : RBSet AccountAddress compare)
+                    (gbh : BlockHeader) (bs : ProcessedBlocks)
+                    (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+                    (I : ExecutionEnv .EVM),
+        I.codeOwner = C →
+        Reachable
+          { (default : EVM.State) with
+              accountMap := σ
+              σ₀ := σ₀
+              executionEnv := I
+              substate := A
+              createdAccounts := cA
+              gasAvailable := g
+              blocks := bs
+              genesisBlockHeader := gbh })
+    (hΞ_other : ∀ (fuel : ℕ) (cA : RBSet AccountAddress compare)
+                  (gbh : BlockHeader) (bs : ProcessedBlocks)
+                  (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
+                  (I : ExecutionEnv .EVM),
+        I.codeOwner ≠ C →
+        accountPresentAt σ a →
+        match EVM.Ξ fuel cA gbh bs σ σ₀ g A I with
+        | .ok (.success (_, σ', _, _) _) => accountPresentAt σ' a
+        | _ => True) :
+    ΞPreservesAccountAt a := by
+  intro fuel
+  induction fuel using Nat.strong_induction_on with
+  | _ n IH =>
+    intro cA gbh bs σ σ₀ g A I h_present
+    -- Case-split on I.codeOwner = C: the non-C arm delegates to hΞ_other.
+    by_cases hCO : I.codeOwner = C
+    · -- C arm: mirror op-conditional variant body.
+      match n with
+      | 0 =>
+        rw [show EVM.Ξ 0 cA gbh bs σ σ₀ g A I = .error .OutOfFuel from rfl]
+        trivial
+      | f + 1 =>
+        have hΞBdd : ΞPreservesAccountAtBdd a f := by
+          intro fuel' hf cA' gbh' bs' σ' σ₀' g' A' I' h_pres'
+          have hlt : fuel' < f + 1 := Nat.lt_succ_of_le hf
+          exact IH fuel' hlt cA' gbh' bs' σ' σ₀' g' A' I' h_pres'
+        have hΞ_eq :
+            EVM.Ξ (f + 1) cA gbh bs σ σ₀ g A I
+              = (do
+                  let defState : EVM.State := default
+                  let freshEvmState : EVM.State :=
+                    { defState with
+                        accountMap := σ
+                        σ₀ := σ₀
+                        executionEnv := I
+                        substate := A
+                        createdAccounts := cA
+                        gasAvailable := g
+                        blocks := bs
+                        genesisBlockHeader := gbh }
+                  let result ← EVM.X f (D_J I.code ⟨0⟩) freshEvmState
+                  match result with
+                  | .success evmState' o =>
+                    let finalGas := evmState'.gasAvailable
+                    .ok (ExecutionResult.success
+                      (evmState'.createdAccounts, evmState'.accountMap,
+                       finalGas, evmState'.substate) o)
+                  | .revert g' o => .ok (ExecutionResult.revert g' o)) := rfl
+        rw [hΞ_eq]
+        simp only [bind, Except.bind]
+        generalize hXres : EVM.X f (D_J I.code ⟨0⟩) _ = xRes
+        set freshState : EVM.State :=
+          { (default : EVM.State) with
+              accountMap := σ
+              σ₀ := σ₀
+              executionEnv := I
+              substate := A
+              createdAccounts := cA
+              gasAvailable := g
+              blocks := bs
+              genesisBlockHeader := gbh } with hFresh_def
+        have h_pres_fresh : accountPresentAt freshState.accountMap a := h_present
+        have hReachFresh : Reachable freshState :=
+          hReachInit cA gbh bs σ σ₀ g A I hCO
+        have hX := X_preserves_account_at_a_bdd_op_conditional a Reachable hReach_Z hReach_step
+          hReach_decodeSome hReach_no_create f hΞBdd (D_J I.code ⟨0⟩) freshState
+          hReachFresh h_pres_fresh
+        rw [hXres] at hX
+        cases xRes with
+        | error _ => trivial
+        | ok er =>
+          cases er with
+          | success s' out => exact hX
+          | revert _ _ => trivial
+    · -- non-C arm: dispatch directly to hΞ_other.
+      exact hΞ_other n cA gbh bs σ σ₀ g A I hCO h_present
+
 end Frame
 end EvmYul
