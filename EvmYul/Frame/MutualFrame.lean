@@ -11216,5 +11216,36 @@ theorem EVM_step_STATICCALL_preserves_present
         μ₀ (.ofNat eS1.executionEnv.codeOwner) μ₁ μ₁ ⟨0⟩ ⟨0⟩ μ₃ μ₄ μ₅ μ₆
         false eS1 state' x hPresES1 hCallRes
 
+/-- **EVM.step preserves accountPresentAt for any non-CREATE op.**
+
+Combines the handled lemma with the 4 CALL-family arms. The CREATE/CREATE2
+arms are excluded by hypothesis `h_no_create`; for those, a separate
+`Λ_preserves_account_at_a` witness would be needed. -/
+theorem EVM_step_preserves_present_no_create
+    (a : AccountAddress) (hΞ : ΞPreservesAccountAt a)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (f cost : ℕ) (s s' : EVM.State)
+    (h_no_create : op ≠ .CREATE ∧ op ≠ .CREATE2)
+    (hStep : EVM.step (f + 1) cost (some (op, arg)) s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  obtain ⟨h_nc1, h_nc2⟩ := h_no_create
+  by_cases h_call : op = .CALL
+  · subst h_call
+    exact EVM_step_CALL_preserves_present a hΞ arg f cost s s' hStep h_pres
+  by_cases h_callcode : op = .CALLCODE
+  · subst h_callcode
+    exact EVM_step_CALLCODE_preserves_present a hΞ arg f cost s s' hStep h_pres
+  by_cases h_dcall : op = .DELEGATECALL
+  · subst h_dcall
+    exact EVM_step_DELEGATECALL_preserves_present a hΞ arg f cost s s' hStep h_pres
+  by_cases h_scall : op = .STATICCALL
+  · subst h_scall
+    exact EVM_step_STATICCALL_preserves_present a hΞ arg f cost s s' hStep h_pres
+  -- Otherwise: handled by EvmYul.step.
+  have h_handled : handledByEvmYulStep op := by
+    refine ⟨h_nc1, h_nc2, h_call, h_callcode, h_dcall, h_scall⟩
+  exact EVM_step_handled_preserves_present op arg a f cost s s' h_handled hStep h_pres
+
 end Frame
 end EvmYul
