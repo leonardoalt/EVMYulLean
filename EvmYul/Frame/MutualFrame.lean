@@ -10930,6 +10930,29 @@ theorem binaryStateOp_preserves_present
     exact hOp _ _ h_pres
   · exact absurd h (by simp)
 
+/-- SSTORE preserves `accountPresentAt` through EvmYul.step. -/
+theorem evmYul_step_SSTORE_preserves_present
+    (s s' : EVM.State) (arg : Option (UInt256 × Nat)) (a : AccountAddress)
+    (h : EvmYul.step (.StackMemFlow .SSTORE : Operation .EVM) arg s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  unfold EvmYul.step at h
+  simp only [Id.run] at h
+  -- Body dispatches to dispatchBinaryStateOp .EVM EvmYul.State.sstore.
+  exact binaryStateOp_preserves_present
+    (fun u v hP => sstore_preserves_present s.toState u v a hP) h h_pres
+
+/-- TSTORE preserves `accountPresentAt` through EvmYul.step. -/
+theorem evmYul_step_TSTORE_preserves_present
+    (s s' : EVM.State) (arg : Option (UInt256 × Nat)) (a : AccountAddress)
+    (h : EvmYul.step (.StackMemFlow .TSTORE : Operation .EVM) arg s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  unfold EvmYul.step at h
+  simp only [Id.run] at h
+  exact binaryStateOp_preserves_present
+    (fun u v hP => tstore_preserves_present s.toState u v a hP) h h_pres
+
 /-- The EvmYul SELFDESTRUCT body preserves `accountPresentAt` at any `a`.
 SELFDESTRUCT modifies σ via a chain of (at most two) inserts; each
 preserves presence by `accountPresentAt_insert`. The "delete" of
@@ -10998,6 +11021,33 @@ theorem selfDestruct_preserves_present
           · exact h_pres
   case _ _ =>
     exact absurd h (by simp)
+
+/-- **Master lemma: `EvmYul.step` preserves `accountPresentAt` for any
+handled op.** Combines the strict-op path (accountMap unchanged), the
+SSTORE/TSTORE paths (insert at codeOwner), and the SELFDESTRUCT path. -/
+theorem evmYul_step_preserves_present
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State) (a : AccountAddress)
+    (h_handled : handledByEvmYulStep op)
+    (h : EvmYul.step op arg s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  -- Decide whether op is strict, SSTORE, TSTORE, or SELFDESTRUCT.
+  by_cases h_sstore : op = .StackMemFlow .SSTORE
+  · subst h_sstore
+    exact evmYul_step_SSTORE_preserves_present s s' arg a h h_pres
+  by_cases h_tstore : op = .StackMemFlow .TSTORE
+  · subst h_tstore
+    exact evmYul_step_TSTORE_preserves_present s s' arg a h h_pres
+  by_cases h_sd : op = .System .SELFDESTRUCT
+  · subst h_sd
+    exact selfDestruct_preserves_present s s' arg a h h_pres
+  · -- Strict path: op preserves accountMap literally.
+    have h_strict : strictlyPreservesAccountMap op := by
+      refine ⟨h_handled, h_sd, h_sstore, h_tstore⟩
+    have h_eq := EvmYul.step_accountMap_eq_of_strict op arg s s' h_strict h
+    rw [h_eq]
+    exact h_pres
 
 end Frame
 end EvmYul
