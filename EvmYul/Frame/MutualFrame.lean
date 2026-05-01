@@ -6379,6 +6379,144 @@ theorem theta_σ'₁_invariant_preserved
   rw [hStg]
   exact Nat.le_trans hInv hBal
 
+/-- **Θ-pre-credit slack at recipient = C.**
+
+Given `σ` satisfying `WethInvFr σ C` and `r = C`, the post-credit
+state `σ'₁` (after Θ adds `v` to `C`'s balance) satisfies the
+strengthened slack `v.toNat + storageSum σ'₁ C ≤ balanceOf σ'₁ C`.
+
+This is the precise hypothesis consumed by
+`theta_σ₁_invariant_preserved_at_C` for the s = C, v ≠ 0 debit, and
+also the bytecode-level "Θ-pre-credit" fact that backs
+`WethDepositPreCredit C` at PC 40 (deposit's SSTORE writes `oldVal +
+msg.value` into the same slot, so the net storageSum delta is `+v`).
+
+Proof: `storageSum σ'₁ C = storageSum σ C` (storage unchanged at `C`
+through credit) plus `balanceOf σ'₁ C = balanceOf σ C + v.toNat`
+(from no-wrap balance arithmetic at `r = C`). Combined with
+`storageSum σ C ≤ balanceOf σ C` (the input invariant), we get
+`v.toNat + storageSum σ'₁ C = v.toNat + storageSum σ C ≤ v.toNat +
+balanceOf σ C = balanceOf σ'₁ C`. -/
+theorem theta_σ'₁_pre_credit_slack_at_C
+    (σ : AccountMap .EVM) (C : AccountAddress) (v : UInt256)
+    (hValBound : ∀ acc, σ.find? C = some acc →
+        acc.balance.toNat + v.toNat < UInt256.size)
+    (hInv : WethInvFr σ C) :
+    let σ'₁ :=
+      match σ.find? C with
+        | none =>
+          if v != ⟨0⟩ then
+            σ.insert C { (default : Account .EVM) with balance := v }
+          else σ
+        | some acc => σ.insert C { acc with balance := acc.balance + v }
+    v.toNat + storageSum σ'₁ C ≤ balanceOf σ'₁ C := by
+  -- Storage unchanged at C through the credit (theta_σ'₁_storageSum_eq with r := C).
+  have hStg := theta_σ'₁_storageSum_eq σ C C v
+  unfold WethInvFr at hInv
+  simp only at hStg
+  -- Compute balanceOf σ'₁ C precisely by case split.
+  cases hLook : σ.find? C with
+  | none =>
+    -- σ.find? C = none, so balanceOf σ C = 0 and storageSum σ C = 0 from hInv.
+    have hBal0 : balanceOf σ C = 0 := by
+      unfold balanceOf; rw [hLook]; rfl
+    have hStg0 : storageSum σ C = 0 := by
+      rw [hBal0] at hInv; omega
+    -- Both v = 0 and v ≠ 0 sub-cases give 0 + 0 ≤ 0 or v.toNat ≤ v.toNat.
+    -- Reduce the goal by computing σ'₁ via simp.
+    show v.toNat +
+        storageSum (
+          if v != ⟨0⟩ then
+            σ.insert C { (default : Account .EVM) with balance := v }
+          else σ) C ≤
+        balanceOf (
+          if v != ⟨0⟩ then
+            σ.insert C { (default : Account .EVM) with balance := v }
+          else σ) C
+    by_cases hv_eq_0 : v = (⟨0⟩ : UInt256)
+    · -- v = 0 branch: σ'₁ = σ.
+      have hbne : (v != (⟨0⟩ : UInt256)) = false := by rw [hv_eq_0]; rfl
+      rw [show (if (v != ⟨0⟩) = true then
+            σ.insert C { (default : Account .EVM) with balance := v} else σ) = σ from by
+        rw [hbne]; rfl]
+      have hvNat : v.toNat = 0 := by rw [hv_eq_0]; rfl
+      rw [hvNat, Nat.zero_add]
+      exact hInv
+    · -- v ≠ 0 branch: σ'₁ = σ.insert C { default with balance := v }.
+      have hbne : (v != (⟨0⟩ : UInt256)) = true := by
+        by_contra hc
+        have hbF : (v != (⟨0⟩ : UInt256)) = false := by
+          cases hh : (v != (⟨0⟩ : UInt256)) with
+          | true => exact absurd hh hc
+          | false => rfl
+        have h_eq : v = (⟨0⟩ : UInt256) := by
+          have h_beq : (v == (⟨0⟩ : UInt256)) = true := by
+            cases hh : (v == (⟨0⟩ : UInt256)) with
+            | true => rfl
+            | false =>
+              have : (v != (⟨0⟩ : UInt256)) = true := by
+                show (!(v == (⟨0⟩ : UInt256))) = true
+                rw [hh]; rfl
+              rw [this] at hbF; cases hbF
+          cases v with
+          | mk vv =>
+            cases vv with
+            | mk m lt =>
+              have h_m0 : m = 0 := by
+                cases m with
+                | zero => rfl
+                | succ k =>
+                  exfalso
+                  have : (Nat.beq (k + 1) 0) = true := h_beq
+                  exact Bool.noConfusion this
+              subst h_m0; rfl
+        exact hv_eq_0 h_eq
+      rw [show (if (v != ⟨0⟩) = true then
+            σ.insert C { (default : Account .EVM) with balance := v} else σ)
+          = σ.insert C { (default : Account .EVM) with balance := v} from by
+        rw [hbne]; rfl]
+      -- Compute storageSum and balanceOf at C in the inserted map.
+      have hStg' : storageSum
+            (σ.insert C { (default : Account .EVM) with balance := v }) C = 0 := by
+        have hcomb := hStg
+        rw [hLook] at hcomb
+        simp only at hcomb
+        rw [hbne] at hcomb
+        simp only [if_true] at hcomb
+        rw [hcomb]; exact hStg0
+      have hBal' : balanceOf
+            (σ.insert C { (default : Account .EVM) with balance := v }) C
+            = v.toNat := by
+        unfold balanceOf
+        rw [find?_insert_self]
+        rfl
+      rw [hStg', hBal']
+      omega
+  | some acc =>
+    -- σ.find? C = some acc, σ'₁ = σ.insert C { acc with balance := acc.balance + v }.
+    simp only [hLook]
+    have hWrap : acc.balance.toNat + v.toNat < UInt256.size := hValBound acc hLook
+    -- storageSum σ'₁ C = storageSum σ C from hStg.
+    have hStg' : storageSum (σ.insert C { acc with balance := acc.balance + v }) C
+        = storageSum σ C := by
+      have := hStg
+      rw [hLook] at this
+      simp only at this
+      exact this
+    -- balanceOf σ'₁ C = (acc.balance + v).toNat = acc.balance.toNat + v.toNat.
+    have hBal' : balanceOf (σ.insert C { acc with balance := acc.balance + v }) C
+        = acc.balance.toNat + v.toNat := by
+      unfold balanceOf
+      rw [find?_insert_self]
+      simp only [Option.elim]
+      exact UInt256_add_toNat_of_no_wrap _ _ hWrap
+    -- balanceOf σ C = acc.balance.toNat.
+    have hBalσ : balanceOf σ C = acc.balance.toNat := by
+      unfold balanceOf; rw [hLook]; rfl
+    rw [hStg', hBal']
+    rw [hBalσ] at hInv
+    omega
+
 /-- The debit prefix `σ'₁ → σ₁` preserves `WethInvFr σ'₁ C` when
 either `s ≠ C` (balance unchanged) or `v = 0` (balance unchanged).
 
