@@ -10844,6 +10844,7 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch_inv_awa
                     (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
                     (I : ExecutionEnv .EVM),
         I.codeOwner = C →
+        WethInvFr σ C →
         Reachable
           { (default : EVM.State) with
               accountMap := σ
@@ -10919,7 +10920,7 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch_inv_awa
       have hNCFresh : ∀ a ∈ freshState.createdAccounts, a ≠ C := hNC
       have hInvFresh : WethInvFr freshState.accountMap C := hInv
       have hReachFresh : Reachable freshState :=
-        hReachInit cA gbh bs σ σ₀ g A I hCO
+        hReachInit cA gbh bs σ σ₀ g A I hCO hInv
       have hAtCBddF : ΞInvariantAtCFrame C f := hAtCBdd f (Nat.le_refl _)
       have Ξ_frame_atF : ΞInvariantFrameAtC C f := Ξ_frame_at f (Nat.le_refl _)
       have hXinv :
