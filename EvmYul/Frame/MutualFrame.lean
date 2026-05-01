@@ -12308,6 +12308,456 @@ theorem EVM_step_preserves_present_no_create_bdd
     refine ⟨h_nc1, h_nc2, h_call, h_callcode, h_dcall, h_scall⟩
   exact EVM_step_handled_preserves_present op arg a f cost s s' h_handled hStep h_pres
 
+/-! ### §J.5b — Bdd variants of Λ and CREATE/CREATE2 step lemmas
+
+The strong-induction Ξ-closure (`Ξ_preserves_account_at_a_universal`)
+needs CREATE/CREATE2 step preservation that consumes a fuel-bounded
+witness, not a universal one. This subsection mirrors the universal
+proofs of `Λ_preserves_account_at_a` and `EVM_step_{CREATE,CREATE2}
+_preserves_present` with `hΞ` replaced by `hΞBdd fuel (Nat.le_refl _)`. -/
+
+/-- Bdd variant of `Λ_preserves_account_at_a`. Λ at fuel `f+1` invokes
+Ξ at fuel `f`, so we need `ΞPreservesAccountAtBdd a f`. -/
+theorem Λ_preserves_account_at_a_bdd
+    (a : AccountAddress)
+    (f : ℕ) (hΞBdd : ΞPreservesAccountAtBdd a f)
+    (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (A : Substate)
+    (s o : AccountAddress) (g p v : UInt256) (i : ByteArray) (e : UInt256)
+    (ζ : Option ByteArray) (H : BlockHeader) (w : Bool)
+    (h_present : accountPresentAt σ a) :
+    match EVM.Lambda (f + 1) blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o g p v i e ζ H w with
+    | .ok (_, _, σ', _, _, _, _) => accountPresentAt σ' a
+    | .error _ => True := by
+  -- Mirror of `Λ_preserves_account_at_a` body, fuel = f+1 case.
+  unfold EVM.Lambda
+  cases hLA : EVM.Lambda.L_A s
+      ((σ.find? s |>.option ⟨0⟩ (·.nonce)) - ⟨1⟩) ζ i with
+  | none =>
+    simp only [hLA]
+    trivial
+  | some lₐ =>
+    simp only [hLA]
+    set aDerived : AccountAddress :=
+      Fin.ofNat AccountAddress.size
+        (fromByteArrayBigEndian ((ffi.KEC lₐ).extract 12 32))
+    set existentAccount : Account .EVM := σ.findD aDerived default
+    set iPair :
+      ByteArray × Batteries.RBSet AccountAddress compare :=
+      if (decide (existentAccount.nonce ≠ ⟨0⟩)
+          || decide (existentAccount.code.size ≠ 0)
+          || existentAccount.storage != default) = true
+      then ((⟨#[0xfe]⟩ : ByteArray), createdAccounts)
+      else (i, createdAccounts.insert aDerived)
+    set σStarMap : AccountMap .EVM :=
+      (match σ.find? s with
+       | none => σ
+       | some ac =>
+         (σ.insert s
+           { nonce := ac.nonce, balance := ac.balance - v
+             storage := ac.storage, code := ac.code
+             tstorage := ac.tstorage })
+          |>.insert aDerived
+           { nonce := existentAccount.nonce + ⟨1⟩
+             balance := v + existentAccount.balance
+             storage := existentAccount.storage
+             code := existentAccount.code
+             tstorage := existentAccount.tstorage })
+      with hσStarMap_def
+    have h_pres_σStar : accountPresentAt σStarMap a := by
+      rw [hσStarMap_def]
+      cases hFs : σ.find? s with
+      | none =>
+        simp only
+        exact h_present
+      | some ac =>
+        simp only
+        apply accountPresentAt_insert
+        exact accountPresentAt_insert _ _ _ _ h_present
+    set exEnv : ExecutionEnv .EVM :=
+      { codeOwner := aDerived, sender := o, source := s, weiValue := v
+        calldata := default, code := iPair.1, gasPrice := p.toNat
+        header := H, depth := e.toNat, perm := w
+        blobVersionedHashes := blobVersionedHashes }
+    split
+    case h_2 => trivial
+    case h_1 heq =>
+      simp only [bind, Except.bind, pure, Except.pure] at heq
+      split at heq
+      · exact absurd heq (by simp)
+      · rename_i lin hvok
+        have hv_eq : lin = lₐ := by
+          injection hvok with h1
+          exact h1.symm
+        rw [hv_eq] at heq
+        clear hvok hv_eq lin
+        split at heq
+        · split at heq
+          · exact absurd heq (by simp)
+          · injection heq with h1
+            injection h1 with h1a h1b
+            injection h1b with h1ba h1bb
+            injection h1bb with h1bba h1bbb
+            subst h1a
+            subst h1ba
+            subst h1bba
+            exact h_present
+        · injection heq with h1
+          injection h1 with h1a h1b
+          injection h1b with h1ba h1bb
+          injection h1bb with h1bba h1bbb
+          subst h1a
+          subst h1ba
+          subst h1bba
+          exact h_present
+        · rename_i cA_out σ_Ξ gSS AStarStar returnedData hΞeq
+          injection heq with h1
+          injection h1 with h1a h1b
+          injection h1b with h1ba h1bb
+          injection h1bb with h1bba h1bbb
+          subst h1a
+          subst h1ba
+          subst h1bba
+          have hΞeq_folded :
+              EVM.Ξ f iPair.2 genesisBlockHeader blocks σStarMap σ₀ g
+                    (A.addAccessedAccount aDerived) exEnv
+                  = .ok (.success (cA_out, σ_Ξ, gSS, AStarStar) returnedData) := hΞeq
+          have hΞ_pres :=
+            hΞBdd f (Nat.le_refl _) iPair.2 genesisBlockHeader blocks σStarMap σ₀ g
+              (A.addAccessedAccount aDerived) exEnv h_pres_σStar
+          rw [hΞeq_folded] at hΞ_pres
+          split_ifs with hF
+          · exact h_present
+          · exact accountPresentAt_insert _ _ _ _ hΞ_pres
+
+/-- CREATE arm Bdd variant: EVM.step at CREATE at fuel `f+1` invokes
+Λ at fuel `f`, which invokes Ξ at fuel `f`. So we need
+`ΞPreservesAccountAtBdd a f`. Wait — Λ at fuel `f+1` invokes Ξ at `f`,
+but here Λ is at fuel `f` (the predecessor of the step's fuel).
+Looking at `EVM_step_CREATE_preserves_present`, it calls
+`Λ_preserves_account_at_a a hΞ f` — so Λ at fuel `f`. Λ at fuel `f`
+needs to invoke Ξ at fuel `f-1`. So we need `ΞPreservesAccountAtBdd a (f-1)`,
+or equivalently `ΞPreservesAccountAtBdd a f` via monotonicity. -/
+theorem EVM_step_CREATE_preserves_present_bdd
+    (a : AccountAddress) (f cost : ℕ)
+    (hΞBdd : ΞPreservesAccountAtBdd a f)
+    (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (hStep : EVM.step (f + 1) cost (some (.CREATE, arg)) s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  -- Mirror of `EVM_step_CREATE_preserves_present`, replacing the universal
+  -- `Λ_preserves_account_at_a a hΞ f` with the bdd Λ.
+  -- Λ is at fuel `f`. Decompose `f` as `f' + 1` to apply the bdd Λ.
+  match f, hΞBdd with
+  | 0, _ =>
+    -- Λ at fuel 0 = .error .OutOfFuel; the CREATE arm short-circuits.
+    -- We mirror the original proof but Λ returns error on the success branch.
+    simp only [EVM.step, Operation.CREATE, bind, Except.bind, pure, Except.pure] at hStep
+    set eS1 : EVM.State := { s with execLength := s.execLength + 1 } with heS1_def
+    set eS2 : EVM.State :=
+      { eS1 with gasAvailable := eS1.gasAvailable - UInt256.ofNat cost } with heS2_def
+    rcases hpop3 : eS2.stack.pop3 with _ | ⟨stack, μ₀, μ₁, μ₂⟩
+    · rw [hpop3] at hStep
+      exact absurd hStep (by simp)
+    · rw [hpop3] at hStep
+      set i : ByteArray := eS2.memory.readWithPadding μ₁.toNat μ₂.toNat
+      set Iₐ : AccountAddress := eS2.executionEnv.codeOwner
+      set Iₑ : ℕ := eS2.executionEnv.depth
+      set σ : AccountMap .EVM := eS2.accountMap with hσ_def
+      set σ_Iₐ : Account .EVM := σ.find? Iₐ |>.getD default
+      have hAM2 : eS2.accountMap = s.accountMap := by simp [heS2_def, heS1_def]
+      have h_pres_eS2 : accountPresentAt eS2.accountMap a := by
+        rw [hAM2]; exact h_pres
+      by_cases hNonceOv : σ_Iₐ.nonce.toNat ≥ 2^64-1
+      · simp only [hNonceOv, if_true] at hStep
+        split at hStep
+        · exact absurd hStep (by simp)
+        · injection hStep with hEq
+          rw [← hEq]
+          simp only [accountMap_replaceStackAndIncrPC]
+          exact h_pres_eS2
+      · simp only [hNonceOv, if_false] at hStep
+        set σStar : AccountMap .EVM :=
+          σ.insert Iₐ { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ }
+        have h_pres_σStar : accountPresentAt σStar a := by
+          show accountPresentAt (σ.insert Iₐ _) a
+          apply accountPresentAt_insert
+          rw [hσ_def]; exact h_pres_eS2
+        by_cases hPreCheck :
+            μ₀ ≤ (σ.find? Iₐ |>.option ⟨0⟩ (·.balance)) ∧ Iₑ < 1024 ∧ i.size ≤ 49152
+        · rw [if_pos hPreCheck] at hStep
+          -- Λ at fuel 0 always errors.
+          have hΛ_err : ∀ bvh cA gbh bs σ' σ₀ A' s' o' g' p' v' i' e' ζ' H' w',
+              EVM.Lambda 0 bvh cA gbh bs σ' σ₀ A' s' o' g' p' v' i' e' ζ' H' w'
+                = .error .OutOfFuel := fun _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => rfl
+          split at hStep
+          · rename_i a' cA σ' g' A' z o hΛ
+            rw [hΛ_err] at hΛ
+            exact absurd hΛ (by simp)
+          · rename_i hΛ
+            split at hStep
+            · exact absurd hStep (by simp)
+            · injection hStep with hEq
+              rw [← hEq]
+              simp only [accountMap_replaceStackAndIncrPC]
+              exact h_pres_eS2
+        · rw [if_neg hPreCheck] at hStep
+          split at hStep
+          · exact absurd hStep (by simp)
+          · injection hStep with hEq
+            rw [← hEq]
+            simp only [accountMap_replaceStackAndIncrPC]
+            exact h_pres_eS2
+  | f' + 1, hΞBdd =>
+    simp only [EVM.step, Operation.CREATE, bind, Except.bind, pure, Except.pure] at hStep
+    set eS1 : EVM.State := { s with execLength := s.execLength + 1 } with heS1_def
+    set eS2 : EVM.State :=
+      { eS1 with gasAvailable := eS1.gasAvailable - UInt256.ofNat cost } with heS2_def
+    rcases hpop3 : eS2.stack.pop3 with _ | ⟨stack, μ₀, μ₁, μ₂⟩
+    · rw [hpop3] at hStep
+      exact absurd hStep (by simp)
+    · rw [hpop3] at hStep
+      set i : ByteArray := eS2.memory.readWithPadding μ₁.toNat μ₂.toNat
+      set Iₐ : AccountAddress := eS2.executionEnv.codeOwner
+      set Iₑ : ℕ := eS2.executionEnv.depth
+      set σ : AccountMap .EVM := eS2.accountMap with hσ_def
+      set σ_Iₐ : Account .EVM := σ.find? Iₐ |>.getD default
+      have hAM2 : eS2.accountMap = s.accountMap := by simp [heS2_def, heS1_def]
+      have h_pres_eS2 : accountPresentAt eS2.accountMap a := by
+        rw [hAM2]; exact h_pres
+      by_cases hNonceOv : σ_Iₐ.nonce.toNat ≥ 2^64-1
+      · simp only [hNonceOv, if_true] at hStep
+        split at hStep
+        · exact absurd hStep (by simp)
+        · injection hStep with hEq
+          rw [← hEq]
+          simp only [accountMap_replaceStackAndIncrPC]
+          exact h_pres_eS2
+      · simp only [hNonceOv, if_false] at hStep
+        set σStar : AccountMap .EVM :=
+          σ.insert Iₐ { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ }
+        have h_pres_σStar : accountPresentAt σStar a := by
+          show accountPresentAt (σ.insert Iₐ _) a
+          apply accountPresentAt_insert
+          rw [hσ_def]; exact h_pres_eS2
+        by_cases hPreCheck :
+            μ₀ ≤ (σ.find? Iₐ |>.option ⟨0⟩ (·.balance)) ∧ Iₑ < 1024 ∧ i.size ≤ 49152
+        · rw [if_pos hPreCheck] at hStep
+          split at hStep
+          · rename_i a' cA σ' g' A' z o hΛ
+            split at hStep
+            · exact absurd hStep (by simp)
+            · injection hStep with hEq
+              rw [← hEq]
+              simp only [accountMap_replaceStackAndIncrPC]
+              -- σ' is Λ's output on σStar, at fuel f'+1.
+              have hΞBdd' : ΞPreservesAccountAtBdd a f' :=
+                ΞPreservesAccountAtBdd_mono a f' (f' + 1) (Nat.le_succ _) hΞBdd
+              have hΛPres :=
+                Λ_preserves_account_at_a_bdd a f' hΞBdd'
+                  eS2.executionEnv.blobVersionedHashes
+                  eS2.createdAccounts
+                  eS2.genesisBlockHeader
+                  eS2.blocks
+                  σStar
+                  eS2.σ₀
+                  eS2.toState.substate
+                  Iₐ
+                  eS2.executionEnv.sender
+                  (.ofNat <| L eS2.gasAvailable.toNat)
+                  (.ofNat eS2.executionEnv.gasPrice)
+                  μ₀ i
+                  (.ofNat <| Iₑ + 1)
+                  none
+                  eS2.executionEnv.header
+                  eS2.executionEnv.perm
+                  h_pres_σStar
+              rw [hΛ] at hΛPres
+              exact hΛPres
+          · rename_i hΛ
+            split at hStep
+            · exact absurd hStep (by simp)
+            · injection hStep with hEq
+              rw [← hEq]
+              simp only [accountMap_replaceStackAndIncrPC]
+              exact h_pres_eS2
+        · rw [if_neg hPreCheck] at hStep
+          split at hStep
+          · exact absurd hStep (by simp)
+          · injection hStep with hEq
+            rw [← hEq]
+            simp only [accountMap_replaceStackAndIncrPC]
+            exact h_pres_eS2
+
+/-- CREATE2 arm Bdd variant. Mirror of `EVM_step_CREATE_preserves_present_bdd`. -/
+theorem EVM_step_CREATE2_preserves_present_bdd
+    (a : AccountAddress) (f cost : ℕ)
+    (hΞBdd : ΞPreservesAccountAtBdd a f)
+    (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (hStep : EVM.step (f + 1) cost (some (.CREATE2, arg)) s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  match f, hΞBdd with
+  | 0, _ =>
+    simp only [EVM.step, Operation.CREATE2, bind, Except.bind, pure, Except.pure] at hStep
+    set eS1 : EVM.State := { s with execLength := s.execLength + 1 } with heS1_def
+    set eS2 : EVM.State :=
+      { eS1 with gasAvailable := eS1.gasAvailable - UInt256.ofNat cost } with heS2_def
+    rcases hpop4 : eS2.stack.pop4 with _ | ⟨stack, μ₀, μ₁, μ₂, μ₃⟩
+    · rw [hpop4] at hStep
+      exact absurd hStep (by simp)
+    · rw [hpop4] at hStep
+      set i : ByteArray := eS2.memory.readWithPadding μ₁.toNat μ₂.toNat
+      set Iₐ : AccountAddress := eS2.executionEnv.codeOwner
+      set Iₑ : ℕ := eS2.executionEnv.depth
+      set σ : AccountMap .EVM := eS2.accountMap with hσ_def
+      set σ_Iₐ : Account .EVM := σ.find? Iₐ |>.getD default
+      have hAM2 : eS2.accountMap = s.accountMap := by simp [heS2_def, heS1_def]
+      have h_pres_eS2 : accountPresentAt eS2.accountMap a := by
+        rw [hAM2]; exact h_pres
+      by_cases hNonceOv : σ_Iₐ.nonce.toNat ≥ 2^64-1
+      · simp only [hNonceOv, if_true] at hStep
+        split at hStep
+        · exact absurd hStep (by simp)
+        · injection hStep with hEq
+          rw [← hEq]
+          simp only [accountMap_replaceStackAndIncrPC]
+          exact h_pres_eS2
+      · simp only [hNonceOv, if_false] at hStep
+        set σStar : AccountMap .EVM :=
+          σ.insert Iₐ { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ }
+        have h_pres_σStar : accountPresentAt σStar a := by
+          show accountPresentAt (σ.insert Iₐ _) a
+          apply accountPresentAt_insert
+          rw [hσ_def]; exact h_pres_eS2
+        by_cases hPreCheck :
+            μ₀ ≤ (σ.find? Iₐ |>.option ⟨0⟩ (·.balance)) ∧ Iₑ < 1024 ∧ i.size ≤ 49152
+        · rw [if_pos hPreCheck] at hStep
+          have hΛ_err : ∀ bvh cA gbh bs σ' σ₀ A' s' o' g' p' v' i' e' ζ' H' w',
+              EVM.Lambda 0 bvh cA gbh bs σ' σ₀ A' s' o' g' p' v' i' e' ζ' H' w'
+                = .error .OutOfFuel := fun _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => rfl
+          split at hStep
+          · rename_i a' cA σ' g' A' z o hΛ
+            rw [hΛ_err] at hΛ
+            exact absurd hΛ (by simp)
+          · rename_i hΛ
+            split at hStep
+            · exact absurd hStep (by simp)
+            · injection hStep with hEq
+              rw [← hEq]
+              simp only [accountMap_replaceStackAndIncrPC]
+              exact h_pres_eS2
+        · rw [if_neg hPreCheck] at hStep
+          split at hStep
+          · exact absurd hStep (by simp)
+          · injection hStep with hEq
+            rw [← hEq]
+            simp only [accountMap_replaceStackAndIncrPC]
+            exact h_pres_eS2
+  | f' + 1, hΞBdd =>
+    simp only [EVM.step, Operation.CREATE2, bind, Except.bind, pure, Except.pure] at hStep
+    set eS1 : EVM.State := { s with execLength := s.execLength + 1 } with heS1_def
+    set eS2 : EVM.State :=
+      { eS1 with gasAvailable := eS1.gasAvailable - UInt256.ofNat cost } with heS2_def
+    rcases hpop4 : eS2.stack.pop4 with _ | ⟨stack, μ₀, μ₁, μ₂, μ₃⟩
+    · rw [hpop4] at hStep
+      exact absurd hStep (by simp)
+    · rw [hpop4] at hStep
+      set i : ByteArray := eS2.memory.readWithPadding μ₁.toNat μ₂.toNat
+      set Iₐ : AccountAddress := eS2.executionEnv.codeOwner
+      set Iₑ : ℕ := eS2.executionEnv.depth
+      set σ : AccountMap .EVM := eS2.accountMap with hσ_def
+      set σ_Iₐ : Account .EVM := σ.find? Iₐ |>.getD default
+      have hAM2 : eS2.accountMap = s.accountMap := by simp [heS2_def, heS1_def]
+      have h_pres_eS2 : accountPresentAt eS2.accountMap a := by
+        rw [hAM2]; exact h_pres
+      by_cases hNonceOv : σ_Iₐ.nonce.toNat ≥ 2^64-1
+      · simp only [hNonceOv, if_true] at hStep
+        split at hStep
+        · exact absurd hStep (by simp)
+        · injection hStep with hEq
+          rw [← hEq]
+          simp only [accountMap_replaceStackAndIncrPC]
+          exact h_pres_eS2
+      · simp only [hNonceOv, if_false] at hStep
+        set σStar : AccountMap .EVM :=
+          σ.insert Iₐ { σ_Iₐ with nonce := σ_Iₐ.nonce + ⟨1⟩ }
+        have h_pres_σStar : accountPresentAt σStar a := by
+          show accountPresentAt (σ.insert Iₐ _) a
+          apply accountPresentAt_insert
+          rw [hσ_def]; exact h_pres_eS2
+        by_cases hPreCheck :
+            μ₀ ≤ (σ.find? Iₐ |>.option ⟨0⟩ (·.balance)) ∧ Iₑ < 1024 ∧ i.size ≤ 49152
+        · rw [if_pos hPreCheck] at hStep
+          split at hStep
+          · rename_i a' cA σ' g' A' z o hΛ
+            split at hStep
+            · exact absurd hStep (by simp)
+            · injection hStep with hEq
+              rw [← hEq]
+              simp only [accountMap_replaceStackAndIncrPC]
+              have hΞBdd' : ΞPreservesAccountAtBdd a f' :=
+                ΞPreservesAccountAtBdd_mono a f' (f' + 1) (Nat.le_succ _) hΞBdd
+              have hΛPres :=
+                Λ_preserves_account_at_a_bdd a f' hΞBdd'
+                  eS2.executionEnv.blobVersionedHashes
+                  eS2.createdAccounts
+                  eS2.genesisBlockHeader
+                  eS2.blocks
+                  σStar
+                  eS2.σ₀
+                  eS2.toState.substate
+                  Iₐ
+                  eS2.executionEnv.sender
+                  (.ofNat <| L eS2.gasAvailable.toNat)
+                  (.ofNat eS2.executionEnv.gasPrice)
+                  μ₀ i
+                  (.ofNat <| Iₑ + 1)
+                  (some (EvmYul.UInt256.toByteArray μ₃))
+                  eS2.executionEnv.header
+                  eS2.executionEnv.perm
+                  h_pres_σStar
+              rw [hΛ] at hΛPres
+              exact hΛPres
+          · rename_i hΛ
+            split at hStep
+            · exact absurd hStep (by simp)
+            · injection hStep with hEq
+              rw [← hEq]
+              simp only [accountMap_replaceStackAndIncrPC]
+              exact h_pres_eS2
+        · rw [if_neg hPreCheck] at hStep
+          split at hStep
+          · exact absurd hStep (by simp)
+          · injection hStep with hEq
+            rw [← hEq]
+            simp only [accountMap_replaceStackAndIncrPC]
+            exact h_pres_eS2
+
+/-- **Universal combined dispatcher (Bdd variant).** Drops the
+no-CREATE constraint from `EVM_step_preserves_present_no_create_bdd`. -/
+theorem EVM_step_preserves_present_bdd
+    (a : AccountAddress) (f cost : ℕ)
+    (hΞBdd : ΞPreservesAccountAtBdd a f)
+    (op : Operation .EVM) (arg : Option (UInt256 × Nat))
+    (s s' : EVM.State)
+    (hStep : EVM.step (f + 1) cost (some (op, arg)) s = .ok s')
+    (h_pres : accountPresentAt s.accountMap a) :
+    accountPresentAt s'.accountMap a := by
+  by_cases h_create : op = .CREATE
+  · subst h_create
+    exact EVM_step_CREATE_preserves_present_bdd a f cost hΞBdd arg s s' hStep h_pres
+  by_cases h_create2 : op = .CREATE2
+  · subst h_create2
+    exact EVM_step_CREATE2_preserves_present_bdd a f cost hΞBdd arg s s' hStep h_pres
+  exact EVM_step_preserves_present_no_create_bdd a f cost hΞBdd op arg s s'
+    ⟨h_create, h_create2⟩ hStep h_pres
+
 /-- Bdd variant of `X_preserves_account_at_a`. X at fuel `fuel` invokes
 EVM.step at fuel `fuel - 1`, which uses Ξ at fuel `fuel - 2`. We need
 `ΞPreservesAccountAtBdd a fuel`. -/
