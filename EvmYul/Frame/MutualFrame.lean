@@ -12896,12 +12896,179 @@ theorem X_preserves_account_at_a_bdd
                   rw [← hres]
                   exact hPresStep
 
+/-! ### §J.5c — Universal X-bdd: no Reachable, no decodeSome, no no-create
+
+Mirrors `X_preserves_account_at_a_bdd` but takes only the bdd witness.
+The decode=none case folds to `instr = (.STOP, none)` which the universal
+step dispatcher handles via the EvmYul.STOP arm (preserves accountMap).
+The CREATE/CREATE2 case is handled via `EVM_step_preserves_present_bdd`. -/
+
+theorem X_preserves_account_at_a_bdd_universal
+    (a : AccountAddress)
+    (fuel : ℕ) (hΞBdd : ΞPreservesAccountAtBdd a fuel)
+    (validJumps : Array UInt256) (s : EVM.State)
+    (h_pres : accountPresentAt s.accountMap a) :
+    match EVM.X fuel validJumps s with
+    | .ok (.success s' _) => accountPresentAt s'.accountMap a
+    | _ => True := by
+  induction fuel generalizing s with
+  | zero =>
+    rw [show EVM.X 0 validJumps s = .error .OutOfFuel from rfl]
+    trivial
+  | succ f' IH =>
+    show match EVM.X (f' + 1) validJumps s with
+      | .ok (.success s' _) => accountPresentAt s'.accountMap a
+      | _ => True
+    generalize hXres : EVM.X (f' + 1) validJumps s = xRes
+    cases xRes with
+    | error _ => trivial
+    | ok er =>
+      cases er with
+      | revert _ _ => trivial
+      | success finalState out =>
+        simp only [EVM.X] at hXres
+        split at hXres
+        case h_1 _ _ => exact absurd hXres (by simp)
+        case h_2 _ sZ cost₂ hZ =>
+          have hZ_full :
+              sZ = { s with gasAvailable := sZ.gasAvailable } := by
+            simp only [bind, Except.bind, pure, Except.pure] at hZ
+            by_cases hc1 : s.gasAvailable.toNat <
+                memoryExpansionCost s ((decode s.executionEnv.code s.pc).getD (Operation.STOP, none)).1
+            · rw [if_pos hc1] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc1] at hZ
+            set s' : EVM.State :=
+              { s with gasAvailable := s.gasAvailable -
+                  UInt256.ofNat (memoryExpansionCost s
+                    ((decode s.executionEnv.code s.pc).getD (Operation.STOP, none)).1) } with hs'
+            by_cases hc2 : s'.gasAvailable.toNat <
+                C' s' ((decode s.executionEnv.code s.pc).getD (Operation.STOP, none)).1
+            · rw [if_pos hc2] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc2] at hZ
+            by_cases hc3 :
+                δ ((decode s.executionEnv.code s.pc).getD (Operation.STOP, none)).1 = none
+            · rw [if_pos hc3] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc3] at hZ
+            by_cases hc4 : s'.stack.length <
+                (δ ((decode s.executionEnv.code s.pc).getD (Operation.STOP, none)).1).getD 0
+            · rw [if_pos hc4] at hZ; exact Except.noConfusion hZ
+            rw [if_neg hc4] at hZ
+            (split_ifs at hZ;
+              first
+              | exact Except.noConfusion hZ
+              | (injection hZ with h_inj
+                 injection h_inj with h_inj1 _
+                 subst h_inj1
+                 rfl))
+          have hZ_accMap : sZ.accountMap = s.accountMap := by rw [hZ_full]
+          have hPresZ : accountPresentAt sZ.accountMap a := by rw [hZ_accMap]; exact h_pres
+          simp only [bind, Except.bind] at hXres
+          split at hXres
+          case h_1 _ _ => exact absurd hXres (by simp)
+          case h_2 _ sstep hStep =>
+            match f' with
+            | 0 =>
+              simp only [EVM.step] at hStep
+              exact absurd hStep (by simp)
+            | f'' + 1 =>
+              set decRes : Operation .EVM × Option (UInt256 × Nat) :=
+                (decode s.executionEnv.code s.pc).getD (.STOP, .none) with hDecRes
+              obtain ⟨op, arg⟩ := decRes
+              have hStep' : EVM.step (f'' + 1) cost₂ (some (op, arg)) sZ = .ok sstep := hStep
+              have hΞBdd' : ΞPreservesAccountAtBdd a f'' :=
+                ΞPreservesAccountAtBdd_mono a f'' (f'' + 1 + 1)
+                  (Nat.le_succ_of_le (Nat.le_succ _)) hΞBdd
+              have hPresStep : accountPresentAt sstep.accountMap a :=
+                EVM_step_preserves_present_bdd a f'' cost₂ hΞBdd' op arg sZ sstep
+                  hStep' hPresZ
+              split at hXres
+              case h_1 _ hH_none =>
+                have hΞBdd_IH : ΞPreservesAccountAtBdd a (f'' + 1) :=
+                  ΞPreservesAccountAtBdd_mono a (f'' + 1) (f'' + 1 + 1)
+                    (Nat.le_succ _) hΞBdd
+                have hIH := IH hΞBdd_IH sstep hPresStep
+                rw [hXres] at hIH
+                exact hIH
+              case h_2 _ o hH_some =>
+                split at hXres
+                · exact absurd hXres (by simp)
+                · simp only [Except.ok.injEq] at hXres
+                  injection hXres with hres _
+                  rw [← hres]
+                  exact hPresStep
+
 /-! ### §J.6 — Universal Ξ closure via strong induction
 
 Strong induction on fuel discharges `ΞPreservesAccountAt a` universally.
 At outer fuel `f+1`, the strong IH gives us `ΞPreservesAccountAtBdd a f`
 (via combining IH at all fuels ≤ f). Plug into `X_preserves_bdd` and
 unfold Ξ. -/
+
+/-- **Fully universal Ξ-preservation.** No `Reachable` predicate, no
+`hReach_*` closures — just pure framework guarantee that Ξ preserves
+`accountPresentAt` at any address. Discharged via strong induction on
+fuel using `X_preserves_account_at_a_bdd_universal`. -/
+theorem Ξ_preserves_account_at_a_universal
+    (a : AccountAddress) :
+    ΞPreservesAccountAt a := by
+  intro fuel
+  induction fuel using Nat.strong_induction_on with
+  | _ n IH =>
+    intro cA gbh bs σ σ₀ g A I h_present
+    match n with
+    | 0 =>
+      rw [show EVM.Ξ 0 cA gbh bs σ σ₀ g A I = .error .OutOfFuel from rfl]
+      trivial
+    | f + 1 =>
+      have hΞBdd : ΞPreservesAccountAtBdd a f := by
+        intro fuel' hf cA' gbh' bs' σ' σ₀' g' A' I' h_pres'
+        have hlt : fuel' < f + 1 := Nat.lt_succ_of_le hf
+        exact IH fuel' hlt cA' gbh' bs' σ' σ₀' g' A' I' h_pres'
+      have hΞ_eq :
+          EVM.Ξ (f + 1) cA gbh bs σ σ₀ g A I
+            = (do
+                let defState : EVM.State := default
+                let freshEvmState : EVM.State :=
+                  { defState with
+                      accountMap := σ
+                      σ₀ := σ₀
+                      executionEnv := I
+                      substate := A
+                      createdAccounts := cA
+                      gasAvailable := g
+                      blocks := bs
+                      genesisBlockHeader := gbh }
+                let result ← EVM.X f (D_J I.code ⟨0⟩) freshEvmState
+                match result with
+                | .success evmState' o =>
+                  let finalGas := evmState'.gasAvailable
+                  .ok (ExecutionResult.success
+                    (evmState'.createdAccounts, evmState'.accountMap,
+                     finalGas, evmState'.substate) o)
+                | .revert g' o => .ok (ExecutionResult.revert g' o)) := rfl
+      rw [hΞ_eq]
+      simp only [bind, Except.bind]
+      generalize hXres : EVM.X f (D_J I.code ⟨0⟩) _ = xRes
+      set freshState : EVM.State :=
+        { (default : EVM.State) with
+            accountMap := σ
+            σ₀ := σ₀
+            executionEnv := I
+            substate := A
+            createdAccounts := cA
+            gasAvailable := g
+            blocks := bs
+            genesisBlockHeader := gbh } with hFresh_def
+      have h_pres_fresh : accountPresentAt freshState.accountMap a := h_present
+      have hX := X_preserves_account_at_a_bdd_universal a f hΞBdd
+        (D_J I.code ⟨0⟩) freshState h_pres_fresh
+      rw [hXres] at hX
+      cases xRes with
+      | error _ => trivial
+      | ok er =>
+        cases er with
+        | success s' out => exact hX
+        | revert _ _ => trivial
 
 theorem Ξ_preserves_account_at_a_of_Reachable
     (a : AccountAddress)
