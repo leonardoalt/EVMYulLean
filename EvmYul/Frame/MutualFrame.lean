@@ -10780,6 +10780,159 @@ theorem Θ_preserves_account_at_a
           apply theta_σ'_clamp_preserves_present _ _ _ h_present
           intro _; exact hΞ_pres
 
+/-- **Framework theorem: `Λ` preserves account presence at any `a`.**
+
+Given:
+* `h_present : accountPresentAt σ a` (the input state has `a` present),
+* `hΞ : ΞPreservesAccountAt a` (witness — Ξ preserves presence),
+
+The output of `EVM.Lambda` either errors (vacuous) or succeeds with σ'
+that has `a` still present.
+
+The proof structurally inspects `Lambda`'s body. Λ either errors
+(vacuous), or computes:
+1. σStar = σ.insert s {balance := -v} |>.insert a {balance := +v} —
+   both `insert`s preserve presence by `accountPresentAt_insert`.
+2. Run Ξ on σStar → σStarStar. By `hΞ`, `accountPresentAt σStarStar a`.
+3. σ' = if F then σ else σStarStar.insert a {... with code := returnedData}.
+   Both branches preserve presence (σ via h_present; the `insert` via
+   `accountPresentAt_insert`).
+4. Ξ-error/revert paths set σ' := σ — preserved trivially.
+
+This mirrors the structure of `Λ_balanceOf_ge_bdd` but only carries
+`accountPresentAt`. -/
+theorem Λ_preserves_account_at_a
+    (a : AccountAddress) (hΞ : ΞPreservesAccountAt a)
+    (fuel : ℕ) (blobVersionedHashes : List ByteArray)
+    (createdAccounts : RBSet AccountAddress compare)
+    (genesisBlockHeader : BlockHeader) (blocks : ProcessedBlocks)
+    (σ σ₀ : AccountMap .EVM) (A : Substate)
+    (s o : AccountAddress) (g p v : UInt256) (i : ByteArray) (e : UInt256)
+    (ζ : Option ByteArray) (H : BlockHeader) (w : Bool)
+    (h_present : accountPresentAt σ a) :
+    match EVM.Lambda fuel blobVersionedHashes createdAccounts
+                  genesisBlockHeader blocks σ σ₀ A s o g p v i e ζ H w with
+    | .ok (_, _, σ', _, _, _, _) => accountPresentAt σ' a
+    | .error _ => True := by
+  match fuel with
+  | 0 =>
+    rw [show EVM.Lambda 0 blobVersionedHashes createdAccounts genesisBlockHeader
+                  blocks σ σ₀ A s o g p v i e ζ H w = .error .OutOfFuel from rfl]
+    trivial
+  | f + 1 =>
+    -- Unfold Lambda.
+    unfold EVM.Lambda
+    -- Case-split on L_A.
+    cases hLA : EVM.Lambda.L_A s
+        ((σ.find? s |>.option ⟨0⟩ (·.nonce)) - ⟨1⟩) ζ i with
+    | none =>
+      simp only [hLA]
+      trivial
+    | some lₐ =>
+      simp only [hLA]
+      set aDerived : AccountAddress :=
+        Fin.ofNat AccountAddress.size
+          (fromByteArrayBigEndian ((ffi.KEC lₐ).extract 12 32))
+      set existentAccount : Account .EVM := σ.findD aDerived default
+      set iPair :
+        ByteArray × Batteries.RBSet AccountAddress compare :=
+        if (decide (existentAccount.nonce ≠ ⟨0⟩)
+            || decide (existentAccount.code.size ≠ 0)
+            || existentAccount.storage != default) = true
+        then ((⟨#[0xfe]⟩ : ByteArray), createdAccounts)
+        else (i, createdAccounts.insert aDerived)
+      -- σStar preserves presence at a (two inserts via accountPresentAt_insert).
+      set σStarMap : AccountMap .EVM :=
+        (match σ.find? s with
+         | none => σ
+         | some ac =>
+           (σ.insert s
+             { nonce := ac.nonce, balance := ac.balance - v
+               storage := ac.storage, code := ac.code
+               tstorage := ac.tstorage })
+            |>.insert aDerived
+             { nonce := existentAccount.nonce + ⟨1⟩
+               balance := v + existentAccount.balance
+               storage := existentAccount.storage
+               code := existentAccount.code
+               tstorage := existentAccount.tstorage })
+        with hσStarMap_def
+      have h_pres_σStar : accountPresentAt σStarMap a := by
+        rw [hσStarMap_def]
+        cases hFs : σ.find? s with
+        | none =>
+          simp only
+          exact h_present
+        | some ac =>
+          simp only
+          apply accountPresentAt_insert
+          exact accountPresentAt_insert _ _ _ _ h_present
+      set exEnv : ExecutionEnv .EVM :=
+        { codeOwner := aDerived, sender := o, source := s, weiValue := v
+          calldata := default, code := iPair.1, gasPrice := p.toNat
+          header := H, depth := e.toNat, perm := w
+          blobVersionedHashes := blobVersionedHashes }
+      -- Now split the Lambda body's outer Except match.
+      split
+      case h_2 => trivial
+      case h_1 heq =>
+        simp only [bind, Except.bind, pure, Except.pure] at heq
+        split at heq
+        · exact absurd heq (by simp)
+        · rename_i lin hvok
+          have hv_eq : lin = lₐ := by
+            injection hvok with h1
+            exact h1.symm
+          rw [hv_eq] at heq
+          clear hvok hv_eq lin
+          -- Split the Ξ match in heq.
+          split at heq
+          · -- Ξ returned error.
+            split at heq
+            · exact absurd heq (by simp)
+            · -- else-branch: σ' = σ.
+              injection heq with h1
+              injection h1 with h1a h1b
+              injection h1b with h1ba h1bb
+              injection h1bb with h1bba h1bbb
+              subst h1a
+              subst h1ba
+              subst h1bba
+              exact h_present
+          · -- Ξ returned revert: σ' = σ.
+            injection heq with h1
+            injection h1 with h1a h1b
+            injection h1b with h1ba h1bb
+            injection h1bb with h1bba h1bbb
+            subst h1a
+            subst h1ba
+            subst h1bba
+            exact h_present
+          · -- Ξ returned success.
+            rename_i cA_out σ_Ξ gSS AStarStar returnedData hΞeq
+            injection heq with h1
+            injection h1 with h1a h1b
+            injection h1b with h1ba h1bb
+            injection h1bb with h1bba h1bbb
+            subst h1a
+            subst h1ba
+            subst h1bba
+            -- Apply hΞ at σStarMap.
+            have hΞeq_folded :
+                EVM.Ξ f iPair.2 genesisBlockHeader blocks σStarMap σ₀ g
+                      (A.addAccessedAccount aDerived) exEnv
+                    = .ok (.success (cA_out, σ_Ξ, gSS, AStarStar) returnedData) := hΞeq
+            have hΞ_pres :=
+              hΞ f iPair.2 genesisBlockHeader blocks σStarMap σ₀ g
+                (A.addAccessedAccount aDerived) exEnv h_pres_σStar
+            rw [hΞeq_folded] at hΞ_pres
+            -- hΞ_pres : accountPresentAt σ_Ξ a
+            -- Goal: σ' = if F then σ else σ_Ξ.insert aDerived { ... with code := returnedData }
+            -- Either branch preserves.
+            split_ifs with hF
+            · exact h_present
+            · exact accountPresentAt_insert _ _ _ _ hΞ_pres
+
 /-- **EVM.call wrapper of `Θ_preserves_account_at_a`.**
 
 `EVM.call` either (a) takes the gate-fail branch (returning the input
