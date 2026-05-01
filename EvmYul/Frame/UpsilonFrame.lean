@@ -1206,11 +1206,16 @@ private theorem Υ_tail_invariant_preserves
 /-- Υ's invariant-preservation frame, proved from the invariant body
 factorisation and tail-invariant hypotheses.
 
-Mirror of `Υ_output_balance_ge` for the (β ≥ S) chain. The
-`hWitness : ΞPreservesInvariantAtC C` argument is the §H.2 entry
-point (analogous to `_hWitness : ΞPreservesAtC C`); it is not used
-inside this proof body but is structurally required by the consumer
-(Weth's `Solvency.lean` analogue) to discharge `hFactor`. -/
+Mirror of `Υ_output_balance_ge` for the (β ≥ S) chain.
+
+Note: this theorem does not require a `ΞPreservesInvariantAtC C`
+witness. The body-factor hypothesis (`hFactor`) already carries
+`WethInvFr σ_P C` (post-Θ/Λ-dispatch), and the tail step preserves it
+verbatim under the SD-exclusion / dead-set hypotheses, so the at-`C`
+Ξ-level witness is structurally redundant at this level. The
+consumer-side `ΞPreservesInvariantAtC` witness still feeds into the
+Θ/Λ-side propagation chain that establishes `hFactor`'s
+`WethInvFr σ_P C`, but it is not threaded through Υ. -/
 theorem Υ_output_invariant_preserves
     (fuel : ℕ) (σ : AccountMap .EVM) (H_f : ℕ)
     (H H_gen : BlockHeader) (blocks : ProcessedBlocks) (tx : Transaction)
@@ -1218,7 +1223,6 @@ theorem Υ_output_invariant_preserves
     (_hWF : StateWF σ)
     (hS_T : C ≠ S_T)
     (hBen : C ≠ H.beneficiary)
-    (_hWitness : ΞPreservesInvariantAtC C)
     (hTail : ΥTailInvariant σ fuel H_f H H_gen blocks tx S_T C)
     (hFactor : ΥBodyFactorsInvariant σ fuel H_f H H_gen blocks tx S_T C) :
     match EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
@@ -1247,7 +1251,15 @@ Mirror of `Υ_balanceOf_ge` for the (β ≥ S) chain. The proof composes
 `Υ_output_invariant_preserves` (which produces `WethInvFr σ' C`
 directly from σ_P's invariant) — no additional projection is needed
 because the body factor's `WethInvFr σ_P C` is the invariant we want
-to lift. -/
+to lift.
+
+Note: the previously-required `hWitness : ΞPreservesInvariantAtC C`
+parameter has been **dropped**. It was structurally unused in the
+chain (the proof of `Υ_output_invariant_preserves` does not consume
+it), and threading it through forced consumers to provide a universal-σ
+σ-presence assumption (`account_at_initial`) that was unprovable in
+full generality. Dropping the witness lets consumers like
+`weth_solvency_invariant` close their proofs without that assumption. -/
 theorem Υ_invariant_preserved
     (fuel : ℕ) (σ : AccountMap .EVM) (H_f : ℕ)
     (H H_gen : BlockHeader) (blocks : ProcessedBlocks) (tx : Transaction)
@@ -1256,14 +1268,13 @@ theorem Υ_invariant_preserved
     (_hInv : WethInvFr σ C)
     (hS_T : C ≠ S_T)
     (hBen : C ≠ H.beneficiary)
-    (hWitness : ΞPreservesInvariantAtC C)
     (hTail : ΥTailInvariant σ fuel H_f H H_gen blocks tx S_T C)
     (hFactor : ΥBodyFactorsInvariant σ fuel H_f H H_gen blocks tx S_T C) :
     match EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
     | .ok (σ', _, _, _) => WethInvFr σ' C
     | .error _ => True :=
   Υ_output_invariant_preserves fuel σ H_f H H_gen blocks tx S_T C
-    hWF hS_T hBen hWitness hTail hFactor
+    hWF hS_T hBen hTail hFactor
 
 end Frame
 end EvmYul
