@@ -8549,6 +8549,19 @@ theorem Ξ_invariant_preserved_bundled_bdd (C : AccountAddress)
         exact this
       | revert _ _ => trivial
 
+/-- An unbounded `ΞPreservesInvariantAtC C` witness yields
+`ΞInvariantFrameAtC C maxFuel` at any `maxFuel`. Routes via
+`Ξ_invariant_preserved_bundled_bdd` — the at-C IHs at every `f' < fuel`
+are derived from the witness via `ΞInvariantAtCFrame_of_witness`. -/
+theorem ΞInvariantFrameAtC_of_witness (C : AccountAddress)
+    (hWitness : ΞPreservesInvariantAtC C) (maxFuel : ℕ) :
+    ΞInvariantFrameAtC C maxFuel := by
+  intro fuel _hf cA gbh bs σ σ₀ g A I hWF hCO_ne hNC hInv
+  have hAtCSub : ∀ k, k < fuel → ΞInvariantAtCFrame C k :=
+    fun k _ => ΞInvariantAtCFrame_of_witness C hWitness k
+  exact Ξ_invariant_preserved_bundled_bdd C fuel hAtCSub
+    cA gbh bs σ σ₀ g A I hWF hCO_ne hNC hInv
+
 /-! ## §H.2 — At-`C` invariant step bundle (consumer-facing)
 
 Mirror of `step_bundled_invariant_at_C_general` (§G.1) for the
@@ -8789,7 +8802,7 @@ withdraw block (which establishes the slack inequality). The IHs
 `hAtCFrame`/`hFrame` at fuel `f + 1` are mono'd down to `f` and threaded
 into `call_invariant_preserved` here — so the consumer never sees the
 IHs. -/
-private theorem step_CALL_arm_at_C_slack_invariant
+theorem step_CALL_arm_at_C_slack_invariant
     (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
     (evmState sstepState : EVM.State)
     (hWF : StateWF evmState.accountMap)
