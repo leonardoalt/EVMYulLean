@@ -161,6 +161,15 @@ gives `Iₐ ≠ C`. Thus the resulting SD-set still excludes `C`. -/
 def SubstateSDExclude (A : Substate) (C : AccountAddress) : Prop :=
   ∀ k ∈ A.selfDestructSet.1.toList, k ≠ C
 
+/-- Account presence: `∃ acc, σ.find? a = some acc`. Monotone under
+the `insert` operations used by every Θ/Λ/Ξ/step path.
+
+Forward declaration; lemmas are proved in §I (around `accountPresentAt_insert`).
+Defined here so it can appear as a precondition in `ΞPreservesInvariantAtC` /
+`ΞInvariantAtCFrame` etc. -/
+def accountPresentAt (σ : AccountMap .EVM) (a : AccountAddress) : Prop :=
+  ∃ acc : Account .EVM, σ.find? a = some acc
+
 /-- Code-specific Ξ preservation witness.
 
 When the Ξ interpreter runs at `I.codeOwner = C` — i.e. we're
@@ -10975,11 +10984,6 @@ even SELFDESTRUCT inside a transaction only zeroes the balance via
 * Discharging the witness `ΞPreservesAccountAt a` framework-side via
   Reachable-style mutual closure (mirror of
   `ΞPreservesAtC_of_Reachable`). Phase J. -/
-
-/-- Account presence: `∃ acc, σ.find? a = some acc`. Monotone under
-the `insert` operations used by every Θ/Λ/Ξ/step path. -/
-def accountPresentAt (σ : AccountMap .EVM) (a : AccountAddress) : Prop :=
-  ∃ acc : Account .EVM, σ.find? a = some acc
 
 /-- Inserting at any key preserves presence at any address. -/
 theorem accountPresentAt_insert
