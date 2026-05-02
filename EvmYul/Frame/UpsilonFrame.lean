@@ -65,7 +65,7 @@ private theorem balanceOf_insert_ne
 
 The two-case match on `σ.find? k` both resolve to an insert at `k`,
 so `find?_insert_ne` applies at `C`. -/
-private theorem balanceOf_increaseBalance_ne
+theorem balanceOf_increaseBalance_ne
     (σ : AccountMap .EVM) (k C : AccountAddress) (v : UInt256) (hk : k ≠ C) :
     balanceOf (σ.increaseBalance .EVM k v) C = balanceOf σ C := by
   unfold AccountMap.increaseBalance
@@ -77,7 +77,7 @@ private theorem balanceOf_increaseBalance_ne
 preserves `storageSum C`. The proof is identical in structure to
 `balanceOf_increaseBalance_ne` — both internal branches reduce to an
 insert at `k ≠ C`, which preserves `find? C` and hence `storageSum C`. -/
-private theorem storageSum_increaseBalance_ne
+theorem storageSum_increaseBalance_ne
     (σ : AccountMap .EVM) (k C : AccountAddress) (v : UInt256) (hk : k ≠ C) :
     storageSum (σ.increaseBalance .EVM k v) C = storageSum σ C := by
   unfold AccountMap.increaseBalance
@@ -858,7 +858,7 @@ def Υ_tail_state
 `balanceOf σ_X C = balanceOf σ_F C`, as long as the SD-set and dead
 filter at `σ_F` exclude C, the tail-transformed state has the same
 balance at C. -/
-private theorem balanceOf_tail_generic
+theorem balanceOf_tail_generic
     (σ_F : AccountMap .EVM) (A : Substate) (C : AccountAddress)
     (hSD_ne : ∀ k ∈ A.selfDestructSet.1.toList, k ≠ C)
     (hDead_ne : ∀ k ∈ A.touchedAccounts.filter (State.dead σ_F ·), k ≠ C) :
@@ -884,7 +884,7 @@ private theorem Υ_tail_over_σF
       = balanceOf σ_F C := balanceOf_tail_generic σ_F A C hSD_ne hDead_ne
 
 /-- `State.dead` is preserved by `increaseBalance` at a different key. -/
-private theorem dead_increaseBalance_ne
+theorem dead_increaseBalance_ne
     (σ : AccountMap .EVM) (k C : AccountAddress) (v : UInt256) (hk : k ≠ C) :
     State.dead (σ.increaseBalance .EVM k v) C = State.dead σ C := by
   unfold State.dead AccountMap.increaseBalance
@@ -895,7 +895,7 @@ private theorem dead_increaseBalance_ne
 H.beneficiary`, the SD-set excludes `C`, the dead-filter at any σ_F
 with `dead σ_F C = false` excludes `C`, and `dead σ_P C = false`
 (suffices for the dead-filter clause to apply at the concrete σStar'). -/
-private theorem Υ_tail_balanceOf_ge
+theorem Υ_tail_balanceOf_ge
     (σ_P : AccountMap .EVM) (g' : UInt256) (A : Substate)
     (H : BlockHeader) (H_f : ℕ) (tx : Transaction)
     (S_T C : AccountAddress)
@@ -951,107 +951,6 @@ private theorem Υ_tail_balanceOf_ge
   · rw [balanceOf_increaseBalance_ne _ _ _ _ hBen.symm,
         balanceOf_increaseBalance_ne _ _ _ _ hS_T.symm]
   · rw [balanceOf_increaseBalance_ne _ _ _ _ hS_T.symm]
-
-/-! ## §1.3 — Storage-sum side of Υ's tail
-
-Mirrors the balance-side helpers above, but for `storageSum`. The
-arithmetic is simpler because storageSum at `C` is **strictly
-preserved** (not just monotone) by every step of the tail: the two
-`increaseBalance` calls at `S_T ≠ C` and `H.beneficiary ≠ C` don't
-touch persistent storage at any other account; the SD/dead foldl
-erases skip `C`; and the final tstorage wipe only modifies the
-`.tstorage` field, leaving `.storage` intact. -/
-
-/-- Storage-sum analogue of `balanceOf_tail_generic`: for any σ_F
-satisfying the SD/dead invariants at C, the tail-transformed state
-has the same storageSum at C. -/
-private theorem storageSum_tail_generic
-    (σ_F : AccountMap .EVM) (A : Substate) (C : AccountAddress)
-    (hSD_ne : ∀ k ∈ A.selfDestructSet.1.toList, k ≠ C)
-    (hDead_ne : ∀ k ∈ A.touchedAccounts.filter (State.dead σ_F ·), k ≠ C) :
-    storageSum
-      ((A.touchedAccounts.filter (State.dead σ_F ·)).foldl Batteries.RBMap.erase
-        (A.selfDestructSet.1.foldl Batteries.RBMap.erase σ_F)
-        |>.map (fun (addr, acc) => (addr, { acc with tstorage := RBMap.empty }))) C
-      = storageSum σ_F C := by
-  rw [storageSum_tstorage_wipe_eq]
-  rw [storageSum_of_find?_eq (find?_erase_rbset_foldl_ne _ _ C hDead_ne)]
-  rw [storageSum_of_find?_eq (find?_erase_rbnode_foldl_ne _ _ C hSD_ne)]
-
-/-- The pure tail of Υ preserves `storageSum C` under: `C ≠ S_T`, `C
-≠ H.beneficiary`, the SD-set excludes `C`, and the dead-filter (at
-σStar', the post-fee state) excludes `C`.
-
-Storage-side mirror of `Υ_tail_balanceOf_ge`. The structure is
-identical — same case split on `benFee != 0` for σStar' — but each
-balance lemma is replaced by its storageSum companion:
-
-* `balanceOf_increaseBalance_ne` ↦ `storageSum_increaseBalance_ne`,
-* `balanceOf_tail_generic` ↦ `storageSum_tail_generic`.
-
-Note: unlike the balance side, no `State.dead σ_P C = false`
-hypothesis is needed for the conclusion itself. We do still require
-the `hDeadGated` clause to apply at the concrete σStar', and that
-clause is gated by `dead σStar' C = false`. To avoid burdening callers
-with an additional structural fact, we accept `hDead_σP : State.dead
-σ_P C = false` (same as the balance side) and use it to derive
-`dead σStar' C = false` via `dead_increaseBalance_ne`. -/
-private theorem Υ_tail_storageSum_eq
-    (σ_P : AccountMap .EVM) (g' : UInt256) (A : Substate)
-    (H : BlockHeader) (H_f : ℕ) (tx : Transaction)
-    (S_T C : AccountAddress)
-    (hS_T : C ≠ S_T)
-    (hBen : C ≠ H.beneficiary)
-    (hSD : ∀ k ∈ A.selfDestructSet.1.toList, k ≠ C)
-    (hDeadGated :
-       ∀ σ_F : AccountMap .EVM, State.dead σ_F C = false →
-         ∀ k ∈ A.touchedAccounts.filter (State.dead σ_F ·), k ≠ C)
-    (hDead_σP : State.dead σ_P C = false) :
-    storageSum (Υ_tail_state σ_P g' A H H_f tx S_T) C = storageSum σ_P C := by
-  unfold Υ_tail_state
-  simp only
-  generalize
-    ((g' + min ((tx.base.gasLimit - g') / ⟨5⟩) A.refundBalance) *
-      (match tx with
-       | .legacy t | .access t => t.gasPrice
-       | .dynamic _ | .blob _ =>
-            (match tx with
-             | .legacy t | .access t => t.gasPrice - .ofNat H_f
-             | .dynamic t | .blob t =>
-                   min t.maxPriorityFeePerGas (t.maxFeePerGas - .ofNat H_f)) +
-            .ofNat H_f)) = payFee
-  generalize
-    ((tx.base.gasLimit -
-        (g' + min ((tx.base.gasLimit - g') / ⟨5⟩) A.refundBalance)) *
-       (match tx with
-        | .legacy t | .access t => t.gasPrice - .ofNat H_f
-        | .dynamic t | .blob t =>
-              min t.maxPriorityFeePerGas (t.maxFeePerGas - .ofNat H_f))) = benFee
-  -- The σ_F at which the dead-filter is taken is σStar'.
-  set σStar' : AccountMap .EVM :=
-    if benFee != ⟨0⟩
-      then (σ_P.increaseBalance .EVM S_T payFee).increaseBalance .EVM
-            H.beneficiary benFee
-      else σ_P.increaseBalance .EVM S_T payFee with hσStar'_def
-  -- Both increaseBalance updates are at addresses ≠ C, so dead at C is
-  -- preserved from σ_P.
-  have hDead_σStar' : State.dead σStar' C = false := by
-    rw [hσStar'_def]
-    split
-    · rw [dead_increaseBalance_ne _ _ _ _ hBen.symm,
-          dead_increaseBalance_ne _ _ _ _ hS_T.symm]
-      exact hDead_σP
-    · rw [dead_increaseBalance_ne _ _ _ _ hS_T.symm]
-      exact hDead_σP
-  have hDead_at := hDeadGated σStar' hDead_σStar'
-  rw [storageSum_tail_generic _ A C hSD hDead_at]
-  -- Now reduce the `if` at the storageSum level.
-  show storageSum σStar' C = storageSum σ_P C
-  rw [hσStar'_def]
-  split
-  · rw [storageSum_increaseBalance_ne _ _ _ _ hBen.symm,
-        storageSum_increaseBalance_ne _ _ _ _ hS_T.symm]
-  · rw [storageSum_increaseBalance_ne _ _ _ _ hS_T.symm]
 
 /-- Hypothesis form of Υ's body factorisation.
 
@@ -1139,50 +1038,51 @@ theorem Υ_balanceOf_ge
        rw [hOk] at h
        exact Nat.le_trans hBal h)
 
-/-! ## §1.3 — Υ's invariant-preservation entry point
+/-! ## §1.3 — Storage-sum side of Υ's tail
 
-Mirror of `Υ_balanceOf_ge`'s chain, with conclusion changed from
-balance monotonicity to `StorageSumLeBalance` preservation. The structure is:
+Mirrors the balance-side helpers above, but for `storageSum`. The
+arithmetic is simpler because storageSum at `C` is **strictly
+preserved** (not just monotone) by every step of the tail: the two
+`increaseBalance` calls at `S_T ≠ C` and `H.beneficiary ≠ C` don't
+touch persistent storage at any other account; the SD/dead foldl
+erases skip `C`; and the final tstorage wipe only modifies the
+`.tstorage` field, leaving `.storage` intact. -/
 
-  * `ΥBodyFactorsInvariant` — invariant-flavoured body factorisation
-    (σ' decomposes through the tail; σ_P satisfies `StorageSumLeBalance σ_P C`
-    and `dead σ_P C = false`). Discharged per-contract via the at-C
-    invariant frames.
-  * `Υ_tail_invariant_preserves` — combines `Υ_tail_balanceOf_ge`
-    (β unchanged at C across the tail) with `Υ_tail_storageSum_eq`
-    (S unchanged at C across the tail) ⇒ `StorageSumLeBalance σ_P C →
-    StorageSumLeBalance σ_tail C`.
-  * `Υ_invariant_preserved` — top-level consumer entry point. -/
+/-- Storage-sum analogue of `balanceOf_tail_generic`: for any σ_F
+satisfying the SD/dead invariants at C, the tail-transformed state
+has the same storageSum at C. -/
+theorem storageSum_tail_generic
+    (σ_F : AccountMap .EVM) (A : Substate) (C : AccountAddress)
+    (hSD_ne : ∀ k ∈ A.selfDestructSet.1.toList, k ≠ C)
+    (hDead_ne : ∀ k ∈ A.touchedAccounts.filter (State.dead σ_F ·), k ≠ C) :
+    storageSum
+      ((A.touchedAccounts.filter (State.dead σ_F ·)).foldl Batteries.RBMap.erase
+        (A.selfDestructSet.1.foldl Batteries.RBMap.erase σ_F)
+        |>.map (fun (addr, acc) => (addr, { acc with tstorage := RBMap.empty }))) C
+      = storageSum σ_F C := by
+  rw [storageSum_tstorage_wipe_eq]
+  rw [storageSum_of_find?_eq (find?_erase_rbset_foldl_ne _ _ C hDead_ne)]
+  rw [storageSum_of_find?_eq (find?_erase_rbnode_foldl_ne _ _ C hSD_ne)]
 
-/-- Hypothesis form of Υ's body factorisation, **invariant flavour**.
+/-- The pure tail of Υ preserves `storageSum C` under: `C ≠ S_T`, `C
+≠ H.beneficiary`, the SD-set excludes `C`, and the dead-filter (at
+σStar', the post-fee state) excludes `C`.
 
-Whenever Υ returns `.ok (σ', A, z, _)`, σ' decomposes as
-`Υ_tail_state σ_P g' A …` for some `(σ_P, g')` produced by the Θ/Λ
-dispatch, with `StorageSumLeBalance σ_P C` (rather than balance monotonicity)
-and `C` not dead in σ_P. Discharged per-contract by the caller via
-the at-C invariant frame chain (`Θ_invariant_preserved` /
-`Λ_invariant_preserved` / §H.2's `Ξ_invariant_preserved_bundled_bdd`). -/
-def ΥBodyFactorsInvariant (σ : AccountMap .EVM) (fuel H_f : ℕ)
-    (H H_gen : BlockHeader) (blocks : ProcessedBlocks) (tx : Transaction)
-    (S_T C : AccountAddress) : Prop :=
-  match EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
-  | .ok (σ', A', _, _) =>
-      ∃ σ_P g',
-        σ' = Υ_tail_state σ_P g' A' H H_f tx S_T ∧
-        StorageSumLeBalance σ_P C ∧
-        State.dead σ_P C = false
-  | .error _ => True
+Storage-side mirror of `Υ_tail_balanceOf_ge`. The structure is
+identical — same case split on `benFee != 0` for σStar' — but each
+balance lemma is replaced by its storageSum companion:
 
-/-- Combined tail step: under the structural exclusions for the SD/dead
-sweeps and the `dead σ_P C = false` hypothesis, the pure tail of Υ
-preserves `StorageSumLeBalance` at `C`.
+* `balanceOf_increaseBalance_ne` ↦ `storageSum_increaseBalance_ne`,
+* `balanceOf_tail_generic` ↦ `storageSum_tail_generic`.
 
-Direct consequence of `Υ_tail_balanceOf_ge` (β unchanged at C across
-the tail; the conclusion `balanceOf tail C ≥ balanceOf σ_P C`
-upgrades to equality because the tail also doesn't add at C, but for
-the invariant we only need `≥`) combined with `Υ_tail_storageSum_eq`
-(S unchanged at C across the tail). -/
-private theorem Υ_tail_invariant_preserves
+Note: unlike the balance side, no `State.dead σ_P C = false`
+hypothesis is needed for the conclusion itself. We do still require
+the `hDeadGated` clause to apply at the concrete σStar', and that
+clause is gated by `dead σStar' C = false`. To avoid burdening callers
+with an additional structural fact, we accept `hDead_σP : State.dead
+σ_P C = false` (same as the balance side) and use it to derive
+`dead σStar' C = false` via `dead_increaseBalance_ne`. -/
+theorem Υ_tail_storageSum_eq
     (σ_P : AccountMap .EVM) (g' : UInt256) (A : Substate)
     (H : BlockHeader) (H_f : ℕ) (tx : Transaction)
     (S_T C : AccountAddress)
@@ -1192,89 +1092,52 @@ private theorem Υ_tail_invariant_preserves
     (hDeadGated :
        ∀ σ_F : AccountMap .EVM, State.dead σ_F C = false →
          ∀ k ∈ A.touchedAccounts.filter (State.dead σ_F ·), k ≠ C)
-    (hDead_σP : State.dead σ_P C = false)
-    (hInv_σP : StorageSumLeBalance σ_P C) :
-    StorageSumLeBalance (Υ_tail_state σ_P g' A H H_f tx S_T) C := by
-  unfold StorageSumLeBalance at hInv_σP ⊢
-  have hβ : balanceOf (Υ_tail_state σ_P g' A H H_f tx S_T) C = balanceOf σ_P C :=
-    Υ_tail_balanceOf_ge σ_P g' A H H_f tx S_T C hS_T hBen hSD hDeadGated hDead_σP
-  have hS : storageSum (Υ_tail_state σ_P g' A H H_f tx S_T) C = storageSum σ_P C :=
-    Υ_tail_storageSum_eq σ_P g' A H H_f tx S_T C hS_T hBen hSD hDeadGated hDead_σP
-  rw [hβ, hS]
-  exact hInv_σP
-
-/-- Υ's invariant-preservation frame, proved from the invariant body
-factorisation and tail-invariant hypotheses.
-
-Mirror of `Υ_output_balance_ge` for the (β ≥ S) chain.
-
-Note: this theorem does not require a `ΞPreservesInvariantAtC C`
-witness. The body-factor hypothesis (`hFactor`) already carries
-`StorageSumLeBalance σ_P C` (post-Θ/Λ-dispatch), and the tail step preserves it
-verbatim under the SD-exclusion / dead-set hypotheses, so the at-`C`
-Ξ-level witness is structurally redundant at this level. The
-consumer-side `ΞPreservesInvariantAtC` witness still feeds into the
-Θ/Λ-side propagation chain that establishes `hFactor`'s
-`StorageSumLeBalance σ_P C`, but it is not threaded through Υ. -/
-theorem Υ_output_invariant_preserves
-    (fuel : ℕ) (σ : AccountMap .EVM) (H_f : ℕ)
-    (H H_gen : BlockHeader) (blocks : ProcessedBlocks) (tx : Transaction)
-    (S_T C : AccountAddress)
-    (_hWF : StateWF σ)
-    (hS_T : C ≠ S_T)
-    (hBen : C ≠ H.beneficiary)
-    (hTail : ΥTailInvariant σ fuel H_f H H_gen blocks tx S_T C)
-    (hFactor : ΥBodyFactorsInvariant σ fuel H_f H H_gen blocks tx S_T C) :
-    match EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
-    | .ok (σ', _, _, _) => StorageSumLeBalance σ' C
-    | .error _ => True := by
-  unfold ΥBodyFactorsInvariant at hFactor
-  unfold ΥTailInvariant at hTail
-  cases hΥ : EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
-  | error e => trivial
-  | ok r =>
-    obtain ⟨σ', A, z, gUsed⟩ := r
-    rw [hΥ] at hFactor
-    rw [hΥ] at hTail
-    obtain ⟨σ_P, g', hEq, hInv_σP, hDead_σP⟩ := hFactor
-    obtain ⟨hSD, hDeadGated⟩ := hTail
-    show StorageSumLeBalance σ' C
-    rw [hEq]
-    exact Υ_tail_invariant_preserves σ_P g' A H H_f tx S_T C hS_T hBen
-      hSD hDeadGated hDead_σP hInv_σP
-
-/-- Υ's transaction-level invariant-preservation theorem. Given a
-pre-state σ satisfying `StorageSumLeBalance σ C` and the structural hypotheses,
-the post-state σ' produced by Υ also satisfies `StorageSumLeBalance σ' C`.
-
-Mirror of `Υ_balanceOf_ge` for the (β ≥ S) chain. The proof composes
-`Υ_output_invariant_preserves` (which produces `StorageSumLeBalance σ' C`
-directly from σ_P's invariant) — no additional projection is needed
-because the body factor's `StorageSumLeBalance σ_P C` is the invariant we want
-to lift.
-
-Note: the previously-required `hWitness : ΞPreservesInvariantAtC C`
-parameter has been **dropped**. It was structurally unused in the
-chain (the proof of `Υ_output_invariant_preserves` does not consume
-it), and threading it through forced consumers to provide a universal-σ
-σ-presence assumption (`account_at_initial`) that was unprovable in
-full generality. Dropping the witness lets consumers close their
-proofs without that assumption. -/
-theorem Υ_invariant_preserved
-    (fuel : ℕ) (σ : AccountMap .EVM) (H_f : ℕ)
-    (H H_gen : BlockHeader) (blocks : ProcessedBlocks) (tx : Transaction)
-    (S_T C : AccountAddress)
-    (hWF : StateWF σ)
-    (_hInv : StorageSumLeBalance σ C)
-    (hS_T : C ≠ S_T)
-    (hBen : C ≠ H.beneficiary)
-    (hTail : ΥTailInvariant σ fuel H_f H H_gen blocks tx S_T C)
-    (hFactor : ΥBodyFactorsInvariant σ fuel H_f H H_gen blocks tx S_T C) :
-    match EVM.Υ fuel σ H_f H H_gen blocks tx S_T with
-    | .ok (σ', _, _, _) => StorageSumLeBalance σ' C
-    | .error _ => True :=
-  Υ_output_invariant_preserves fuel σ H_f H H_gen blocks tx S_T C
-    hWF hS_T hBen hTail hFactor
+    (hDead_σP : State.dead σ_P C = false) :
+    storageSum (Υ_tail_state σ_P g' A H H_f tx S_T) C = storageSum σ_P C := by
+  unfold Υ_tail_state
+  simp only
+  generalize
+    ((g' + min ((tx.base.gasLimit - g') / ⟨5⟩) A.refundBalance) *
+      (match tx with
+       | .legacy t | .access t => t.gasPrice
+       | .dynamic _ | .blob _ =>
+            (match tx with
+             | .legacy t | .access t => t.gasPrice - .ofNat H_f
+             | .dynamic t | .blob t =>
+                   min t.maxPriorityFeePerGas (t.maxFeePerGas - .ofNat H_f)) +
+            .ofNat H_f)) = payFee
+  generalize
+    ((tx.base.gasLimit -
+        (g' + min ((tx.base.gasLimit - g') / ⟨5⟩) A.refundBalance)) *
+       (match tx with
+        | .legacy t | .access t => t.gasPrice - .ofNat H_f
+        | .dynamic t | .blob t =>
+              min t.maxPriorityFeePerGas (t.maxFeePerGas - .ofNat H_f))) = benFee
+  -- The σ_F at which the dead-filter is taken is σStar'.
+  set σStar' : AccountMap .EVM :=
+    if benFee != ⟨0⟩
+      then (σ_P.increaseBalance .EVM S_T payFee).increaseBalance .EVM
+            H.beneficiary benFee
+      else σ_P.increaseBalance .EVM S_T payFee with hσStar'_def
+  -- Both increaseBalance updates are at addresses ≠ C, so dead at C is
+  -- preserved from σ_P.
+  have hDead_σStar' : State.dead σStar' C = false := by
+    rw [hσStar'_def]
+    split
+    · rw [dead_increaseBalance_ne _ _ _ _ hBen.symm,
+          dead_increaseBalance_ne _ _ _ _ hS_T.symm]
+      exact hDead_σP
+    · rw [dead_increaseBalance_ne _ _ _ _ hS_T.symm]
+      exact hDead_σP
+  have hDead_at := hDeadGated σStar' hDead_σStar'
+  rw [storageSum_tail_generic _ A C hSD hDead_at]
+  -- Now reduce the `if` at the storageSum level.
+  show storageSum σStar' C = storageSum σ_P C
+  rw [hσStar'_def]
+  split
+  · rw [storageSum_increaseBalance_ne _ _ _ _ hBen.symm,
+        storageSum_increaseBalance_ne _ _ _ _ hS_T.symm]
+  · rw [storageSum_increaseBalance_ne _ _ _ _ hS_T.symm]
 
 end Frame
 end EvmYul
