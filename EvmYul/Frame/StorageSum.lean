@@ -366,7 +366,7 @@ private theorem filter_eq_self_of_all
   | cons a L ih =>
     have ha : Q a = true := h a (by simp)
     have ih' := ih fun x hx => h x (by simp [hx])
-    simp [List.filter_cons, ha, ih']
+    simp [ha, ih']
 
 /-- `RBNode.append` distributes over `toList`. Mirror of
 `Layer1.append_toList`. -/
@@ -494,12 +494,12 @@ private theorem del_toList_filter_pair
           Batteries.RBNode.IsCut.lt_trans (hAll_y_lt_b z hz) hcy
         simp [hcz]
       have hy : decide (cut y ≠ .eq) = true := by simp [hcy]
-      simp only [hcy]
+      simp only []
       split
       all_goals
         simp only [Batteries.RBNode.balLeft_toList,
-                   Batteries.RBNode.toList_node, hy, hbFilter, iha']
-        simp [if_true]
+                   Batteries.RBNode.toList_node, hbFilter, iha']
+        simp
     | .gt =>
       have haFilter :
           a.toList.filter (fun p => decide (cut p ≠ .eq)) = a.toList := by
@@ -509,12 +509,12 @@ private theorem del_toList_filter_pair
           Batteries.RBNode.IsCut.gt_trans (hAll_a_lt_y z hz) hcy
         simp [hcz]
       have hy : decide (cut y ≠ .eq) = true := by simp [hcy]
-      simp only [hcy]
+      simp only []
       split
       all_goals
         simp only [Batteries.RBNode.balRight_toList,
-                   Batteries.RBNode.toList_node, hy, haFilter, ihb']
-        simp [if_true]
+                   Batteries.RBNode.toList_node, haFilter, ihb']
+        simp
     | .eq =>
       have haFilter :
           a.toList.filter (fun p => decide (cut p ≠ .eq)) = a.toList := by
@@ -536,7 +536,7 @@ private theorem del_toList_filter_pair
           rw [hyz] at hE; exact hE.symm
         simp [hcz]
       have hy : decide (cut y ≠ .eq) = false := by simp [hcy]
-      simp only [hcy, append_toList_storage, haFilter, hbFilter, hy]
+      simp only [append_toList_storage, haFilter, hbFilter]
       simp
 
 /-- `RBMap UInt256 UInt256 compare`-level erase characterisation: the

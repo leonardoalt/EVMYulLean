@@ -6494,7 +6494,7 @@ theorem theta_σ'₁_pre_credit_slack_at_C
       omega
   | some acc =>
     -- σ.find? C = some acc, σ'₁ = σ.insert C { acc with balance := acc.balance + v }.
-    simp only [hLook]
+    simp only []
     have hWrap : acc.balance.toNat + v.toNat < UInt256.size := hValBound acc hLook
     -- storageSum σ'₁ C = storageSum σ C from hStg.
     have hStg' : storageSum (σ.insert C { acc with balance := acc.balance + v }) C
