@@ -1,6 +1,8 @@
 # Frame Library: Balance-Frame Reasoning for EVMYulLean
 
-This document describes the additions on the `evm-smith-frame-library` branch.
+This document describes the Frame library additions carried by
+[`leonardoalt/EVMYulLean@main`](https://github.com/leonardoalt/EVMYulLean) on
+top of the `NethermindEth/EVMYulLean` upstream.
 It is intended for downstream provers who want to reason about per-account
 invariants — most importantly **balance monotonicity at a fixed address `C`** —
 across an entire Ethereum transaction (`Υ`), in the presence of arbitrary
