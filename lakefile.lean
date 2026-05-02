@@ -56,9 +56,19 @@ extern_lib libleanffi pkg := do
   -- our own `ffi.c`
   let ffiO ← ffi.o.fetch
 
-  if !(←System.FilePath.pathExists "EthereumTests") then
-    dbg_trace s!"Cloning EthereumTests into a submodule."
-    discard <| IO.Process.run {cmd := "git", args := #["submodule", "update", "--init"]}
+  -- Opportunistically populate the EthereumTests git submodule (used
+  -- by the conformance test suite). Resolve the path against the
+  -- package directory, and run `git submodule update --init` from
+  -- there too — otherwise downstream consumers building against
+  -- this package as a submodule / sibling would have the command
+  -- run from their own (wrong) cwd.
+  let ethereumTestsDir := pkg.dir / "EthereumTests"
+  if !(← ethereumTestsDir.pathExists) then
+    dbg_trace s!"Cloning EthereumTests into a submodule at {ethereumTestsDir}."
+    discard <| IO.Process.run
+      { cmd := "git",
+        args := #["submodule", "update", "--init", "EthereumTests"],
+        cwd := some pkg.dir }
 
   let name := nameToStaticLib "leanffi"
   buildStaticLib (pkg.nativeLibDir / name) #[sha256O, keccak256, ffiO]
