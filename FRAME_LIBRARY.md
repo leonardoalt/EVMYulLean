@@ -242,3 +242,194 @@ for the full plan.
 Until that lands, downstream consumers (e.g. `register_balance_mono`)
 still take `*SDExclusion` and `*DeadAtσP` as caller-supplied
 hypotheses (not axioms).
+
+---
+
+## Phase B: Account-Presence Preservation and Universal Ξ
+
+A second wave of framework additions, motivated by the WETH solvency
+proof, lifts the framework from "balance frame" to a more general
+"per-account state-shape frame". The headline result is a **fully
+universal Ξ-preservation theorem** (`Ξ_preserves_account_at_a_universal :
+∀ a, ΞPreservesAccountAt a`), discharged via mutual fuel induction
+over Ξ ↔ Θ ↔ Λ ↔ X ↔ EVM.step.
+
+This unblocks any contract proof that needs to reason about cross-call
+σ-account presence (whether the contract's own account survives across
+nested CALL / CREATE recursion). It also closes a substantial chunk of
+the structural-fact assumptions previously exposed at the consumer
+level.
+
+Total added: **~5,000 LoC** of new framework infrastructure across
+`MutualFrame.lean`, `StepShapes.lean`, `PcWalk.lean`, `StorageSum.lean`,
+and `UpsilonFrame.lean`.
+
+### §I — Θ-side preservation
+
+Layer 1: leaf lemmas about account-presence under specific σ
+manipulations.
+
+| Theorem | What it says |
+|---|---|
+| `accountPresentAt σ a` | `∃ acc, σ.find? a = some acc` — the predicate. |
+| `accountPresentAt_insert` | `insert k v` preserves presence at any address. |
+| `theta_σ'₁_preserves_present` | Θ's value-credit prefix preserves presence. |
+| `theta_σ₁_preserves_present` | Θ's value-debit prefix preserves presence. |
+| `theta_σ'_clamp_preserves_present` | Θ's σ'-clamp preserves presence. |
+| `Θ_preserves_account_at_a` | **Full Θ** preserves presence (witness-driven). |
+| `EVM_call_preserves_account_at_a` | `EVM.call` wrapper of Θ preservation. |
+
+### §J — Universal mutual-induction discharge
+
+#### §J.1–J.4: per-step preservation
+
+| Theorem | What it says |
+|---|---|
+| `evmYul_step_SSTORE_preserves_present` | SSTORE step preserves presence. |
+| `evmYul_step_TSTORE_preserves_present` | Same for TSTORE. |
+| `selfDestruct_preserves_present` | SELFDESTRUCT step (within Θ frame). |
+| `binaryStateOp_preserves_present` | Generic binary state-op preservation. |
+| `evmYul_step_preserves_present` | **Master** per-op lemma for `EvmYul.step`. |
+| `EVM_step_handled_preserves_present` | `EVM.step` for "handled" (non-CALL) ops. |
+| `EVM_step_CALL_preserves_present` | CALL family (CALL / CALLCODE / DELEGATECALL / STATICCALL). |
+| `EVM_step_preserves_present_no_create` | Universal `EVM.step` dispatcher (CREATE excluded). |
+
+#### §J.5: bounded variants for fuel induction
+
+The mutual induction needs fuel-parameterized predicates:
+
+| Predicate | What it says |
+|---|---|
+| `ΞPreservesAccountAtBdd a f` | Ξ preserves presence at `a` for fuels `≤ f`. |
+
+Plus matching bounded variants of all the per-step / Θ / X / EVM.call
+preservation theorems (`Θ_preserves_account_at_a_bdd`,
+`EVM_call_preserves_account_at_a_bdd`, `X_preserves_account_at_a_bdd`,
+etc.).
+
+#### §J.5b: CREATE/CREATE2 preservation (Λ-side)
+
+The hardest single piece. Requires unfolding `EVM.Lambda`'s nested
+do-block (which has `MonadLift Option (Except _)` complications and a
+`Id.run` for the F-condition).
+
+| Theorem | What it says |
+|---|---|
+| `Λ_preserves_account_at_a` | Λ preserves presence (witness-driven). |
+| `EVM_step_CREATE_preserves_present` | Λ-using EVM.step CREATE arm. |
+| `EVM_step_CREATE2_preserves_present` | Same for CREATE2. |
+| `EVM_step_preserves_present` | Universal EVM.step (no no-create constraint). |
+
+#### §J.5c–J.6: universal closures
+
+| Theorem | What it says |
+|---|---|
+| `X_preserves_account_at_a_bdd_universal` | X-loop preservation handling `decode = none` via STOP arm. |
+| **`Ξ_preserves_account_at_a_universal`** | **The fully universal Ξ preservation. The headline result.** |
+
+#### §J.7: Reachable-closure wrappers
+
+Convenience entries for consumers using a `Reachable` predicate:
+
+| Theorem | What it says |
+|---|---|
+| `Θ_preserves_account_at_a_of_Reachable` | Θ preservation with Reachable closure. |
+| `EVM_call_preserves_account_at_a_of_Reachable` | Same for EVM.call. |
+| `Ξ_preserves_account_at_a_of_Reachable_for_C` | Restricted to `I.codeOwner = C` (for contract-specific Reachable predicates). |
+
+#### §J.6.6/.6.7 — `_inv_aware` variants
+
+The framework's `hReach_step` callback didn't expose `WethInvFr s'.accountMap C`
+to consumers, even though the X-loop's induction has it locally. This
+caused a chicken-and-egg circularity for any contract whose Reachable
+predicate depends on the invariant.
+
+The `_inv_aware` variants thread the post-step invariant through:
+
+| Theorem | What it says |
+|---|---|
+| `X_preserves_account_at_a_bdd_op_conditional_with_pres_step` | X-loop variant with σ-presence in step closure. |
+| `Ξ_preserves_account_at_a_of_Reachable_for_C_with_pres_step` | Same at Ξ-level. |
+| `ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch_inv_aware` | Slack-dispatch variant exposing `WethInvFr s'.accountMap C` to `hReach_step`. |
+
+This is the canonical pattern for any contract proof whose Reachable
+predicate carries an X-loop invariant.
+
+### Strong shape lemmas
+
+Per-opcode shape lemmas in `StepShapes.lean` (and `_at_pc` wrappers in
+`PcWalk.lean`) that additionally expose `s'.accountMap = s.accountMap`.
+Used by per-PC cascade-threading work to propagate storage-equality
+facts through non-storage ops.
+
+| Opcode | Strong shape lemma |
+|---|---|
+| `SLOAD` | `step_SLOAD_shape_strong` (with codeOwner-storage lookup) |
+| `LT` | `step_LT_shape_strong` |
+| `SUB` | `step_SUB_shape_strong` |
+| `DUP1` / `DUP2` / `DUP3` / `DUP5` | `step_DUP{1,2,3,5}_shape_strong` |
+| `SWAP1` | `step_SWAP1_shape_strong` |
+| `PUSH` (generic n≥1) | `step_PUSH_shape_strong` |
+| `PUSH1` | `step_PUSH1_shape_strong` |
+| `JUMPI` | `step_JUMPI_shape_strong` |
+| `JUMPDEST` | `step_JUMPDEST_shape_strong` |
+| `POP` | `step_POP_shape_strong` |
+| `CALLER` | `step_CALLER_shape_strong` |
+| `CALLVALUE` | `step_CALLVALUE_shape_strong` |
+| `ADD` | `step_ADD_shape_strong` |
+| `GAS` | `step_GAS_shape_strong` |
+
+Each ships with a `_at_pc_strong` wrapper combining the strong shape
+with PC equality.
+
+### StorageSum helpers
+
+In `StorageSum.lean`:
+
+| Theorem | What it says |
+|---|---|
+| `storageSum_sstore_replace_eq_findD` | findD-flavored `≤`-bridge: SSTORE-replace inequality on storageSum. |
+| `storageSum_storage_insert_absent_eq` | Inserting into an absent slot. |
+| `storageSum_storage_erase_eq_of_find?_none` (exposed) | Public visibility of erase-of-absent. |
+
+### UpsilonFrame simplification
+
+`Υ_invariant_preserved` previously took a `ΞPreservesInvariantAtC C`
+parameter that was structurally unused (passed through to
+`Υ_output_invariant_preserves` as `_hWitness`, never consumed). Drop
+the parameter to simplify the consumer interface.
+
+### Θ-pre-credit framework lemma
+
+| Theorem | What it says |
+|---|---|
+| `theta_σ'₁_pre_credit_slack_at_C` | Given `WethInvFr σ C` and balance no-wrap, post-credit state σ'₁ satisfies `v + storageSum σ'₁ C ≤ balanceOf σ'₁ C`. |
+
+Composes the existing `theta_σ'₁_storageSum_eq` (storage unchanged at
+C through credit) with balance-delta arithmetic
+(`balanceOf σ'₁ C = balanceOf σ C + v` at recipient = C). Backs the
+Θ-pre-credit fact for any consumer that needs it (e.g. WETH's
+`deposit` slack).
+
+### How Phase B enables WETH's solvency proof
+
+The WETH solvency proof in `evm-smith/EvmSmith/Demos/Weth/` discharges
+*every bytecode-derivable assumption* using Phase B:
+
+* `weth_account_at_C : WethAccountAtC C` — projected from the new
+  `accountPresentAt s.accountMap C` conjunct in `WethReachable`,
+  preserved across all 61 per-PC walks via `EVM_step_preserves_present_no_create`.
+* `weth_xi_preserves_C_other` — universal Ξ-preservation via
+  `Ξ_preserves_account_at_a_universal`.
+* `weth_call_inv_step_pres` — CALL-step `WethInvFr` preservation via
+  the `_inv_aware` slack-dispatch variant.
+
+The remaining `WethAssumptions` fields are 4 Register-shape boundary
+facts plus 1 chain-state bound (`call_no_wrap`) — none about WETH's
+bytecode behavior.
+
+### Axioms unchanged
+
+Phase B introduces zero new axioms. The framework still has exactly
+the two axioms documented in the audit above (`precompile_preserves_accountMap`,
+`lambda_derived_address_ne_C`).
