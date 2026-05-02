@@ -238,12 +238,50 @@ What's open: the parallel rewrite of `Θ_body_*`, `Θ_balanceOf_ge_bdd`,
 `X_inv_at_C_v0_holds`, and the closing
 `Ξ_balanceOf_ge_bundled_strong` + `ΞPreservesAtC_of_Reachable_strong`
 — roughly 1500 LoC of cross-referencing tactic proof that needs to
-land in lockstep. See evm-smith's `GENERALIZATION_PLAN.md` Step 5
-for the full plan.
+land in lockstep. The cross-references (Θ → Ξ at fuel-1 → Θ/Λ
+bundled together) force the layers to land in lockstep; multiple
+incremental sub-agent attempts hit this wall consistently. Three
+plausible follow-up strategies: (a) parallel sub-agent runs on
+independent `_strong` sub-theorems with careful merge management;
+(b) interactive grinding with a single dedicated proof session;
+(c) accept the boundary hypotheses on consumer theorems and ship
+the framework as-is (current state).
 
-Until that lands, downstream consumers (e.g. `register_balance_mono`)
-still take `*SDExclusion` and `*DeadAtσP` as caller-supplied
-hypotheses (not axioms).
+Until that lands, downstream consumers (e.g. `register_balance_mono`,
+`weth_solvency_invariant`) still take `*SDExclusion` and `*DeadAtσP`
+as caller-supplied hypotheses (not axioms).
+
+## What does not generalise without further work
+
+The current framework supports **per-account state-shape invariants**
+(balance lower bounds, relative bounds like `Σ storage ≤ balance`,
+account-presence preservation) for contracts whose `Reachable`
+predicate enumerates a finite set of PCs. Two patterns are exercised
+end-to-end: Register's balance monotonicity (`value = 0` outbound
+CALL) and WETH's solvency (non-zero outbound CALL via the
+`_inv_aware` slack-dispatch variant). Outside this envelope:
+
+* **Contracts with conditional control flow** (JUMP, JUMPI on
+  dynamic conditions over storage/calldata) can't have a finite
+  PC-enumerating `Reachable`. They'd need a parametric `Reachable`
+  that depends on storage/calldata; loops similarly require
+  `Reachable` to be invariant under multiple step iterations. The
+  WETH proof handles a single static JUMPI (`bal < amount` →
+  revert) but doesn't generalise to data-dependent branching.
+
+* **Contracts that emit CREATE / CREATE2** invalidate the
+  contract-specific code-identity hypothesis (`DeployedAtC C`):
+  Register's argument relies on T5 (Keccak collision-resistance)
+  excluding *external* contracts from deriving address `C`, but a
+  contract that itself does CREATE/CREATE2 needs to prove its own
+  derived addresses are ≠ `C`. This requires bytecode reasoning
+  about salt and constructor input.
+
+* **Contracts that emit SELFDESTRUCT** in their own bytecode
+  invalidate the `*SDExclusion` boundary hypothesis. Both Register
+  and WETH have no SELFDESTRUCT, so the hypothesis is a chain-state
+  fact about the *outer* substate; for self-destructing contracts
+  it would need to be derived from the bytecode walk instead.
 
 ---
 
