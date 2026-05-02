@@ -485,9 +485,9 @@ The WETH solvency proof in `evm-smith/EvmSmith/Demos/Weth/` discharges
 * `weth_call_inv_step_pres` — CALL-step `WethInvFr` preservation via
   the `_inv_aware` slack-dispatch variant.
 
-The remaining `WethAssumptions` fields are 4 Register-shape boundary
-facts plus 1 chain-state bound (`call_no_wrap`) — none about WETH's
-bytecode behavior.
+The remaining `WethAssumptions` fields are 4 standard transaction
+boundary facts plus 1 chain-state bound (`call_no_wrap`) — none
+about WETH's bytecode behavior.
 
 ### Axioms unchanged
 
