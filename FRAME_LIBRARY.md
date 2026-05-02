@@ -36,10 +36,14 @@ results at every layer of the spec:
 ```
 
 Before this branch, only the operational semantics existed. The frame
-library closes preservation at every layer — for both the
-balance-monotonicity shape and the more general state-shape variants
-(`accountPresentAt`, `WethInvFr`, …) — and exposes each as a small
-set of theorems with crisp preconditions.
+library closes preservation at every layer — both the
+balance-monotonicity chain and the contract-agnostic state-shape
+primitives (`accountPresentAt`, the universal Ξ-preservation result,
+strong shape lemmas, generic Υ-tail helpers) — and exposes each as a
+small set of theorems with crisp preconditions. Relational invariants
+that mix two projections (e.g. `storageSum ≤ balanceOf`) live
+**consumer-side** as worked-example closures on top of these
+primitives; see `EvmSmith/Demos/Weth/InvariantClosure.lean`.
 
 ## What was added
 
@@ -96,7 +100,7 @@ The X-instruction-loop frame:
 Aggregator for the system-arm dispatchers (CREATE/CREATE2/CALL/CALLCODE/
 DELEGATECALL/STATICCALL).
 
-### `EvmYul/Frame/UpsilonFrame.lean` (918 LoC)
+### `EvmYul/Frame/UpsilonFrame.lean`
 The transaction-level frame `Υ`:
 
 * `Υ_balanceOf_ge` — *the consumer-facing entry point for
@@ -110,17 +114,33 @@ The transaction-level frame `Υ`:
   - `ΥBodyFactors σ … C` (Υ's body factors as Θ/Λ-dispatch composed with the tail),
 
   concludes `b₀ ≤ balanceOf σ' C` for the post-Υ state.
-* `Υ_invariant_preserved` — the consumer-facing entry point for
-  general per-account inductive invariants (used by the WETH
-  solvency proof). Same shape as `Υ_balanceOf_ge` but parametric in
-  the invariant.
 * `Υ_output_balance_ge` — uncluttered version returning `≥ balanceOf σ C`.
 * `Υ_tail_balanceOf_ge` — pure post-dispatch tail (gas refund + SD sweep
   + dead-account sweep + tstorage wipe) preserves balance at C.
+* `balanceOf_tail_generic`, `dead_increaseBalance_ne`,
+  `balanceOf_increaseBalance_ne` — generic Υ-tail / increaseBalance
+  helpers used by both the balance-mono chain and any consumer-side
+  closure.
+* `storageSum_tail_generic`, `Υ_tail_storageSum_eq`,
+  `storageSum_increaseBalance_ne` — the storage-sum-side counterparts,
+  exposed publicly so consumer-side relational closures can reuse them.
 * The `TxValid` predicate (a strengthened upfront-cost validity claim
   with three structural consequences pre-packaged: no underflow on
   `S_T`, value-fundability, recipient no-wrap). **No longer a global
   axiom** — consumers thread it as a hypothesis.
+
+> Consumers needing per-account *inductive* invariants (relational
+> shapes mixing two projections, e.g. `storageSum ≤ balanceOf`) build
+> their closure outside the framework. The worked example pattern —
+> a transaction-level entry point `Υ_invariant_preserved` parametric
+> in the invariant, plus its Υ-tail wrappers — lives in
+> `EvmSmith/Demos/Weth/InvariantClosure.lean` and sits on top of the
+> generic Υ-tail helpers above. The closure is generic in *shape*
+> (the predicate and its preservation chain don't depend on WETH's
+> bytecode); it lives consumer-side because we have one consumer.
+> Once a second consumer demonstrates the same shape, this content
+> is the natural candidate for lifting back into the frame library
+> as a parametric module over `I : AccountMap → AccountAddress → Prop`.
 
 ### `EvmYul/Frame/MutualFrame.lean` (the bulk of the work)
 
@@ -163,6 +183,23 @@ Highlights:
   `decodeSome`, `op-in-allowed-set`, `v0-at-CALL`, initial-state),
   this theorem produces `ΞPreservesAtC C` directly.
 
+A handful of helper theorems that previously had `private` visibility
+are now public so consumer-side closures can invoke them directly:
+`applyPrecompile_bundled`, `stateWF_theta_σ₁`, `stateWF_lambda_σStar_some`,
+`opIsSystemCallOrCreate`, `op_classification`.
+
+> The `StorageSumLeBalance` predicate, the §H invariant-tracking
+> predicates (`ΞPreservesInvariantAtC`, `ΞInvariantAtCFrame`,
+> `ΞInvariantFrameAtC`), and the §H.2 mutual-induction closure
+> (`Θ_invariant_preserved_bdd`, `Λ_invariant_preserved_bdd`,
+> `Ξ_invariant_preserved_bundled_bdd`, `call_invariant_preserved`,
+> `ΞPreservesInvariantAtC_of_Reachable_general*` including the
+> `_inv_aware` slack-dispatch variant) used to live here. They were
+> consumer-specific (only relational shapes like `storageSum ≤
+> balanceOf` use them) and have moved to
+> `EvmSmith/Demos/Weth/InvariantClosure.lean` as a worked-example
+> closure on top of the generic primitives above.
+
 ## Other touches in the EVM model
 
 ### `EvmYul/EVM/Semantics.lean`
@@ -186,15 +223,22 @@ The framework is layered so a downstream consumer fills in the
 contract-specific pieces and reuses the rest:
 
 1. **Pick a top-level theorem** matching the invariant shape:
-   - `Υ_balanceOf_ge` — for monotone balance bounds (`b₀ ≤ balanceOf σ' C`).
-   - `Υ_invariant_preserved` — for general inductive invariants
-     (`I σ' C` from `I σ C`, used by relational shapes like
-     `storageSum ≤ balanceOf`).
+   - `Υ_balanceOf_ge` — for monotone balance bounds
+     (`b₀ ≤ balanceOf σ' C`). Framework-side.
+   - For general inductive invariants (`I σ' C` from `I σ C`, used
+     by relational shapes like `storageSum ≤ balanceOf`), see the
+     worked example in `EvmSmith/Demos/Weth/InvariantClosure.lean`
+     — its `Υ_invariant_preserved` is the analogue, parametric in
+     the invariant, but lives consumer-side.
 2. **Discharge the bytecode witness** via
-   `ΞPreservesAtC_of_Reachable` (or its `_inv_aware` slack-dispatch
-   sibling for invariants that depend on the running σ at the CALL
-   site). The consumer supplies a `Reachable` predicate enumerating
-   their contract's reachable states and the six closure obligations.
+   `ΞPreservesAtC_of_Reachable` (framework-side, for the
+   balance-mono shape). For relational invariants, the consumer-side
+   `InvariantClosure.lean` exposes the analogue — including an
+   `_inv_aware` slack-dispatch variant that threads the post-step
+   invariant into the `hReach_step` callback for closures that
+   depend on the running σ at the CALL site. The consumer supplies
+   a `Reachable` predicate enumerating their contract's reachable
+   states and the six closure obligations either way.
 3. **Discharge the boundary hypotheses** (`*SDExclusion`,
    `*DeadAtσP`) as caller hypotheses on the top-level theorem; the
    framework's open work below would internalise these but is paused.
@@ -206,17 +250,19 @@ framework:
 
 * **Register** (`evm-smith/EvmSmith/Demos/Register/`) — balance
   monotonicity (`balanceOf σ' C ≥ balanceOf σ C`) under arbitrary
-  reentrancy. Uses the at-C / v=0 chain.
+  reentrancy. Uses the framework's balance-mono chain (at-C / v=0).
 * **WETH** (`evm-smith/EvmSmith/Demos/Weth/`) — solvency
   (`Σ storage[sender] ≤ balanceOf σ' C`) under arbitrary reentrancy
-  and a non-zero outbound CALL. Uses the `_inv_aware` slack-dispatch
-  variant (see "Account-presence preservation and universal Ξ"
-  below).
+  and a non-zero outbound CALL. Uses the consumer-side
+  `EvmSmith/Demos/Weth/InvariantClosure.lean` closure (which itself
+  sits on top of the generic framework primitives), including its
+  `_inv_aware` slack-dispatch variant.
 
 Because every layer is parameterised by `(C : AccountAddress)` and a
-uniform `ΞPreservesAtC` / `ΞPreservesInvariantAtC` witness, the same
-framework supports any single-contract invariant a downstream prover
-wants to state.
+uniform `ΞPreservesAtC` witness (with the consumer-side
+`ΞPreservesInvariantAtC` predicate as the parallel relational-shape
+analogue), the same framework supports any single-contract invariant
+a downstream prover wants to state.
 
 ## Axiom audit
 
@@ -398,23 +444,26 @@ Convenience entries for consumers using a `Reachable` predicate:
 | `EVM_call_preserves_account_at_a_of_Reachable` | Same for EVM.call. |
 | `Ξ_preserves_account_at_a_of_Reachable_for_C` | Restricted to `I.codeOwner = C` (for contract-specific Reachable predicates). |
 
-#### §J.6.6/.6.7 — `_inv_aware` variants
+#### §J.6.6/.6.7 — `_inv_aware` pres-step variants
 
-The framework's `hReach_step` callback didn't expose `WethInvFr s'.accountMap C`
-to consumers, even though the X-loop's induction has it locally. This
+The framework's `hReach_step` callback didn't expose the post-step
+invariant (whatever the consumer's invariant happens to be) to
+consumers, even though the X-loop's induction has it locally. This
 caused a chicken-and-egg circularity for any contract whose Reachable
-predicate depends on the invariant.
-
-The `_inv_aware` variants thread the post-step invariant through:
+predicate depends on the running σ. The pres-step variants below are
+parameterised over the consumer's `Reachable` and don't reference any
+specific invariant predicate, so they live framework-side:
 
 | Theorem | What it says |
 |---|---|
 | `X_preserves_account_at_a_bdd_op_conditional_with_pres_step` | X-loop variant with σ-presence in step closure. |
 | `Ξ_preserves_account_at_a_of_Reachable_for_C_with_pres_step` | Same at Ξ-level. |
-| `ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch_inv_aware` | Slack-dispatch variant exposing `WethInvFr s'.accountMap C` to `hReach_step`. |
 
-This is the canonical pattern for any contract proof whose Reachable
-predicate carries an X-loop invariant.
+These are the framework half of the canonical pattern; the
+consumer-side `_inv_aware` slack-dispatch wrapper that pairs them
+with a specific relational invariant
+(`ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch_inv_aware`)
+lives in `EvmSmith/Demos/Weth/InvariantClosure.lean`.
 
 ### Strong shape lemmas
 
@@ -453,24 +502,23 @@ In `StorageSum.lean`:
 | `storageSum_storage_insert_absent_eq` | Inserting into an absent slot. |
 | `storageSum_storage_erase_eq_of_find?_none` (exposed) | Public visibility of erase-of-absent. |
 
-### UpsilonFrame simplification
+### Note: relational-invariant entry-point simplifications
 
-`Υ_invariant_preserved` previously took a `ΞPreservesInvariantAtC C`
-parameter that was structurally unused (passed through to
-`Υ_output_invariant_preserves` as `_hWitness`, never consumed). Drop
-the parameter to simplify the consumer interface.
+A round of cleanup simplified the relational-invariant entry point
+(`Υ_invariant_preserved`) — its previously-required
+`ΞPreservesInvariantAtC C` parameter was structurally unused
+(passed through to `Υ_output_invariant_preserves` as `_hWitness`,
+never consumed) and got dropped. After the architectural cleanup
+that moved the relational closure consumer-side, this simplification
+now lives in `EvmSmith/Demos/Weth/InvariantClosure.lean`; the
+framework no longer carries either the entry point or the witness
+type.
 
-### Θ-pre-credit framework lemma
-
-| Theorem | What it says |
-|---|---|
-| `theta_σ'₁_pre_credit_slack_at_C` | Given `WethInvFr σ C` and balance no-wrap, post-credit state σ'₁ satisfies `v + storageSum σ'₁ C ≤ balanceOf σ'₁ C`. |
-
-Composes the existing `theta_σ'₁_storageSum_eq` (storage unchanged at
-C through credit) with balance-delta arithmetic
-(`balanceOf σ'₁ C = balanceOf σ C + v` at recipient = C). Backs the
-Θ-pre-credit fact for any consumer that needs it (e.g. WETH's
-`deposit` slack).
+The companion Θ-pre-credit slack lemma `theta_σ'₁_pre_credit_slack_at_C`
+(composes `theta_σ'₁_storageSum_eq` with balance-delta arithmetic to
+get `v + storageSum σ'₁ C ≤ balanceOf σ'₁ C` at recipient = C from the
+relational invariant pre-state) is part of the same consumer-side
+closure and lives there too.
 
 ### How these additions enable WETH's solvency proof
 
@@ -482,8 +530,9 @@ The WETH solvency proof in `evm-smith/EvmSmith/Demos/Weth/` discharges
   preserved across all 61 per-PC walks via `EVM_step_preserves_present_no_create`.
 * `weth_xi_preserves_C_other` — universal Ξ-preservation via
   `Ξ_preserves_account_at_a_universal`.
-* `weth_call_inv_step_pres` — CALL-step `WethInvFr` preservation via
-  the `_inv_aware` slack-dispatch variant.
+* `weth_call_inv_step_pres` — CALL-step `StorageSumLeBalance`
+  preservation via the consumer-side `_inv_aware` slack-dispatch
+  variant in `EvmSmith/Demos/Weth/InvariantClosure.lean`.
 
 The remaining `WethAssumptions` fields are 4 standard transaction
 boundary facts plus 1 chain-state bound (`call_no_wrap`) — none
