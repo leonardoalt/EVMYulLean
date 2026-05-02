@@ -10,8 +10,11 @@ import EvmYul.Maps.StorageMap
 # Storage-sum primitives — `storageSum` (Solvency §1.4)
 
 `storageSum σ C` is the `ℕ`-valued sum of all `UInt256` values stored
-at address `C`'s persistent-storage map. It powers the Weth solvency
-invariant `WethInv σ C := storageSum σ C ≤ balanceOf σ C`.
+at address `C`'s persistent-storage map. It powers any relational
+solvency-style invariant of the form
+`storageSum σ C ≤ balanceOf σ C` — i.e. "the contract's ETH balance
+is at least as large as the sum of token-balance entries it tracks
+in storage".
 
 This file establishes:
 
@@ -25,17 +28,18 @@ The remaining storage-sum delta lemmas (`storageSum_sstore_decrement`,
 `storageSum_sstore_increment`) characterise the post-SSTORE storage
 sum at the codeOwner's account: the only slot whose value changes is
 `spos`, and the per-slot delta dominates the sum delta. These are
-the workhorses for Weth's PC 60 (decrement) and PC 40 (increment)
-SSTORE arms.
+the workhorses for the SSTORE-decrement and SSTORE-increment arms of
+any relational-solvency bytecode walk (consumer side; not depended on
+by the framework's mutual closure today).
 
 Their proofs require multiset-permutation reasoning over
 `acc.storage.toList` to relate the RBMap pre/post toList (with `slot`
 overwritten or erased), which Batteries' `mem_toList_insert` /
 `mem_toList_erase` only gives at the membership level. A clean
 proof routes through a `Multiset` view; lifting to that form is the
-remaining task. Until then, Weth's Ξ-closure dischargers consume
-these as per-state hypotheses on `WethSStorePreserves` /
-`WethCallSlack` (see `EvmSmith/Demos/Weth/BytecodeFrame.lean`).
+remaining task. Until then, consumer Ξ-closure dischargers consume
+these as per-state hypotheses on whatever per-PC predicate captures
+their SSTORE / CALL slack data.
 -/
 
 namespace EvmYul

@@ -411,8 +411,9 @@ theorem selfdestruct_SDset_subset_or_Iₐ
 
 /-! ## SELFDESTRUCT storage-sum preservation (§H.2 leaf)
 
-For the Weth invariant chain we need: at any handled SELFDESTRUCT step
-with `Iₐ ≠ C`, `storageSum σ C` is preserved. Mirror of
+For any relational-solvency invariant chain we need: at any handled
+SELFDESTRUCT step with `Iₐ ≠ C`, `storageSum σ C` is preserved.
+Mirror of
 `selfdestruct_balanceOf_ne_Iₐ_ge`, but for the `storageSum`
 projection. The argument is structural: in every shape where the
 accountMap actually changes, the change is two inserts at `r` and

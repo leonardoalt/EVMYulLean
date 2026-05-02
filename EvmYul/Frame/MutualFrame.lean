@@ -6011,21 +6011,22 @@ The closure mirrors the existing balance-monotonicity chain
 (`Θ_balanceOf_ge_bdd` / `Λ_balanceOf_ge_bdd` / `Ξ_balanceOf_ge_bundled_bdd`)
 but its conclusion is invariant *preservation* `S(σ') ≤ β(σ')` rather
 than balance *monotonicity* `β(σ') ≥ β(σ)`. The two chains coexist:
-the existing one remains valid for Register-style consumers (whose at-C
-frames preserve balance monotonically); §H is required for Weth-style
-consumers whose at-C `withdraw` block decreases β by exactly the amount
-S also decreases by, so only the relative invariant `S ≤ β` survives.
+the existing one applies to consumers whose at-C frames preserve
+balance monotonically; this chain applies to consumers whose at-C
+block decreases β by exactly the amount S also decreases by (a
+checks-effects-interactions withdraw block, for instance), so only
+the relative invariant `S ≤ β` survives.
 
 ### Scope of §H.1 (this commit-set)
 
 * **Predicates** — `ΞPreservesInvariantAtC`, `ΞInvariantAtCFrame`,
   `ΞInvariantFrameAtC` — analogues of `ΞPreservesAtC`, `ΞAtCFrame`,
-  `ΞFrameAtC` whose success-branch conjunct is `WethInv σ' C`
+  `ΞFrameAtC` whose success-branch conjunct is `StorageSumLeBalance σ' C`
   (`storageSum σ' C ≤ balanceOf σ' C`) instead of `β` monotonicity.
 * **Structural lemmas** — fuel-monotonicity of the bounded predicates
   and the unbounded-to-bounded conversion `ΞInvariantAtCFrame_of_witness`.
 * **Equality-driven lift** — `ΞPreservesInvariantAtC` is preserved by
-  `find?`-equal post-states (analogue of `WethInv_of_find?_eq`'s
+  `find?`-equal post-states (analogue of `StorageSumLeBalance_of_find?_eq`'s
   closure under projection equality).
 
 ### Out of scope here (§H.2 / Phase A.2-style closure)
@@ -6037,25 +6038,25 @@ The mutual closure's closure proofs — `Θ_invariant_preserved_bdd`,
 mutual induction over `Θ`/`Λ`/`Ξ`/`X` at the invariant level, with the
 at-C `CALL` arm dispatching through a new `call_invariant_preserved`
 helper (since `call_balanceOf_ge`'s `h_s : C ≠ src ∨ v = 0` cannot be
-discharged at Weth's at-C CALL where both `src = C` and `v ≠ 0`).
-The predicates landed here let downstream §H.2 work proceed without
-re-litigating the type signatures. -/
+discharged at the at-C CALL of a CEI-pattern withdraw block where
+both `src = C` and `v ≠ 0`). The predicates landed here let
+downstream §H.2 work proceed without re-litigating the type
+signatures. -/
 
-/-- The Weth-style relational solvency invariant at address `C`:
-the sum of all `UInt256` values stored at `σ[C].storage` is at most
-`σ[C].balance` (interpreted in `ℕ`).
+/-- The relational solvency invariant at address `C`: the sum of all
+`UInt256` values stored at `σ[C].storage` is at most `σ[C].balance`
+(interpreted in `ℕ`).
 
 Lives in the framework so frame predicates can speak about it without
-crossing the EvmSmith ↔ EvmYul boundary. The downstream `WethInv`
-abbreviation in `EvmSmith/Demos/Weth/Invariant.lean` `def`-unfolds to
-this. -/
-def WethInvFr (σ : AccountMap .EVM) (C : AccountAddress) : Prop :=
+crossing the consumer ↔ EvmYul boundary. -/
+def StorageSumLeBalance (σ : AccountMap .EVM) (C : AccountAddress) : Prop :=
   storageSum σ C ≤ balanceOf σ C
 
-/-- The Weth-flavoured `ΞPreservesAtC C` sibling: when Ξ runs at
-`I.codeOwner = C` (i.e. *executing C's own code*), the **invariant**
+/-- The relational-invariant sibling of `ΞPreservesAtC C`: when Ξ runs
+at `I.codeOwner = C` (i.e. *executing C's own code*), the **invariant**
 `storageSum σ C ≤ balanceOf σ C` is preserved (rather than `balanceOf C`
-monotone, which fails for Weth's withdraw block).
+monotone, which fails when the at-C block performs an SSTORE-decrement
+followed by an outbound CALL with that decremented value as `value`).
 
 Universal-fuel form. The fuel-bounded sibling `ΞInvariantAtCFrame` below
 mirrors `ΞAtCFrame`'s relationship to `ΞPreservesAtC`. -/
@@ -6067,10 +6068,10 @@ def ΞPreservesInvariantAtC (C : AccountAddress) : Prop :=
     StateWF σ →
     I.codeOwner = C →
     (∀ a ∈ createdAccounts, a ≠ C) →
-    WethInvFr σ C →
+    StorageSumLeBalance σ C →
     match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
     | .ok (.success (cA', σ', _, _) _) =>
-        WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+        StorageSumLeBalance σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
     | _ => True
 
 /-- Fuel-bounded sibling of `ΞPreservesInvariantAtC`: at every fuel
@@ -6090,10 +6091,10 @@ def ΞInvariantAtCFrame (C : AccountAddress) (maxFuel : ℕ) : Prop :=
       StateWF σ →
       I.codeOwner = C →
       (∀ a ∈ createdAccounts, a ≠ C) →
-      WethInvFr σ C →
+      StorageSumLeBalance σ C →
       match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
       | .ok (.success (cA', σ', _, _) _) =>
-          WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+          StorageSumLeBalance σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
       | _ => True
 
 /-- The complement of `ΞInvariantAtCFrame`: at `C ≠ I.codeOwner`, the
@@ -6112,10 +6113,10 @@ def ΞInvariantFrameAtC (C : AccountAddress) (maxFuel : ℕ) : Prop :=
       StateWF σ →
       C ≠ I.codeOwner →
       (∀ a ∈ createdAccounts, a ≠ C) →
-      WethInvFr σ C →
+      StorageSumLeBalance σ C →
       match EVM.Ξ fuel createdAccounts genesisBlockHeader blocks σ σ₀ g A I with
       | .ok (.success (cA', σ', _, _) _) =>
-          WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+          StorageSumLeBalance σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
       | _ => True
 
 /-! ### Structural lemmas for the §H predicates -/
@@ -6141,16 +6142,16 @@ theorem ΞInvariantFrameAtC_mono (C : AccountAddress) (a b : ℕ) (hab : b ≤ a
   intro f hf
   exact hA f (Nat.le_trans hf hab)
 
-/-- `WethInvFr` is preserved by `find?`-equality at `C`. Direct
+/-- `StorageSumLeBalance` is preserved by `find?`-equality at `C`. Direct
 projection-equality lemma: if two states agree on `find? C`, they have
 the same `storageSum C` and the same `balanceOf C`, so the invariant
 projects identically. -/
-theorem WethInvFr_of_find?_eq
+theorem StorageSumLeBalance_of_find?_eq
     {σ σ' : AccountMap .EVM} {C : AccountAddress}
     (h : σ'.find? C = σ.find? C)
-    (hInv : WethInvFr σ C) :
-    WethInvFr σ' C := by
-  unfold WethInvFr at *
+    (hInv : StorageSumLeBalance σ C) :
+    StorageSumLeBalance σ' C := by
+  unfold StorageSumLeBalance at *
   rw [storageSum_of_find?_eq h, balanceOf_of_find?_eq h]
   exact hInv
 
@@ -6166,10 +6167,10 @@ theorem ΞInvariantAtCFrame_apply (C : AccountAddress) (maxFuel : ℕ)
     (bs : ProcessedBlocks) (σ σ₀ : AccountMap .EVM) (g : UInt256)
     (A : Substate) (I : ExecutionEnv .EVM)
     (hWF : StateWF σ) (hCO : I.codeOwner = C)
-    (hNC : ∀ a ∈ cA, a ≠ C) (hInv : WethInvFr σ C) :
+    (hNC : ∀ a ∈ cA, a ≠ C) (hInv : StorageSumLeBalance σ C) :
     match EVM.Ξ fuel cA gbh bs σ σ₀ g A I with
     | .ok (.success (cA', σ', _, _) _) =>
-        WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+        StorageSumLeBalance σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
     | _ => True :=
   h fuel hf cA gbh bs σ σ₀ g A I hWF hCO hNC hInv
 
@@ -6181,18 +6182,18 @@ theorem ΞInvariantFrameAtC_apply (C : AccountAddress) (maxFuel : ℕ)
     (bs : ProcessedBlocks) (σ σ₀ : AccountMap .EVM) (g : UInt256)
     (A : Substate) (I : ExecutionEnv .EVM)
     (hWF : StateWF σ) (hCO : C ≠ I.codeOwner)
-    (hNC : ∀ a ∈ cA, a ≠ C) (hInv : WethInvFr σ C) :
+    (hNC : ∀ a ∈ cA, a ≠ C) (hInv : StorageSumLeBalance σ C) :
     match EVM.Ξ fuel cA gbh bs σ σ₀ g A I with
     | .ok (.success (cA', σ', _, _) _) =>
-        WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
+        StorageSumLeBalance σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA', a ≠ C)
     | _ => True :=
   h fuel hf cA gbh bs σ σ₀ g A I hWF hCO hNC hInv
 
-/-! ### §H — Per-step `WethInvFr` preservation at non-`C` codeOwner
+/-! ### §H — Per-step `StorageSumLeBalance` preservation at non-`C` codeOwner
 
 This is the leaf for the storage-side of §H's tracking. At any non-SD
 handled step where the executing frame's `codeOwner ≠ C`, both
-`storageSum σ C` and `balanceOf σ C` are preserved, so `WethInvFr σ C`
+`storageSum σ C` and `balanceOf σ C` are preserved, so `StorageSumLeBalance σ C`
 is preserved verbatim.
 
 * `storageSum`-side: from `EvmYul.step_modifies_storage_only_at_codeOwner`
@@ -6225,19 +6226,19 @@ theorem EvmYul.step_preserves_storageSum_at_non_codeOwner
       h_handled h_ne_sd h h_ne'
   exact storageSum_of_storage_proj_eq hProj
 
-/-- `WethInvFr σ C` is preserved by any handled non-SELFDESTRUCT step
+/-- `StorageSumLeBalance σ C` is preserved by any handled non-SELFDESTRUCT step
 when the executing frame's `codeOwner ≠ C`. The leaf for §H's
 non-`C` tracking through `Θ`/`Λ`/`Ξ`. -/
-theorem EvmYul_step_preserves_WethInvFr_at_non_C
+theorem EvmYul_step_preserves_StorageSumLeBalance_at_non_C
     (op : Operation .EVM) (arg : Option (UInt256 × Nat))
     (s s' : EVM.State) (C : AccountAddress)
     (h_handled : handledByEvmYulStep op)
     (h_ne_sd : op ≠ .SELFDESTRUCT)
     (h : EvmYul.step op arg s = .ok s')
     (h_ne : C ≠ s.executionEnv.codeOwner)
-    (hInv : WethInvFr s.accountMap C) :
-    WethInvFr s'.accountMap C := by
-  unfold WethInvFr at *
+    (hInv : StorageSumLeBalance s.accountMap C) :
+    StorageSumLeBalance s'.accountMap C := by
+  unfold StorageSumLeBalance at *
   -- storageSum unchanged at C.
   have hStg : storageSum s'.accountMap C = storageSum s.accountMap C :=
     EvmYul.step_preserves_storageSum_at_non_codeOwner op arg s s' C
@@ -6249,31 +6250,31 @@ theorem EvmYul_step_preserves_WethInvFr_at_non_C
   rw [hStg, hBal]
   exact hInv
 
-/-- `WethInvFr σ C` is preserved by any handled step that strictly
+/-- `StorageSumLeBalance σ C` is preserved by any handled step that strictly
 preserves `accountMap` (i.e. neither SSTORE / TSTORE / SELFDESTRUCT
 nor a CALL/CREATE-family op). At the at-C codeOwner, this is the
 non-SSTORE / non-CALL part of §H.2's at-C step bundle: every "boring"
 opcode (arithmetic, stack manipulation, environment query, jump,
 log, …) preserves the invariant trivially because the whole
 `accountMap` is preserved. -/
-theorem EvmYul_step_preserves_WethInvFr_of_strict
+theorem EvmYul_step_preserves_StorageSumLeBalance_of_strict
     (op : Operation .EVM) (arg : Option (UInt256 × Nat))
     (s s' : EVM.State) (C : AccountAddress)
     (hStrict : strictlyPreservesAccountMap op)
     (h : EvmYul.step op arg s = .ok s')
-    (hInv : WethInvFr s.accountMap C) :
-    WethInvFr s'.accountMap C := by
+    (hInv : StorageSumLeBalance s.accountMap C) :
+    StorageSumLeBalance s'.accountMap C := by
   -- accountMap is literally unchanged.
   have hAM : s'.accountMap = s.accountMap :=
     EvmYul.step_accountMap_eq_of_strict op arg s s' hStrict h
   -- The invariant projects through accountMap-equality verbatim.
-  unfold WethInvFr at *
+  unfold StorageSumLeBalance at *
   rw [hAM]
   exact hInv
 
 /-! ## §H.2 — Storage-side helpers for Θ's value-transfer prefix
 
-The invariant `WethInvFr σ C := storageSum σ C ≤ balanceOf σ C` only
+The invariant `StorageSumLeBalance σ C := storageSum σ C ≤ balanceOf σ C` only
 depends on the *balance* and *storage* projections of `σ` at `C`. Θ's
 value-transfer prefix (credit `r` then debit `s`) only modifies
 `balance` (storage is preserved through both `.insert` operations).
@@ -6350,7 +6351,7 @@ theorem theta_σ₁_storageSum_eq
     · apply storageSum_unchanged_at_other_account
       exact hsC
 
-/-- The credit prefix `σ → σ'₁` preserves `WethInvFr σ C` always (slack
+/-- The credit prefix `σ → σ'₁` preserves `StorageSumLeBalance σ C` always (slack
 weakly increases: at `r = C` balance grows; at `r ≠ C` balance is
 unchanged).
 
@@ -6362,7 +6363,7 @@ theorem theta_σ'₁_invariant_preserved
     (hWF : StateWF σ)
     (hValBound : ∀ acc, σ.find? r = some acc →
         acc.balance.toNat + v.toNat < UInt256.size)
-    (hInv : WethInvFr σ C) :
+    (hInv : StorageSumLeBalance σ C) :
     let σ'₁ :=
       match σ.find? r with
         | none =>
@@ -6370,8 +6371,8 @@ theorem theta_σ'₁_invariant_preserved
             σ.insert r { (default : Account .EVM) with balance := v }
           else σ
         | some acc => σ.insert r { acc with balance := acc.balance + v }
-    WethInvFr σ'₁ C := by
-  unfold WethInvFr at *
+    StorageSumLeBalance σ'₁ C := by
+  unfold StorageSumLeBalance at *
   -- storageSum unchanged + balance monotone ⇒ invariant preserved.
   have hStg := theta_σ'₁_storageSum_eq σ r C v
   have hBal := theta_σ'₁_ge σ r C v hWF hValBound
@@ -6381,15 +6382,15 @@ theorem theta_σ'₁_invariant_preserved
 
 /-- **Θ-pre-credit slack at recipient = C.**
 
-Given `σ` satisfying `WethInvFr σ C` and `r = C`, the post-credit
+Given `σ` satisfying `StorageSumLeBalance σ C` and `r = C`, the post-credit
 state `σ'₁` (after Θ adds `v` to `C`'s balance) satisfies the
 strengthened slack `v.toNat + storageSum σ'₁ C ≤ balanceOf σ'₁ C`.
 
 This is the precise hypothesis consumed by
 `theta_σ₁_invariant_preserved_at_C` for the s = C, v ≠ 0 debit, and
-also the bytecode-level "Θ-pre-credit" fact that backs
-`WethDepositPreCredit C` at PC 40 (deposit's SSTORE writes `oldVal +
-msg.value` into the same slot, so the net storageSum delta is `+v`).
+also the bytecode-level "Θ-pre-credit" fact backing a deposit-style
+SSTORE that writes `oldVal + msg.value` into the same slot, so the net
+storageSum delta is `+v`.
 
 Proof: `storageSum σ'₁ C = storageSum σ C` (storage unchanged at `C`
 through credit) plus `balanceOf σ'₁ C = balanceOf σ C + v.toNat`
@@ -6401,7 +6402,7 @@ theorem theta_σ'₁_pre_credit_slack_at_C
     (σ : AccountMap .EVM) (C : AccountAddress) (v : UInt256)
     (hValBound : ∀ acc, σ.find? C = some acc →
         acc.balance.toNat + v.toNat < UInt256.size)
-    (hInv : WethInvFr σ C) :
+    (hInv : StorageSumLeBalance σ C) :
     let σ'₁ :=
       match σ.find? C with
         | none =>
@@ -6412,7 +6413,7 @@ theorem theta_σ'₁_pre_credit_slack_at_C
     v.toNat + storageSum σ'₁ C ≤ balanceOf σ'₁ C := by
   -- Storage unchanged at C through the credit (theta_σ'₁_storageSum_eq with r := C).
   have hStg := theta_σ'₁_storageSum_eq σ C C v
-  unfold WethInvFr at hInv
+  unfold StorageSumLeBalance at hInv
   simp only at hStg
   -- Compute balanceOf σ'₁ C precisely by case split.
   cases hLook : σ.find? C with
@@ -6517,7 +6518,7 @@ theorem theta_σ'₁_pre_credit_slack_at_C
     rw [hBalσ] at hInv
     omega
 
-/-- The debit prefix `σ'₁ → σ₁` preserves `WethInvFr σ'₁ C` when
+/-- The debit prefix `σ'₁ → σ₁` preserves `StorageSumLeBalance σ'₁ C` when
 either `s ≠ C` (balance unchanged) or `v = 0` (balance unchanged).
 
 For the s = C, v ≠ 0 case, see `theta_σ₁_invariant_preserved_at_C`
@@ -6525,13 +6526,13 @@ which takes the slack hypothesis as input. -/
 theorem theta_σ₁_invariant_preserved_general
     (σ'₁ : AccountMap .EVM) (s C : AccountAddress) (v : UInt256)
     (h_s : C ≠ s ∨ v = ⟨0⟩)
-    (hInv : WethInvFr σ'₁ C) :
+    (hInv : StorageSumLeBalance σ'₁ C) :
     let σ₁ :=
       match σ'₁.find? s with
         | none => σ'₁
         | some acc => σ'₁.insert s { acc with balance := acc.balance - v }
-    WethInvFr σ₁ C := by
-  unfold WethInvFr at *
+    StorageSumLeBalance σ₁ C := by
+  unfold StorageSumLeBalance at *
   -- storageSum unchanged + balance unchanged at C ⇒ invariant preserved.
   have hStg := theta_σ₁_storageSum_eq σ'₁ s C v
   have hBal := theta_σ₁_preserves σ'₁ s C v h_s
@@ -6552,8 +6553,8 @@ theorem theta_σ₁_invariant_preserved_at_C
       match σ'₁.find? C with
         | none => σ'₁
         | some acc => σ'₁.insert C { acc with balance := acc.balance - v }
-    WethInvFr σ₁ C := by
-  unfold WethInvFr
+    StorageSumLeBalance σ₁ C := by
+  unfold StorageSumLeBalance
   simp only
   -- storageSum unchanged at C through the s=C insert.
   have hStg := theta_σ₁_storageSum_eq σ'₁ C C v
@@ -6588,13 +6589,13 @@ theorem theta_σ₁_invariant_preserved_at_C
     omega
 
 /-- Θ's σ'-clamp step for the invariant: if the interpreter-dispatch
-result `σ''` either preserves WethInvFr (when non-empty by BEq) or is
-∅, then `σ' = if σ'' == ∅ then σ else σ''` preserves WethInvFr too. -/
+result `σ''` either preserves StorageSumLeBalance (when non-empty by BEq) or is
+∅, then `σ' = if σ'' == ∅ then σ else σ''` preserves StorageSumLeBalance too. -/
 theorem theta_σ'_clamp_invariant
     (σ σ'' : AccountMap .EVM) (C : AccountAddress)
-    (hInvσ : WethInvFr σ C)
-    (hInv : (σ'' == ∅) = false → WethInvFr σ'' C) :
-    WethInvFr (if σ'' == ∅ then σ else σ'') C := by
+    (hInvσ : StorageSumLeBalance σ C)
+    (hInv : (σ'' == ∅) = false → StorageSumLeBalance σ'' C) :
+    StorageSumLeBalance (if σ'' == ∅ then σ else σ'') C := by
   cases h : (σ'' == ∅) with
   | true => simp only [if_true]; exact hInvσ
   | false => simp only [Bool.false_eq_true, if_false]; exact hInv h
@@ -6603,10 +6604,10 @@ theorem theta_σ'_clamp_invariant
 mirroring `theta_σ'_clamp_ge_of_σ₁_or_empty`. -/
 theorem theta_σ'_clamp_invariant_of_σ₁_or_empty
     (σ σ₁ σ'' : AccountMap .EVM) (C : AccountAddress)
-    (hInvσ : WethInvFr σ C)
-    (hInvσ₁ : WethInvFr σ₁ C)
+    (hInvσ : StorageSumLeBalance σ C)
+    (hInvσ₁ : StorageSumLeBalance σ₁ C)
     (hσ''_cases : σ'' = σ₁ ∨ σ'' = ∅) :
-    WethInvFr (if σ'' == ∅ then σ else σ'') C := by
+    StorageSumLeBalance (if σ'' == ∅ then σ else σ'') C := by
   apply theta_σ'_clamp_invariant _ _ _ hInvσ
   intro hNotEmpty
   rcases hσ''_cases with heq | heq
@@ -6619,7 +6620,7 @@ theorem theta_σ'_clamp_invariant_of_σ₁_or_empty
 
 /-! ## §H.2 — `Θ_invariant_preserved_bdd`
 
-The Weth-flavoured sibling of `Θ_balanceOf_ge_bdd`. Tracks `WethInvFr
+The relational-invariant sibling of `Θ_balanceOf_ge_bdd`. Tracks `StorageSumLeBalance
 σ C` (rather than `≥ b₀`) through `EVM.Θ`. Same closure structure
 (value-transfer prefix → precompile/code dispatch → σ'-clamp), but
 with two key changes:
@@ -6631,7 +6632,7 @@ with two key changes:
   slack hypothesis `v.toNat + storageSum σ C ≤ balanceOf σ C` to
   cover the debit. The hypothesis `h_slack` provides this disjunction
   (s ≠ C ∨ v = 0 ∨ slack covers v).
-* The two mutual-induction frames are now the WethInv variants:
+* The two mutual-induction frames are now the invariant variants:
   `ΞInvariantAtCFrame` for r = C and `ΞInvariantFrameAtC` for r ≠ C.
 
 The proof structure mirrors `Θ_balanceOf_ge_bdd`'s precompile/code
@@ -6641,7 +6642,7 @@ dispatch but uses the invariant-tracking helpers `theta_σ'₁_invariant_preserv
 `theta_σ'_clamp_invariant_of_σ₁_or_empty`. -/
 
 /-- Θ's body — precompile arm, invariant version. The conclusion is
-`WethInvFr σ' C` instead of `balanceOf σ' C ≥ balanceOf σ C`. -/
+`StorageSumLeBalance σ' C` instead of `balanceOf σ' C ≥ balanceOf σ C`. -/
 private theorem Θ_body_precompile_invariant
     (σ σ₁ : AccountMap .EVM) (A : Substate) (I : ExecutionEnv .EVM)
     (C : AccountAddress) (fuel' : Nat)
@@ -6651,8 +6652,8 @@ private theorem Θ_body_precompile_invariant
     (σ₀ : AccountMap .EVM) (s o r : AccountAddress) (pc : AccountAddress)
     (g p v v' : UInt256) (d : ByteArray) (e : Nat)
     (H : BlockHeader) (w : Bool)
-    (hInvσ : WethInvFr σ C)
-    (hInvσ₁ : WethInvFr σ₁ C)
+    (hInvσ : StorageSumLeBalance σ C)
+    (hInvσ₁ : StorageSumLeBalance σ₁ C)
     (hWF : StateWF σ)
     (h_WFσ₁ : StateWF σ₁)
     (hΘeq : EVM.Θ (fuel' + 1) blobVersionedHashes createdAccounts
@@ -6669,13 +6670,13 @@ private theorem Θ_body_precompile_invariant
                   genesisBlockHeader blocks σ σ₀ A s o r
                   (ToExecute.Precompiled pc) g p v v' d e H w with
     | .ok (cA'_out, σ', _, _, _, _) =>
-        WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
+        StorageSumLeBalance σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
     | .error _ => True := by
   rw [hΘeq]
   obtain ⟨tup, hTup, hCases, hcA_empty⟩ := applyPrecompile_bundled pc σ₁ g A I
   rw [hTup]
   refine ⟨?_, ?_, ?_⟩
-  · -- WethInvFr.
+  · -- StorageSumLeBalance.
     exact theta_σ'_clamp_invariant_of_σ₁_or_empty σ σ₁ tup.2.2.1 C
       hInvσ hInvσ₁ hCases
   · -- StateWF σ'.
@@ -6702,8 +6703,8 @@ private theorem Θ_body_code_invariant
     (σ₀ : AccountMap .EVM) (s o r : AccountAddress) (c_code : ByteArray)
     (g p v v' : UInt256) (d : ByteArray) (e : Nat)
     (H : BlockHeader) (w : Bool)
-    (hInvσ : WethInvFr σ C)
-    (hInvσ₁ : WethInvFr σ₁ C)
+    (hInvσ : StorageSumLeBalance σ C)
+    (hInvσ₁ : StorageSumLeBalance σ₁ C)
     (hWF : StateWF σ)
     (h_WFσ₁ : StateWF σ₁)
     (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
@@ -6733,7 +6734,7 @@ private theorem Θ_body_code_invariant
                   genesisBlockHeader blocks σ σ₀ A s o r
                   (ToExecute.Code c_code) g p v v' d e H w with
     | .ok (cA'_out, σ', _, _, _, _) =>
-        WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
+        StorageSumLeBalance σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
     | .error _ => True := by
   rw [hΘeq]
   cases hΞ : EVM.Ξ fuel' createdAccounts genesisBlockHeader blocks σ₁ σ₀ g A I
@@ -6759,7 +6760,7 @@ private theorem Θ_body_code_invariant
         subst h1ba
         refine ⟨?_, ?_, h_newC⟩
         · -- σ'' = σ → σ' = σ. Invariant preserved.
-          show WethInvFr (if (σ == ∅) = true then σ else σ) C
+          show StorageSumLeBalance (if (σ == ∅) = true then σ else σ) C
           split_ifs <;> exact hInvσ
         · split_ifs <;> exact hWF
     case h_2 => trivial
@@ -6776,7 +6777,7 @@ private theorem Θ_body_code_invariant
         subst h1a
         subst h1ba
         refine ⟨?_, ?_, h_newC⟩
-        · show WethInvFr (if (σ == ∅) = true then σ else σ) C
+        · show StorageSumLeBalance (if (σ == ∅) = true then σ else σ) C
           split_ifs <;> exact hInvσ
         · split_ifs <;> exact hWF
       case h_2 => trivial
@@ -6827,7 +6828,7 @@ private theorem Θ_body_code_invariant
           · exact hW_newC
       case h_2 => trivial
 
-/-- §H.2's Θ frame for `WethInvFr`. Mirror of `Θ_balanceOf_ge_bdd`
+/-- §H.2's Θ frame for `StorageSumLeBalance`. Mirror of `Θ_balanceOf_ge_bdd`
 but tracking the invariant. -/
 private theorem Θ_invariant_preserved_bdd
     (fuel : Nat) (blobVersionedHashes : List ByteArray)
@@ -6846,13 +6847,13 @@ private theorem Θ_invariant_preserved_bdd
     (h_slack :
         C ≠ s ∨ v = ⟨0⟩ ∨
         v.toNat + storageSum σ C ≤ balanceOf σ C)
-    (hInv : WethInvFr σ C)
+    (hInv : StorageSumLeBalance σ C)
     (hAtCFrame : ΞInvariantAtCFrame C fuel)
     (hFrame : ΞInvariantFrameAtC C fuel) :
     match EVM.Θ fuel blobVersionedHashes createdAccounts
                   genesisBlockHeader blocks σ σ₀ A s o r c g p v v' d e H w with
     | .ok (cA'_out, σ', _, _, _, _) =>
-        WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
+        StorageSumLeBalance σ' C ∧ StateWF σ' ∧ (∀ a ∈ cA'_out, a ≠ C)
     | .error _ => True := by
   match fuel with
   | 0 =>
@@ -6860,7 +6861,7 @@ private theorem Θ_invariant_preserved_bdd
                   blocks σ σ₀ A s o r c g p v v' d e H w = .error .OutOfFuel from rfl]
     trivial
   | fuel' + 1 =>
-    -- Establish WethInvFr σ'₁ C via the credit-prefix helper.
+    -- Establish StorageSumLeBalance σ'₁ C via the credit-prefix helper.
     have h_σ'₁_inv := theta_σ'₁_invariant_preserved σ r C v hWF hValBound hInv
     set σ'₁ : AccountMap .EVM :=
       match σ.find? r with
@@ -6892,8 +6893,8 @@ private theorem Θ_invariant_preserved_bdd
               code := acc.code
               tstorage := acc.tstorage }
       with hσ₁_def
-    -- Establish WethInvFr σ₁ C via the debit-prefix helper.
-    have h_σ₁_inv : WethInvFr σ₁ C := by
+    -- Establish StorageSumLeBalance σ₁ C via the debit-prefix helper.
+    have h_σ₁_inv : StorageSumLeBalance σ₁ C := by
       -- Decompose h_slack into the three cases.
       rcases h_slack with hCs | hv | hSlack
       · -- C ≠ s: use the general (s ≠ C disjunct) helper.
@@ -6990,9 +6991,10 @@ private theorem Θ_invariant_preserved_bdd
 
 /-! ## §H.2 — `call_invariant_preserved`
 
-The Weth-flavoured sibling of `call_balanceOf_ge`. Tracks `WethInvFr σ
+The relational-invariant sibling of `call_balanceOf_ge`. Tracks `StorageSumLeBalance σ
 C` through `EVM.call`'s gate-passing dispatch to `Θ`. The at-C CALL
-helper used by §H.2's at-C step bundle (Weth's withdraw block).
+helper used by §H.2's at-C step bundle (the at-C CALL arm of a CEI-pattern
+withdraw block).
 
 Hypotheses (analogous to `call_balanceOf_ge`, plus `hInv` and the
 slack disjunction):
@@ -7002,7 +7004,7 @@ slack disjunction):
 * `hInv`: input invariant.
 * `h_slack`: the at-C debit case requires
   `v.toNat + storageSum σ C ≤ balanceOf σ C` (the SSTORE-decrement
-  fact at PC 60 in Weth's withdraw block). -/
+  step that precedes the outbound CALL). -/
 theorem call_invariant_preserved
     (C : AccountAddress) (fuel : ℕ) (gasCost : ℕ)
     (gas src rcp t v v' inOff inSize outOff outSize : UInt256)
@@ -7020,12 +7022,12 @@ theorem call_invariant_preserved
     (h_slack :
         C ≠ AccountAddress.ofUInt256 src ∨ v = ⟨0⟩ ∨
         v.toNat + storageSum evmState.accountMap C ≤ balanceOf evmState.accountMap C)
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hCall :
       EVM.call fuel gasCost evmState.executionEnv.blobVersionedHashes
         gas src rcp t v v' inOff inSize outOff outSize permission evmState
       = .ok (x, state')) :
-    WethInvFr state'.accountMap C ∧
+    StorageSumLeBalance state'.accountMap C ∧
     StateWF state'.accountMap ∧
     state'.executionEnv.codeOwner = evmState.executionEnv.codeOwner ∧
     (∀ a ∈ state'.createdAccounts, a ≠ C) := by
@@ -7090,14 +7092,14 @@ theorem call_invariant_preserved
 
 /-! ## §H.2 — `Λ_invariant_preserved_bdd`
 
-Mirror of `Λ_balanceOf_ge_bdd` for `WethInvFr`. Easier than Θ because
+Mirror of `Λ_balanceOf_ge_bdd` for `StorageSumLeBalance`. Easier than Θ because
 Λ's inner Ξ runs at `I.codeOwner = a ≠ C` (by `lambda_derived_address_ne_C`):
 no joint mutual recursion needed; only `ΞInvariantFrameAtC` IH suffices.
 
 The value-transfer prefix in Λ is `s → a`: insert at `s` with debit,
 insert at `a` with credit. Since `a ≠ C` (Keccak axiom T5) and `s ≠ C`
 (hypothesis), both inserts frame at `C` for both balance and storage.
-So `WethInvFr σStarMap C = WethInvFr σ C` directly. -/
+So `StorageSumLeBalance σStarMap C = StorageSumLeBalance σ C` directly. -/
 private theorem Λ_invariant_preserved_bdd
     (fuel : Nat) (blobVersionedHashes : List ByteArray)
     (createdAccounts : RBSet AccountAddress compare)
@@ -7110,12 +7112,12 @@ private theorem Λ_invariant_preserved_bdd
     (h_s : C ≠ s)
     (h_newC : ∀ a ∈ createdAccounts, a ≠ C)
     (h_funds : ∀ acc, σ.find? s = some acc → v.toNat ≤ acc.balance.toNat)
-    (hInv : WethInvFr σ C)
+    (hInv : StorageSumLeBalance σ C)
     (hFrame : ΞInvariantFrameAtC C fuel) :
     match EVM.Lambda fuel blobVersionedHashes createdAccounts
                   genesisBlockHeader blocks σ σ₀ A s o g p v i e ζ H w with
     | .ok (a, cA', σ', _, _, _, _) =>
-        a ≠ C ∧ WethInvFr σ' C ∧ StateWF σ' ∧ (∀ a' ∈ cA', a' ≠ C)
+        a ≠ C ∧ StorageSumLeBalance σ' C ∧ StateWF σ' ∧ (∀ a' ∈ cA', a' ≠ C)
     | .error _ => True := by
   set_option maxHeartbeats 2400000 in
   match fuel with
@@ -7193,7 +7195,7 @@ private theorem Λ_invariant_preserved_bdd
           · exact h_newC a' h_orig
           · have : a = a' := Std.LawfulEqCmp.compare_eq_iff_eq.mp h_eq
             rw [← this]; exact ha_ne_C'
-      -- σStar's WethInvFr at C: balance unchanged (both inserts at ≠C),
+      -- σStar's StorageSumLeBalance at C: balance unchanged (both inserts at ≠C),
       -- storage unchanged (both inserts at ≠C). So invariant carries.
       have hσStar_inv :
           ∀ (σ' : AccountMap .EVM),
@@ -7210,16 +7212,16 @@ private theorem Λ_invariant_preserved_bdd
                          storage := existentAccount.storage
                          code := existentAccount.code
                          tstorage := existentAccount.tstorage })) →
-            WethInvFr σ' C := by
+            StorageSumLeBalance σ' C := by
         intro σ' hσ'
         rw [hσ']
         cases hFs : σ.find? s with
         | none =>
-          -- match σ.find? s reduces to σ; goal is WethInvFr σ C.
+          -- match σ.find? s reduces to σ; goal is StorageSumLeBalance σ C.
           exact hInv
         | some ac =>
           have hsC : s ≠ C := fun h => h_s h.symm
-          unfold WethInvFr
+          unfold StorageSumLeBalance
           rw [storageSum_unchanged_at_other_account _ _ _ _ ha_ne_C']
           rw [storageSum_unchanged_at_other_account _ _ _ _ hsC]
           rw [balanceOf_of_find?_eq (find?_insert_ne _ a C _ ha_ne_C')]
@@ -7260,7 +7262,7 @@ private theorem Λ_invariant_preserved_bdd
                code := existentAccount.code
                tstorage := existentAccount.tstorage })
         with hσStarMap_def
-      have hσStar_invMap : WethInvFr σStarMap C := hσStar_inv σStarMap hσStarMap_def
+      have hσStar_invMap : StorageSumLeBalance σStarMap C := hσStar_inv σStarMap hσStarMap_def
       have hWFσStarMap : StateWF σStarMap := by rw [hσStarMap_def]; exact hWFσStar
       set exEnv : ExecutionEnv .EVM :=
         { codeOwner := a, sender := o, source := s, weiValue := v
@@ -7328,9 +7330,9 @@ private theorem Λ_invariant_preserved_bdd
             · -- σ_final = if F then σ else σ_Ξ.insert a {... with code := returnedData}.
               split_ifs with hF
               · exact hInv
-              · -- WethInvFr (σ_Ξ.insert a {... with code := returnedData}) C.
+              · -- StorageSumLeBalance (σ_Ξ.insert a {... with code := returnedData}) C.
                 -- a ≠ C, so the insert frames at C for both balance & storage.
-                unfold WethInvFr
+                unfold StorageSumLeBalance
                 rw [storageSum_unchanged_at_other_account _ _ _ _ ha_ne_C']
                 rw [balanceOf_of_find?_eq (find?_insert_ne _ a C _ ha_ne_C')]
                 exact hΞInv_inv
@@ -7342,12 +7344,12 @@ private theorem Λ_invariant_preserved_bdd
 
 Mirrors of `step_CALL_arm` / `step_CREATE_arm` / `step_CALLCODE_arm` /
 `step_DELEGATECALL_arm` / `step_STATICCALL_arm` / `step_CREATE2_arm`,
-but tracking `WethInvFr` instead of just `balanceOf σ C ≥ balanceOf σ
+but tracking `StorageSumLeBalance` instead of just `balanceOf σ C ≥ balanceOf σ
 C`. Each arm dispatches to `call_invariant_preserved` or `Λ`
 invariant analogue; the body otherwise follows the balance-side
 template verbatim. -/
 
-/-- DELEGATECALL invariant arm: `WethInvFr` is preserved through the
+/-- DELEGATECALL invariant arm: `StorageSumLeBalance` is preserved through the
 DELEGATECALL step at non-`C` codeOwner. DELEGATECALL passes value
 `⟨0⟩` to `call`, so the slack hypothesis is trivially satisfied via
 `Or.inr (Or.inl rfl)`. -/
@@ -7359,9 +7361,9 @@ private theorem step_DELEGATECALL_arm_invariant
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
     (hFrame : ΞInvariantFrameAtC C (f + 1))
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hStep : EVM.step (f + 1) cost₂ (some (.DELEGATECALL, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C ≠ sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -7380,7 +7382,7 @@ private theorem step_DELEGATECALL_arm_invariant
       have hWFes1 : StateWF eS1.accountMap := hWF
       have hCOes1 : C ≠ eS1.executionEnv.codeOwner := hCO
       have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
-      have hInves1 : WethInvFr eS1.accountMap C := hInv
+      have hInves1 : StorageSumLeBalance eS1.accountMap C := hInv
       have h_vb_call :
           ∀ acc, (eS1.accountMap).find?
               (AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner)) = some acc →
@@ -7414,7 +7416,7 @@ private theorem step_DELEGATECALL_arm_invariant
       · simp only [executionEnv_replaceStackAndIncrPC]; rw [hCOres]; exact hCO
       · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNCres
 
-/-- CALL invariant arm: `WethInvFr` is preserved through the CALL step
+/-- CALL invariant arm: `StorageSumLeBalance` is preserved through the CALL step
 at non-`C` codeOwner. The slack hypothesis is satisfied by
 `Or.inl hCO` since `src = codeOwner ≠ C`. Body mirrors
 `step_CALL_arm` exactly. -/
@@ -7426,9 +7428,9 @@ private theorem step_CALL_arm_invariant
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
     (hFrame : ΞInvariantFrameAtC C (f + 1))
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hStep : EVM.step (f + 1) cost₂ (some (.CALL, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C ≠ sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -7448,7 +7450,7 @@ private theorem step_CALL_arm_invariant
       have hWFes1 : StateWF eS1.accountMap := hWF
       have hCOes1 : C ≠ eS1.executionEnv.codeOwner := hCO
       have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
-      have hInves1 : WethInvFr eS1.accountMap C := hInv
+      have hInves1 : StorageSumLeBalance eS1.accountMap C := hInv
       -- Round-trip: AccountAddress.ofUInt256 (.ofNat codeOwner) = codeOwner.
       have hRoundtrip :
           AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner)
@@ -7603,9 +7605,9 @@ private theorem step_STATICCALL_arm_invariant
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
     (hFrame : ΞInvariantFrameAtC C (f + 1))
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hStep : EVM.step (f + 1) cost₂ (some (.STATICCALL, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C ≠ sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -7624,7 +7626,7 @@ private theorem step_STATICCALL_arm_invariant
       have hWFes1 : StateWF eS1.accountMap := hWF
       have hCOes1 : C ≠ eS1.executionEnv.codeOwner := hCO
       have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
-      have hInves1 : WethInvFr eS1.accountMap C := hInv
+      have hInves1 : StorageSumLeBalance eS1.accountMap C := hInv
       have h_vb_call :
           ∀ acc, (eS1.accountMap).find? (AccountAddress.ofUInt256 μ₁) = some acc →
             acc.balance.toNat + (⟨0⟩ : UInt256).toNat < UInt256.size := by
@@ -7667,9 +7669,9 @@ private theorem step_CALLCODE_arm_invariant
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
     (hFrame : ΞInvariantFrameAtC C (f + 1))
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hStep : EVM.step (f + 1) cost₂ (some (.CALLCODE, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C ≠ sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -7688,7 +7690,7 @@ private theorem step_CALLCODE_arm_invariant
       have hWFes1 : StateWF eS1.accountMap := hWF
       have hCOes1 : C ≠ eS1.executionEnv.codeOwner := hCO
       have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
-      have hInves1 : WethInvFr eS1.accountMap C := hInv
+      have hInves1 : StorageSumLeBalance eS1.accountMap C := hInv
       have hRoundtrip :
           AccountAddress.ofUInt256 (.ofNat eS1.executionEnv.codeOwner)
             = eS1.executionEnv.codeOwner := by
@@ -7813,10 +7815,10 @@ private theorem step_CALLCODE_arm_invariant
           · simp only [createdAccounts_replaceStackAndIncrPC, ← hStateEq]
             exact hNCes1
 
-/-- CREATE invariant arm: `WethInvFr` is preserved through the CREATE
+/-- CREATE invariant arm: `StorageSumLeBalance` is preserved through the CREATE
 step at non-`C` codeOwner. Mirrors `step_CREATE_arm` exactly, with the
 Λ dispatch routed through `Λ_invariant_preserved_bdd`. The `σStar`
-nonce-bump preserves `WethInvFr σ C` because `Iₐ ≠ C`. -/
+nonce-bump preserves `StorageSumLeBalance σ C` because `Iₐ ≠ C`. -/
 private theorem step_CREATE_arm_invariant
     (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
     (evmState sstepState : EVM.State)
@@ -7825,9 +7827,9 @@ private theorem step_CREATE_arm_invariant
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (_hAtCFrame : ΞInvariantAtCFrame C (f + 1))
     (hFrame : ΞInvariantFrameAtC C (f + 1))
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hStep : EVM.step (f + 1) cost₂ (some (.CREATE, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C ≠ sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -7853,7 +7855,7 @@ private theorem step_CREATE_arm_invariant
     have hWF2 : StateWF eS2.accountMap := by rw [hAM2]; exact hWF
     have hCO2 : C ≠ eS2.executionEnv.codeOwner := by rw [hEE2]; exact hCO
     have hNC2 : ∀ a ∈ eS2.createdAccounts, a ≠ C := by rw [hCA2]; exact hNC
-    have hInv2 : WethInvFr eS2.accountMap C := by rw [hAM2]; exact hInv
+    have hInv2 : StorageSumLeBalance eS2.accountMap C := by rw [hAM2]; exact hInv
     by_cases hNonceOv : σ_Iₐ.nonce.toNat ≥ 2^64-1
     · simp only [hNonceOv, if_true] at hStep
       split at hStep
@@ -7887,8 +7889,8 @@ private theorem step_CREATE_arm_invariant
               show storageSum (σ.insert Iₐ _) C = storageSum σ C
               apply storageSum_unchanged_at_other_account
               exact hIₐC
-            have hInvσStar : WethInvFr σStar C := by
-              unfold WethInvFr
+            have hInvσStar : StorageSumLeBalance σStar C := by
+              unfold StorageSumLeBalance
               rw [hσStarStgC, hσStarBalC]
               exact hInv2
             have hWFσStar : StateWF σStar := by
@@ -7959,7 +7961,7 @@ private theorem step_CREATE_arm_invariant
             rw [hΛ] at hΛFrame
             obtain ⟨_ha_ne_C, hInvσ', hWFσ', hNCcA⟩ := hΛFrame
             refine ⟨?_, hWFσ', ?_, ?_⟩
-            · show WethInvFr σ' C
+            · show StorageSumLeBalance σ' C
               exact hInvσ'
             · show C ≠ ({eS2 with accountMap := σ', substate := A', createdAccounts := cA }).executionEnv.codeOwner
               rw [hEE2] at hCO2
@@ -7996,9 +7998,9 @@ private theorem step_CREATE2_arm_invariant
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (_hAtCFrame : ΞInvariantAtCFrame C (f + 1))
     (hFrame : ΞInvariantFrameAtC C (f + 1))
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hStep : EVM.step (f + 1) cost₂ (some (.CREATE2, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C ≠ sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -8021,7 +8023,7 @@ private theorem step_CREATE2_arm_invariant
     have hWF2 : StateWF eS2.accountMap := by rw [hAM2]; exact hWF
     have hCO2 : C ≠ eS2.executionEnv.codeOwner := by rw [hEE2]; exact hCO
     have hNC2 : ∀ a ∈ eS2.createdAccounts, a ≠ C := by rw [hCA2]; exact hNC
-    have hInv2 : WethInvFr eS2.accountMap C := by rw [hAM2]; exact hInv
+    have hInv2 : StorageSumLeBalance eS2.accountMap C := by rw [hAM2]; exact hInv
     by_cases hNonceOv : σ_Iₐ.nonce.toNat ≥ 2^64-1
     · simp only [hNonceOv, if_true] at hStep
       split at hStep
@@ -8057,8 +8059,8 @@ private theorem step_CREATE2_arm_invariant
               show storageSum (σ.insert Iₐ _) C = storageSum σ C
               apply storageSum_unchanged_at_other_account
               exact hIₐC
-            have hInvσStar : WethInvFr σStar C := by
-              unfold WethInvFr
+            have hInvσStar : StorageSumLeBalance σStar C := by
+              unfold StorageSumLeBalance
               rw [hσStarStgC, hσStarBalC]
               exact hInv2
             have hWFσStar : StateWF σStar := by
@@ -8156,7 +8158,7 @@ private theorem step_CREATE2_arm_invariant
           · simp only [createdAccounts_replaceStackAndIncrPC]; exact hNC
 
 /-- **Aggregator over the 6 system arms (invariant side).** Mirror of
-`step_bundled_system_arm` for `WethInvFr`. Dispatches to the per-arm
+`step_bundled_system_arm` for `StorageSumLeBalance`. Dispatches to the per-arm
 invariant helpers based on `op`'s system-call/create classification. -/
 private theorem step_bundled_system_arm_invariant
     (C : AccountAddress) (f : ℕ) (cost₂ : ℕ)
@@ -8167,10 +8169,10 @@ private theorem step_bundled_system_arm_invariant
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
     (hFrame : ΞInvariantFrameAtC C (f + 1))
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hSys : opIsSystemCallOrCreate op)
     (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C ≠ sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -8184,12 +8186,12 @@ private theorem step_bundled_system_arm_invariant
 
 /-- **Handled-case invariant helper.** Mirror of
 `step_bundled_handled_case` for the invariant-side: when `op` is a
-handled non-CALL/non-CREATE op, `WethInvFr` is preserved at non-C
+handled non-CALL/non-CREATE op, `StorageSumLeBalance` is preserved at non-C
 codeOwner. SELFDESTRUCT is special: balance grows or is unchanged
 at C (`selfdestruct_balanceOf_ne_Iₐ_ge`), and storage is unchanged
 (`selfdestruct_storageSum_at_ne_Iₐ_eq`), so the invariant is
 preserved. Other handled non-SD ops preserve the invariant directly via
-`EvmYul_step_preserves_WethInvFr_at_non_C`. -/
+`EvmYul_step_preserves_StorageSumLeBalance_at_non_C`. -/
 private theorem step_bundled_handled_case_invariant
     (C : AccountAddress) (_f : ℕ) (cost₂ : ℕ)
     (op : Operation .EVM) (arg : Option (UInt256 × Nat))
@@ -8197,14 +8199,14 @@ private theorem step_bundled_handled_case_invariant
     (hWF : StateWF evmState.accountMap)
     (hCO : C ≠ evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hHandled : handledByEvmYulStep op)
     (hStep : EvmYul.step op arg
               {evmState with
                 execLength := evmState.execLength + 1,
                 gasAvailable := evmState.gasAvailable - UInt256.ofNat cost₂}
               = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C ≠ sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -8219,7 +8221,7 @@ private theorem step_bundled_handled_case_invariant
   have hWF_pre : StateWF s_pre.accountMap := by rw [hAM]; exact hWF
   have hCO_pre : C ≠ s_pre.executionEnv.codeOwner := by rw [hCOEq]; exact hCO
   have hNC_pre : ∀ a ∈ s_pre.createdAccounts, a ≠ C := by rw [hCAEq]; exact hNC
-  have hInv_pre : WethInvFr s_pre.accountMap C := by rw [hAM]; exact hInv
+  have hInv_pre : StorageSumLeBalance s_pre.accountMap C := by rw [hAM]; exact hInv
   by_cases hSD : op = .SELFDESTRUCT
   · subst hSD
     have hStep_none : EvmYul.step (.SELFDESTRUCT : Operation .EVM) .none s_pre = .ok sstepState := by
@@ -8235,13 +8237,13 @@ private theorem step_bundled_handled_case_invariant
     have hEnv := selfdestruct_preserves_executionEnv s_pre sstepState hStep_none
     have hCA := selfdestruct_preserves_createdAccounts s_pre sstepState hStep_none
     refine ⟨?_, hWFresult, ?_, ?_⟩
-    · -- WethInvFr sstepState.accountMap C: storageSum unchanged, balance ≥.
-      unfold WethInvFr at hInv_pre ⊢
+    · -- StorageSumLeBalance sstepState.accountMap C: storageSum unchanged, balance ≥.
+      unfold StorageSumLeBalance at hInv_pre ⊢
       rw [hStgEq]
       exact Nat.le_trans hInv_pre hBalGE
     · rw [hEnv, hCOEq]; exact hCO
     · rw [hCA, hCAEq]; exact hNC
-  · have hInvResult := EvmYul_step_preserves_WethInvFr_at_non_C op arg s_pre sstepState C
+  · have hInvResult := EvmYul_step_preserves_StorageSumLeBalance_at_non_C op arg s_pre sstepState C
         hHandled hSD hStep hCO_pre hInv_pre
     have hWFresult := EvmYul_step_preserves_StateWF op arg s_pre sstepState hHandled hSD hStep hWF_pre
     have hEnvCA := EvmYul.step_preserves_eEnv_cA op arg s_pre sstepState hHandled hStep
@@ -8250,7 +8252,7 @@ private theorem step_bundled_handled_case_invariant
     · rw [hEnvCA.2, hCAEq]; exact hNC
 
 /-- **Aggregator: step-level bundled invariant at non-`C` codeOwner.**
-Mirror of `step_bundled_invariant_at_C` for `WethInvFr`. Routes
+Mirror of `step_bundled_invariant_at_C` for `StorageSumLeBalance`. Routes
 through `step_bundled_system_arm_invariant` for system-call/create
 ops, and `step_bundled_handled_case_invariant` for the handled
 non-CALL/non-CREATE fallthrough. -/
@@ -8263,9 +8265,9 @@ private theorem step_bundled_invariant_at_C_invariant_general
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C f')
     (hFrame : ΞInvariantFrameAtC C f')
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C ≠ sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -8331,7 +8333,7 @@ private theorem step_bundled_invariant_at_C_invariant_general
       exact step_bundled_handled_case_invariant C f cost₂ op arg evmState sstepState
         hWF hCO hNC hInv hHandled hStep'
 
-/-- **X-induction invariant for `WethInvFr`.** Mirror of `X_inv`. -/
+/-- **X-induction invariant for `StorageSumLeBalance`.** Mirror of `X_inv`. -/
 private def X_inv_invariant (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
     (evmState : EVM.State) : Prop :=
   StateWF evmState.accountMap →
@@ -8339,10 +8341,10 @@ private def X_inv_invariant (C : AccountAddress) (f : ℕ) (validJumps : Array U
   (∀ a ∈ evmState.createdAccounts, a ≠ C) →
   ΞInvariantAtCFrame C f →
   ΞInvariantFrameAtC C f →
-  WethInvFr evmState.accountMap C →
+  StorageSumLeBalance evmState.accountMap C →
   match EVM.X f validJumps evmState with
   | .ok (.success s' _) =>
-      WethInvFr s'.accountMap C ∧
+      StorageSumLeBalance s'.accountMap C ∧
       StateWF s'.accountMap ∧
       (∀ a ∈ s'.createdAccounts, a ≠ C)
   | _ => True
@@ -8357,9 +8359,9 @@ private theorem step_invariant_preserved_at_non_C
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C f')
     (hFrame : ΞInvariantFrameAtC C f')
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C :=
+    StorageSumLeBalance sstepState.accountMap C :=
   (step_bundled_invariant_at_C_invariant_general C f' cost₂ instr evmState sstepState
     hWF hCO hNC hAtCFrame hFrame hInv hStep).1
 
@@ -8372,7 +8374,7 @@ private theorem step_invariant_StateWF
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C f')
     (hFrame : ΞInvariantFrameAtC C f')
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
     StateWF sstepState.accountMap :=
   (step_bundled_invariant_at_C_invariant_general C f' cost₂ instr evmState sstepState
@@ -8387,7 +8389,7 @@ private theorem step_invariant_codeOwner
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C f')
     (hFrame : ΞInvariantFrameAtC C f')
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
     C ≠ sstepState.executionEnv.codeOwner :=
   (step_bundled_invariant_at_C_invariant_general C f' cost₂ instr evmState sstepState
@@ -8402,7 +8404,7 @@ private theorem step_invariant_createdAccounts
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C f')
     (hFrame : ΞInvariantFrameAtC C f')
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hStep : EVM.step f' cost₂ instr evmState = .ok sstepState) :
     ∀ a ∈ sstepState.createdAccounts, a ≠ C :=
   (step_bundled_invariant_at_C_invariant_general C f' cost₂ instr evmState sstepState
@@ -8418,11 +8420,11 @@ private theorem X_inv_invariant_succ_content
     (_hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (_hAtCFrame : ΞInvariantAtCFrame C f')
     (hFrame : ΞInvariantFrameAtC C f')
-    (_hInv : WethInvFr evmState.accountMap C)
+    (_hInv : StorageSumLeBalance evmState.accountMap C)
     (_IH : ∀ evmState', X_inv_invariant C f' validJumps evmState')
     (hXres : EVM.X (f' + 1) validJumps evmState
               = .ok (.success finalState _out)) :
-    WethInvFr finalState.accountMap C ∧
+    StorageSumLeBalance finalState.accountMap C ∧
     StateWF finalState.accountMap ∧
     (∀ a ∈ finalState.createdAccounts, a ≠ C) := by
   simp only [EVM.X] at hXres
@@ -8465,7 +8467,7 @@ private theorem X_inv_invariant_succ_content
       rw [hZ_eEnv]; exact _hCO
     have hNCZ : ∀ a ∈ evmStateZ.createdAccounts, a ≠ C := by
       rw [hZ_cA]; exact _hNC
-    have hInvZ : WethInvFr evmStateZ.accountMap C := by rw [hZ_accMap]; exact _hInv
+    have hInvZ : StorageSumLeBalance evmStateZ.accountMap C := by rw [hZ_accMap]; exact _hInv
     simp only [bind, Except.bind] at hXres
     split at hXres
     case h_1 _ _ =>
@@ -8473,7 +8475,7 @@ private theorem X_inv_invariant_succ_content
     case h_2 _ sstepState hStep =>
       split at hXres
       case h_1 _ hH_none =>
-        have hInvSstep : WethInvFr sstepState.accountMap C :=
+        have hInvSstep : StorageSumLeBalance sstepState.accountMap C :=
           step_invariant_preserved_at_non_C C f' cost₂ _ evmStateZ sstepState
             hWFZ hCOZ hNCZ _hAtCFrame hFrame hInvZ hStep
         have hWFsstep : StateWF sstepState.accountMap :=
@@ -8496,7 +8498,7 @@ private theorem X_inv_invariant_succ_content
           injection hXres with hXres_inj
           injection hXres_inj with hfin _
           subst hfin
-          have hInvSstep : WethInvFr sstepState.accountMap C :=
+          have hInvSstep : StorageSumLeBalance sstepState.accountMap C :=
             step_invariant_preserved_at_non_C C f' cost₂ _ evmStateZ sstepState
               hWFZ hCOZ hNCZ _hAtCFrame hFrame hInvZ hStep
           have hWFsstep : StateWF sstepState.accountMap :=
@@ -8524,7 +8526,7 @@ private theorem X_inv_invariant_holds
     intro hWF hCO hNC _hAtCFrameAtSucc _hFrameAtSucc hInv
     show match EVM.X (f' + 1) validJumps evmState with
       | .ok (.success s' _) =>
-          WethInvFr s'.accountMap C ∧
+          StorageSumLeBalance s'.accountMap C ∧
           StateWF s'.accountMap ∧
           (∀ a ∈ s'.createdAccounts, a ≠ C)
       | _ => True
@@ -8559,10 +8561,10 @@ theorem Ξ_invariant_preserved_bundled_bdd (C : AccountAddress)
       StateWF σ' →
       C ≠ I'.codeOwner →
       (∀ a ∈ cA', a ≠ C) →
-      WethInvFr σ' C →
+      StorageSumLeBalance σ' C →
       match EVM.Ξ n cA' gbh' bs' σ' σ₀' g' A' I' with
       | .ok (.success (cA_out, σ''final, _, _) _) =>
-          WethInvFr σ''final C ∧ StateWF σ''final ∧
+          StorageSumLeBalance σ''final C ∧ StateWF σ''final ∧
             (∀ a ∈ cA_out, a ≠ C)
       | _ => True := by
   intro cA' gbh' bs' σ' σ₀' g' A' I' hWF' hco' hnc' hInv'
@@ -8685,7 +8687,7 @@ theorem Ξ_invariant_preserved_bundled_bdd (C : AccountAddress)
     have hWFF : StateWF σ' := hWF'
     have hCOF : C ≠ I'.codeOwner := hco'
     have hNCF : ∀ a ∈ cA', a ≠ C := hnc'
-    have hInvF : WethInvFr σ' C := hInv'
+    have hInvF : StorageSumLeBalance σ' C := hInv'
     have := hXinv hWFF hCOF hNCF (hAtCAll f (Nat.le_refl _)) (Ξ_frame_at f (Nat.le_refl _)) hInvF
     rw [hXres] at this
     cases xRes with
@@ -8712,8 +8714,8 @@ theorem ΞInvariantFrameAtC_of_witness (C : AccountAddress)
 /-! ## §H.2 — At-`C` invariant step bundle (consumer-facing)
 
 Mirror of `step_bundled_invariant_at_C_general` (§G.1) for the
-`WethInvFr` chain. Same op-whitelist parameterization, but the
-conclusion tracks `WethInvFr` preservation rather than `balanceOf`
+`StorageSumLeBalance` chain. Same op-whitelist parameterization, but the
+conclusion tracks `StorageSumLeBalance` preservation rather than `balanceOf`
 monotonicity, and the closure dispatcher recognizes one extra arm:
 the at-`C` SSTORE arm, whose post-state invariant must be supplied as
 a per-step hypothesis (the consumer discharges this at concrete
@@ -8730,13 +8732,13 @@ The aggregator routes:
 
 At-`C` SELFDESTRUCT, TSTORE, and other system ops (CREATE/CREATE2/
 CALLCODE/DELEGATECALL/STATICCALL) are excluded from `OpAllowedSet` by
-the consumer (Weth's bytecode-walk hypothesis). -/
+the consumer (the per-PC bytecode walk). -/
 
 /-- **Strict-handled invariant helper at-`C`.** Mirror of
 `step_handled_helper_at_C_general` (balance side) for the invariant
 chain. For ops that strictly preserve `accountMap` (handled,
 non-SELFDESTRUCT, non-SSTORE, non-TSTORE), the entire `accountMap` is
-preserved literally, so `WethInvFr` projects identically. -/
+preserved literally, so `StorageSumLeBalance` projects identically. -/
 private theorem step_handled_strict_helper_at_C_invariant
     (op : Operation .EVM) (C : AccountAddress) (f : ℕ) (cost₂ : ℕ)
     (arg : Option (UInt256 × Nat))
@@ -8744,10 +8746,10 @@ private theorem step_handled_strict_helper_at_C_invariant
     (hWF : StateWF evmState.accountMap)
     (hCC : C = evmState.executionEnv.codeOwner)
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hStrict : strictlyPreservesAccountMap op)
     (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C = sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -8793,9 +8795,9 @@ private theorem step_handled_strict_helper_at_C_invariant
   -- accountMap literally preserved.
   have hAMeq : sstepState.accountMap = s_pre.accountMap :=
     EvmYul.step_accountMap_eq_of_strict op arg s_pre sstepState hStrict hStep'
-  -- WethInvFr projects through accountMap-equality.
-  have hInvres : WethInvFr sstepState.accountMap C := by
-    unfold WethInvFr at hInv ⊢
+  -- StorageSumLeBalance projects through accountMap-equality.
+  have hInvres : StorageSumLeBalance sstepState.accountMap C := by
+    unfold StorageSumLeBalance at hInv ⊢
     rw [hAMeq, hAM]; exact hInv
   -- StateWF preserved.
   have hWFres : StateWF sstepState.accountMap :=
@@ -8824,10 +8826,10 @@ private theorem step_CALL_arm_at_C_v0_invariant
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
     (hFrame : ΞInvariantFrameAtC C (f + 1))
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (h_v0 : evmState.stack[2]? = some ⟨0⟩)
     (hStep : EVM.step (f + 1) cost₂ (some (.CALL, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C = sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -8896,7 +8898,7 @@ private theorem step_CALL_arm_at_C_v0_invariant
       have hWFes1 : StateWF eS1.accountMap := hWF
       have hCCes1 : C = eS1.executionEnv.codeOwner := hCC
       have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
-      have hInves1 : WethInvFr eS1.accountMap C := hInv
+      have hInves1 : StorageSumLeBalance eS1.accountMap C := hInv
       -- Discharge h_vb, h_fs, h_slack via μ₂ = 0.
       have h_vb_call :
           ∀ acc, (eS1.accountMap).find? (AccountAddress.ofUInt256 μ₁) = some acc →
@@ -8944,8 +8946,8 @@ produces the three preconditions of `call_invariant_preserved`:
   v + storageSum ≤ balanceOf`).
 
 Compared to the v=0 helper, this lets the consumer carry the at-`C`
-non-zero CALL by exposing the SSTORE-decrement fact at PC 60 of Weth's
-withdraw block (which establishes the slack inequality). The IHs
+non-zero CALL by exposing the SSTORE-decrement fact preceding the
+outbound CALL (which establishes the slack inequality). The IHs
 `hAtCFrame`/`hFrame` at fuel `f + 1` are mono'd down to `f` and threaded
 into `call_invariant_preserved` here — so the consumer never sees the
 IHs. -/
@@ -8957,7 +8959,7 @@ theorem step_CALL_arm_at_C_slack_invariant
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
     (hFrame : ΞInvariantFrameAtC C (f + 1))
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (h_call_pre :
       ∀ (μ₀ μ₁ μ₂ μ₃ μ₄ μ₅ μ₆ : UInt256) (tl : Stack UInt256),
         evmState.stack = μ₀ :: μ₁ :: μ₂ :: μ₃ :: μ₄ :: μ₅ :: μ₆ :: tl →
@@ -8975,7 +8977,7 @@ theorem step_CALL_arm_at_C_slack_invariant
          μ₂.toNat + storageSum evmState.accountMap C
            ≤ balanceOf evmState.accountMap C))
     (hStep : EVM.step (f + 1) cost₂ (some (.CALL, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C = sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -9049,7 +9051,7 @@ theorem step_CALL_arm_at_C_slack_invariant
       have hWFes1 : StateWF eS1.accountMap := hWF
       have hCCes1 : C = eS1.executionEnv.codeOwner := hCC
       have hNCes1 : ∀ a ∈ eS1.createdAccounts, a ≠ C := hNC
-      have hInves1 : WethInvFr eS1.accountMap C := hInv
+      have hInves1 : StorageSumLeBalance eS1.accountMap C := hInv
       -- Re-state the consumer's preconditions on `eS1` (definitionally
       -- equal to `evmState` on the `.accountMap`/`.executionEnv` fields).
       have hAM_eS1 : eS1.accountMap = evmState.accountMap := rfl
@@ -9086,7 +9088,7 @@ theorem step_CALL_arm_at_C_slack_invariant
 
 /-- **At-`C` invariant step bundle.** Op-whitelist generalization
 mirroring `step_bundled_invariant_at_C_general` (§G.1) for the
-`WethInvFr` chain.
+`StorageSumLeBalance` chain.
 
 Allowed op-classes (per `hDischarge`):
 * Strict-handled (handled, ¬SD, ¬SSTORE, ¬TSTORE) — preserves
@@ -9095,7 +9097,7 @@ Allowed op-classes (per `hDischarge`):
 * `.StackMemFlow .SSTORE` — at-`C` SSTORE; per-step output invariant
   supplied via `h_sstore_post`.
 
-The consumer (Weth's bytecode walk) supplies `h_sstore_post`
+The consumer (the per-PC bytecode walk) supplies `h_sstore_post`
 per-state by decrement-pattern reasoning (withdraw: val=0 ⇒ slot
 zeroed ⇒ invariant trivially) or by msg.value-credit slack (deposit:
 SSTORE follows a Θ-prefix that credited C with msg.value, so the
@@ -9110,16 +9112,16 @@ private theorem step_bundled_invariant_at_C_invariant_at_C
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
     (hFrame : ΞInvariantFrameAtC C (f + 1))
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hAllowed : OpAllowedSet op)
     (hDischarge : ∀ op', OpAllowedSet op' →
         strictlyPreservesAccountMap op' ∨ op' = .CALL ∨
         op' = .StackMemFlow .SSTORE)
     (h_v0 : op = .CALL → evmState.stack[2]? = some ⟨0⟩)
     (h_sstore_post : op = .StackMemFlow .SSTORE →
-        WethInvFr sstepState.accountMap C)
+        StorageSumLeBalance sstepState.accountMap C)
     (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C = sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -9135,7 +9137,7 @@ private theorem step_bundled_invariant_at_C_invariant_at_C
     -- need to derive StateWF, codeOwner, and createdAccounts preservation
     -- from the underlying EvmYul.step.
     subst hSStore
-    have hInvres : WethInvFr sstepState.accountMap C := h_sstore_post rfl
+    have hInvres : StorageSumLeBalance sstepState.accountMap C := h_sstore_post rfl
     -- Reduce EVM.step to EvmYul.step (SSTORE is handled, ¬SD).
     have hHandled : handledByEvmYulStep (.StackMemFlow .SSTORE : Operation .EVM) := by
       refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
@@ -9167,16 +9169,17 @@ private theorem step_bundled_invariant_at_C_invariant_at_C
       exact hNC a haIn
 
 /-- **At-`C` invariant X-induction predicate.** Mirror of
-`X_inv_at_C_general` for the `WethInvFr` chain.
+`X_inv_at_C_general` for the `StorageSumLeBalance` chain.
 
 In addition to the structural reachability/closure hypotheses (Z, step,
 decode-some, op ∈ allowed-set), we take a per-step output-invariant
 hypothesis for the SSTORE arm: for every reachable state where the
 fetched instruction is `.SSTORE` and the step succeeds, the post-step
-`WethInvFr` holds. The consumer (Weth's bytecode walk) discharges this
-via decrement-pattern reasoning at concrete bytecode states (PC 60 in
-withdraw zeroes the slot; PC 40 in deposit increments by msg.value
-where the slack came from the Θ-prefix value transfer). -/
+`StorageSumLeBalance` holds. The consumer (the per-PC bytecode walk) discharges this
+via decrement-pattern reasoning at concrete bytecode states (e.g. a
+withdraw-style SSTORE that zeroes the slot, or a deposit-style SSTORE
+that increments by `msg.value` where the slack came from the Θ-prefix
+value transfer). -/
 private def X_inv_at_C_invariant (OpAllowedSet : Operation .EVM → Prop)
     (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
     (Reachable : EVM.State → Prop)
@@ -9186,7 +9189,7 @@ private def X_inv_at_C_invariant (OpAllowedSet : Operation .EVM → Prop)
   (∀ a ∈ evmState.createdAccounts, a ≠ C) →
   ΞInvariantAtCFrame C f →
   ΞInvariantFrameAtC C f →
-  WethInvFr evmState.accountMap C →
+  StorageSumLeBalance evmState.accountMap C →
   Reachable evmState →
   -- Z preserves Reachable.
   (∀ s : EVM.State, ∀ g : UInt256, Reachable s →
@@ -9214,18 +9217,18 @@ private def X_inv_at_C_invariant (OpAllowedSet : Operation .EVM → Prop)
     fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
     s.stack[2]? = some ⟨0⟩) →
   -- Per-step SSTORE output invariant: at every reachable state with
-  -- `op = SSTORE`, the post-step `WethInvFr` is preserved.
+  -- `op = SSTORE`, the post-step `StorageSumLeBalance` is preserved.
   (∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ arg,
     Reachable s →
     StateWF s.accountMap →
     C = s.executionEnv.codeOwner →
-    WethInvFr s.accountMap C →
+    StorageSumLeBalance s.accountMap C →
     fetchInstr s.executionEnv s.pc = .ok (.StackMemFlow .SSTORE, arg) →
     EVM.step (f' + 1) cost (some (.StackMemFlow .SSTORE, arg)) s = .ok s' →
-    WethInvFr s'.accountMap C) →
+    StorageSumLeBalance s'.accountMap C) →
   match EVM.X f validJumps evmState with
   | .ok (.success s' _) =>
-      WethInvFr s'.accountMap C ∧
+      StorageSumLeBalance s'.accountMap C ∧
       StateWF s'.accountMap ∧
       (∀ a ∈ s'.createdAccounts, a ≠ C)
   | _ => True
@@ -9251,7 +9254,7 @@ private theorem X_inv_at_C_invariant_holds
             hOpAllowedReach hDischarge h_v0_Reach h_sstore_Reach
     show match EVM.X (f' + 1) validJumps evmState with
       | .ok (.success s' _) =>
-          WethInvFr s'.accountMap C ∧
+          StorageSumLeBalance s'.accountMap C ∧
           StateWF s'.accountMap ∧
           (∀ a ∈ s'.createdAccounts, a ≠ C)
       | _ => True
@@ -9299,7 +9302,7 @@ private theorem X_inv_at_C_invariant_holds
             rw [hZ_eEnv]; exact hCC
           have hNCZ : ∀ a ∈ evmStateZ.createdAccounts, a ≠ C := by
             rw [hZ_cA]; exact hNC
-          have hInvZ : WethInvFr evmStateZ.accountMap C := by rw [hZ_accMap]; exact hInv
+          have hInvZ : StorageSumLeBalance evmStateZ.accountMap C := by rw [hZ_accMap]; exact hInv
           have hReachZ : Reachable evmStateZ := by
             rw [hZ_full]
             exact hReach_Z evmState evmStateZ.gasAvailable hReach
@@ -9398,7 +9401,7 @@ private theorem X_inv_at_C_invariant_holds
               have hStep' : EVM.step (f'' + 1) cost₂ (some (op, arg)) evmStateZ
                           = .ok sstepState := hStep
               have h_sstore_post : op = .StackMemFlow .SSTORE →
-                  WethInvFr sstepState.accountMap C := by
+                  StorageSumLeBalance sstepState.accountMap C := by
                 intro hOpSStore
                 rw [hOpSStore] at hFetchOK hStep'
                 exact h_sstore_Reach evmStateZ sstepState f'' cost₂ arg
@@ -9442,11 +9445,11 @@ private theorem X_inv_at_C_invariant_holds
 /-- **Consumer-facing entry point for `ΞPreservesInvariantAtC` (§H.2).**
 
 Mirror of §G.1's `ΞPreservesAtC_of_Reachable_general` for the
-`WethInvFr` chain. Per-bytecode entry point: a consumer (e.g. Weth)
+`StorageSumLeBalance` chain. Per-bytecode entry point: a consumer
 supplies a `Reachable` predicate witnessing that the bytecode trace at
 `C` stays inside an op-whitelist (strict-handled / `.CALL` /
 `.StackMemFlow .SSTORE`), only emits CALL with `stack[2] = 0`, and
-preserves `WethInvFr` per-step at SSTORE.
+preserves `StorageSumLeBalance` per-step at SSTORE.
 
 The proof structure mirrors `ΞPreservesAtC_of_Reachable_general`:
 strong fuel induction, with the IH supplying `ΞInvariantAtCFrame C f`
@@ -9478,10 +9481,10 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general
         Reachable s →
         StateWF s.accountMap →
         C = s.executionEnv.codeOwner →
-        WethInvFr s.accountMap C →
+        StorageSumLeBalance s.accountMap C →
         fetchInstr s.executionEnv s.pc = .ok (.StackMemFlow .SSTORE, arg) →
         EVM.step (f' + 1) cost (some (.StackMemFlow .SSTORE, arg)) s = .ok s' →
-        WethInvFr s'.accountMap C)
+        StorageSumLeBalance s'.accountMap C)
     (hReachInit : ∀ (cA : RBSet AccountAddress compare)
                     (gbh : BlockHeader) (bs : ProcessedBlocks)
                     (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
@@ -9562,7 +9565,7 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general
       have hWFFresh : StateWF freshState.accountMap := hWF
       have hCCFresh : C = freshState.executionEnv.codeOwner := hCO.symm
       have hNCFresh : ∀ a ∈ freshState.createdAccounts, a ≠ C := hNC
-      have hInvFresh : WethInvFr freshState.accountMap C := hInv
+      have hInvFresh : StorageSumLeBalance freshState.accountMap C := hInv
       have hReachFresh : Reachable freshState :=
         hReachInit cA gbh bs σ σ₀ g A I hCO
       have hAtCBddF : ΞInvariantAtCFrame C f := hAtCBdd f (Nat.le_refl _)
@@ -9586,10 +9589,10 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general
 /-! ## §H.2 — CALL-dispatch consumer entry
 
 The `ΞPreservesInvariantAtC_of_Reachable_general` consumer entry above
-hard-codes the at-`C` CALL arm to require `stack[2]? = some 0`. Weth's
-withdraw block calls with a non-zero value `x` (the user's withdrawal
-amount) but with the slot pre-decremented at PC 60, so v=0 is not
-universally available.
+hard-codes the at-`C` CALL arm to require `stack[2]? = some 0`. A
+CEI-pattern withdraw block calls with a non-zero value `x` (the user's
+withdrawal amount) but with the slot pre-decremented before the CALL,
+so v=0 is not universally available.
 
 The dispatch variant below takes a **per-state CALL dispatcher** in
 place of `hReach_v0`. At each reachable state where the fetched
@@ -9601,10 +9604,10 @@ consumer chooses one of two routes:
   themselves (typically via `call_invariant_preserved` with concrete
   slack at that PC).
 
-This is the entry consumed by Weth's bytecode walk for the PC 72 CALL
-where the slack `v.toNat + storageSum σ C ≤ balanceOf σ C` holds via
-the SSTORE decrement at PC 60 (or alternatively where the recipient
-`≠ C` so the at-C debit case never fires). -/
+This is the entry consumed by the per-PC bytecode walk for an at-`C`
+CALL where the slack `v.toNat + storageSum σ C ≤ balanceOf σ C` holds
+via the preceding SSTORE decrement (or alternatively where the
+recipient `≠ C` so the at-C debit case never fires). -/
 
 private theorem step_bundled_invariant_at_C_invariant_at_C_dispatch
     (OpAllowedSet : Operation .EVM → Prop)
@@ -9616,21 +9619,21 @@ private theorem step_bundled_invariant_at_C_invariant_at_C_dispatch
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
     (hFrame : ΞInvariantFrameAtC C (f + 1))
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hAllowed : OpAllowedSet op)
     (hDischarge : ∀ op', OpAllowedSet op' →
         strictlyPreservesAccountMap op' ∨ op' = .CALL ∨
         op' = .StackMemFlow .SSTORE)
     (h_call_dispatch : op = .CALL →
         evmState.stack[2]? = some ⟨0⟩ ∨
-        (WethInvFr sstepState.accountMap C ∧
+        (StorageSumLeBalance sstepState.accountMap C ∧
          StateWF sstepState.accountMap ∧
          C = sstepState.executionEnv.codeOwner ∧
          (∀ a ∈ sstepState.createdAccounts, a ≠ C)))
     (h_sstore_post : op = .StackMemFlow .SSTORE →
-        WethInvFr sstepState.accountMap C)
+        StorageSumLeBalance sstepState.accountMap C)
     (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C = sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -9646,7 +9649,7 @@ private theorem step_bundled_invariant_at_C_invariant_at_C_dispatch
     · exact h_bundle
   · -- SSTORE: same as the non-dispatch variant.
     subst hSStore
-    have hInvres : WethInvFr sstepState.accountMap C := h_sstore_post rfl
+    have hInvres : StorageSumLeBalance sstepState.accountMap C := h_sstore_post rfl
     have hHandled : handledByEvmYulStep (.StackMemFlow .SSTORE : Operation .EVM) := by
       refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
     have hSDne : (.StackMemFlow .SSTORE : Operation .EVM) ≠ .SELFDESTRUCT := by decide
@@ -9686,8 +9689,8 @@ funds, slack). The IHs `hAtCFrame`/`hFrame` are threaded through
 `step_CALL_arm_at_C_slack_invariant`, so the consumer never sees them.
 
 This admits non-zero CALL `v` via the slack inequality
-`v + storageSum ≤ balanceOf` — the SSTORE-decrement fact at PC 60 of
-Weth's withdraw block. -/
+`v + storageSum ≤ balanceOf` — the SSTORE-decrement fact preceding
+the outbound CALL in a CEI-pattern withdraw block. -/
 private theorem step_bundled_invariant_at_C_invariant_at_C_slack_dispatch
     (OpAllowedSet : Operation .EVM → Prop)
     (C : AccountAddress) (f : ℕ) (cost₂ : ℕ) (arg : Option (UInt256 × Nat))
@@ -9698,7 +9701,7 @@ private theorem step_bundled_invariant_at_C_invariant_at_C_slack_dispatch
     (hNC : ∀ a ∈ evmState.createdAccounts, a ≠ C)
     (hAtCFrame : ΞInvariantAtCFrame C (f + 1))
     (hFrame : ΞInvariantFrameAtC C (f + 1))
-    (hInv : WethInvFr evmState.accountMap C)
+    (hInv : StorageSumLeBalance evmState.accountMap C)
     (hAllowed : OpAllowedSet op)
     (hDischarge : ∀ op', OpAllowedSet op' →
         strictlyPreservesAccountMap op' ∨ op' = .CALL ∨
@@ -9720,9 +9723,9 @@ private theorem step_bundled_invariant_at_C_invariant_at_C_slack_dispatch
            μ₂.toNat + storageSum evmState.accountMap C
              ≤ balanceOf evmState.accountMap C))
     (h_sstore_post : op = .StackMemFlow .SSTORE →
-        WethInvFr sstepState.accountMap C)
+        StorageSumLeBalance sstepState.accountMap C)
     (hStep : EVM.step (f + 1) cost₂ (some (op, arg)) evmState = .ok sstepState) :
-    WethInvFr sstepState.accountMap C ∧
+    StorageSumLeBalance sstepState.accountMap C ∧
     StateWF sstepState.accountMap ∧
     (C = sstepState.executionEnv.codeOwner) ∧
     (∀ a ∈ sstepState.createdAccounts, a ≠ C) := by
@@ -9736,7 +9739,7 @@ private theorem step_bundled_invariant_at_C_invariant_at_C_slack_dispatch
       hWF hCC hNC hAtCFrame hFrame hInv (h_call_pre_slack rfl) hStep
   · -- SSTORE: same as the non-dispatch variant.
     subst hSStore
-    have hInvres : WethInvFr sstepState.accountMap C := h_sstore_post rfl
+    have hInvres : StorageSumLeBalance sstepState.accountMap C := h_sstore_post rfl
     have hHandled : handledByEvmYulStep (.StackMemFlow .SSTORE : Operation .EVM) := by
       refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
     have hSDne : (.StackMemFlow .SSTORE : Operation .EVM) ≠ .SELFDESTRUCT := by decide
@@ -9781,7 +9784,7 @@ private def X_inv_at_C_invariant_dispatch (OpAllowedSet : Operation .EVM → Pro
   (∀ a ∈ evmState.createdAccounts, a ≠ C) →
   ΞInvariantAtCFrame C f →
   ΞInvariantFrameAtC C f →
-  WethInvFr evmState.accountMap C →
+  StorageSumLeBalance evmState.accountMap C →
   Reachable evmState →
   (∀ s : EVM.State, ∀ g : UInt256, Reachable s →
       Reachable { s with gasAvailable := g }) →
@@ -9806,24 +9809,24 @@ private def X_inv_at_C_invariant_dispatch (OpAllowedSet : Operation .EVM → Pro
     StateWF s.accountMap →
     C = s.executionEnv.codeOwner →
     (∀ a ∈ s.createdAccounts, a ≠ C) →
-    WethInvFr s.accountMap C →
+    StorageSumLeBalance s.accountMap C →
     fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
     EVM.step (f' + 1) cost (some (.CALL, arg)) s = .ok s' →
     s.stack[2]? = some ⟨0⟩ ∨
-    (WethInvFr s'.accountMap C ∧ StateWF s'.accountMap ∧
+    (StorageSumLeBalance s'.accountMap C ∧ StateWF s'.accountMap ∧
      C = s'.executionEnv.codeOwner ∧
      (∀ a ∈ s'.createdAccounts, a ≠ C))) →
   (∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ arg,
     Reachable s →
     StateWF s.accountMap →
     C = s.executionEnv.codeOwner →
-    WethInvFr s.accountMap C →
+    StorageSumLeBalance s.accountMap C →
     fetchInstr s.executionEnv s.pc = .ok (.StackMemFlow .SSTORE, arg) →
     EVM.step (f' + 1) cost (some (.StackMemFlow .SSTORE, arg)) s = .ok s' →
-    WethInvFr s'.accountMap C) →
+    StorageSumLeBalance s'.accountMap C) →
   match EVM.X f validJumps evmState with
   | .ok (.success s' _) =>
-      WethInvFr s'.accountMap C ∧
+      StorageSumLeBalance s'.accountMap C ∧
       StateWF s'.accountMap ∧
       (∀ a ∈ s'.createdAccounts, a ≠ C)
   | _ => True
@@ -9850,7 +9853,7 @@ private theorem X_inv_at_C_invariant_holds_dispatch
             hOpAllowedReach hDischarge h_call_Reach h_sstore_Reach
     show match EVM.X (f' + 1) validJumps evmState with
       | .ok (.success s' _) =>
-          WethInvFr s'.accountMap C ∧
+          StorageSumLeBalance s'.accountMap C ∧
           StateWF s'.accountMap ∧
           (∀ a ∈ s'.createdAccounts, a ≠ C)
       | _ => True
@@ -9898,7 +9901,7 @@ private theorem X_inv_at_C_invariant_holds_dispatch
             rw [hZ_eEnv]; exact hCC
           have hNCZ : ∀ a ∈ evmStateZ.createdAccounts, a ≠ C := by
             rw [hZ_cA]; exact hNC
-          have hInvZ : WethInvFr evmStateZ.accountMap C := by rw [hZ_accMap]; exact hInv
+          have hInvZ : StorageSumLeBalance evmStateZ.accountMap C := by rw [hZ_accMap]; exact hInv
           have hReachZ : Reachable evmStateZ := by
             rw [hZ_full]
             exact hReach_Z evmState evmStateZ.gasAvailable hReach
@@ -9969,7 +9972,7 @@ private theorem X_inv_at_C_invariant_holds_dispatch
               have h_call_dispatch_op :
                   op = .CALL →
                     evmStateZ.stack[2]? = some ⟨0⟩ ∨
-                    (WethInvFr sstepState.accountMap C ∧
+                    (StorageSumLeBalance sstepState.accountMap C ∧
                      StateWF sstepState.accountMap ∧
                      C = sstepState.executionEnv.codeOwner ∧
                      (∀ a ∈ sstepState.createdAccounts, a ≠ C)) := by
@@ -9978,7 +9981,7 @@ private theorem X_inv_at_C_invariant_holds_dispatch
                 exact h_call_Reach evmStateZ sstepState f'' cost₂ arg
                   hReachZ hWFZ hCCZ hNCZ hInvZ hFetchOK hStep'
               have h_sstore_post : op = .StackMemFlow .SSTORE →
-                  WethInvFr sstepState.accountMap C := by
+                  StorageSumLeBalance sstepState.accountMap C := by
                 intro hOpSStore
                 rw [hOpSStore] at hFetchOK hStep'
                 exact h_sstore_Reach evmStateZ sstepState f'' cost₂ arg
@@ -10038,9 +10041,9 @@ returns either `s.stack[2]? = some 0` (route through the existing v=0
 path) or a complete post-CALL bundle (typically derived via
 `call_invariant_preserved`).
 
-This is the entry consumed by Weth's bytecode walk for the PC 72 CALL
-where the slack `v.toNat + storageSum σ C ≤ balanceOf σ C` holds via
-the SSTORE decrement at PC 60. -/
+This is the entry consumed by the per-PC bytecode walk for an at-`C`
+CALL where the slack `v.toNat + storageSum σ C ≤ balanceOf σ C` holds
+via the preceding SSTORE decrement. -/
 theorem ΞPreservesInvariantAtC_of_Reachable_general_call_dispatch
     (OpAllowedSet : Operation .EVM → Prop)
     (C : AccountAddress)
@@ -10065,21 +10068,21 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_dispatch
         StateWF s.accountMap →
         C = s.executionEnv.codeOwner →
         (∀ a ∈ s.createdAccounts, a ≠ C) →
-        WethInvFr s.accountMap C →
+        StorageSumLeBalance s.accountMap C →
         fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
         EVM.step (f' + 1) cost (some (.CALL, arg)) s = .ok s' →
         s.stack[2]? = some ⟨0⟩ ∨
-        (WethInvFr s'.accountMap C ∧ StateWF s'.accountMap ∧
+        (StorageSumLeBalance s'.accountMap C ∧ StateWF s'.accountMap ∧
          C = s'.executionEnv.codeOwner ∧
          (∀ a ∈ s'.createdAccounts, a ≠ C)))
     (hReach_sstore : ∀ s s' : EVM.State, ∀ f' cost : ℕ, ∀ arg,
         Reachable s →
         StateWF s.accountMap →
         C = s.executionEnv.codeOwner →
-        WethInvFr s.accountMap C →
+        StorageSumLeBalance s.accountMap C →
         fetchInstr s.executionEnv s.pc = .ok (.StackMemFlow .SSTORE, arg) →
         EVM.step (f' + 1) cost (some (.StackMemFlow .SSTORE, arg)) s = .ok s' →
-        WethInvFr s'.accountMap C)
+        StorageSumLeBalance s'.accountMap C)
     (hReachInit : ∀ (cA : RBSet AccountAddress compare)
                     (gbh : BlockHeader) (bs : ProcessedBlocks)
                     (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
@@ -10158,7 +10161,7 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_dispatch
       have hWFFresh : StateWF freshState.accountMap := hWF
       have hCCFresh : C = freshState.executionEnv.codeOwner := hCO.symm
       have hNCFresh : ∀ a ∈ freshState.createdAccounts, a ≠ C := hNC
-      have hInvFresh : WethInvFr freshState.accountMap C := hInv
+      have hInvFresh : StorageSumLeBalance freshState.accountMap C := hInv
       have hReachFresh : Reachable freshState :=
         hReachInit cA gbh bs σ σ₀ g A I hCO
       have hAtCBddF : ΞInvariantAtCFrame C f := hAtCBdd f (Nat.le_refl _)
@@ -10199,7 +10202,7 @@ private def X_inv_at_C_invariant_slack_dispatch (OpAllowedSet : Operation .EVM �
   (∀ a ∈ evmState.createdAccounts, a ≠ C) →
   ΞInvariantAtCFrame C f →
   ΞInvariantFrameAtC C f →
-  WethInvFr evmState.accountMap C →
+  StorageSumLeBalance evmState.accountMap C →
   Reachable evmState →
   (∀ s : EVM.State, ∀ g : UInt256, Reachable s →
       Reachable { s with gasAvailable := g }) →
@@ -10225,7 +10228,7 @@ private def X_inv_at_C_invariant_slack_dispatch (OpAllowedSet : Operation .EVM �
     StateWF s.accountMap →
     C = s.executionEnv.codeOwner →
     (∀ a ∈ s.createdAccounts, a ≠ C) →
-    WethInvFr s.accountMap C →
+    StorageSumLeBalance s.accountMap C →
     fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
     ∀ (μ₀ μ₁ μ₂ μ₃ μ₄ μ₅ μ₆ : UInt256) (tl : Stack UInt256),
       s.stack = μ₀ :: μ₁ :: μ₂ :: μ₃ :: μ₄ :: μ₅ :: μ₆ :: tl →
@@ -10246,13 +10249,13 @@ private def X_inv_at_C_invariant_slack_dispatch (OpAllowedSet : Operation .EVM �
     Reachable s →
     StateWF s.accountMap →
     C = s.executionEnv.codeOwner →
-    WethInvFr s.accountMap C →
+    StorageSumLeBalance s.accountMap C →
     fetchInstr s.executionEnv s.pc = .ok (.StackMemFlow .SSTORE, arg) →
     EVM.step (f' + 1) cost (some (.StackMemFlow .SSTORE, arg)) s = .ok s' →
-    WethInvFr s'.accountMap C) →
+    StorageSumLeBalance s'.accountMap C) →
   match EVM.X f validJumps evmState with
   | .ok (.success s' _) =>
-      WethInvFr s'.accountMap C ∧
+      StorageSumLeBalance s'.accountMap C ∧
       StateWF s'.accountMap ∧
       (∀ a ∈ s'.createdAccounts, a ≠ C)
   | _ => True
@@ -10280,7 +10283,7 @@ private theorem X_inv_at_C_invariant_holds_slack_dispatch
             hOpAllowedReach hDischarge h_call_slack_Reach h_sstore_Reach
     show match EVM.X (f' + 1) validJumps evmState with
       | .ok (.success s' _) =>
-          WethInvFr s'.accountMap C ∧
+          StorageSumLeBalance s'.accountMap C ∧
           StateWF s'.accountMap ∧
           (∀ a ∈ s'.createdAccounts, a ≠ C)
       | _ => True
@@ -10328,7 +10331,7 @@ private theorem X_inv_at_C_invariant_holds_slack_dispatch
             rw [hZ_eEnv]; exact hCC
           have hNCZ : ∀ a ∈ evmStateZ.createdAccounts, a ≠ C := by
             rw [hZ_cA]; exact hNC
-          have hInvZ : WethInvFr evmStateZ.accountMap C := by rw [hZ_accMap]; exact hInv
+          have hInvZ : StorageSumLeBalance evmStateZ.accountMap C := by rw [hZ_accMap]; exact hInv
           have hReachZ : Reachable evmStateZ := by
             rw [hZ_full]
             exact hReach_Z evmState evmStateZ.gasAvailable hReach
@@ -10418,7 +10421,7 @@ private theorem X_inv_at_C_invariant_holds_slack_dispatch
                 exact h_call_slack_Reach evmStateZ arg hReachZ hWFZ hCCZ hNCZ hInvZ hFetchOK
                   μ₀ μ₁ μ₂ μ₃ μ₄ μ₅ μ₆ tl hStk
               have h_sstore_post : op = .StackMemFlow .SSTORE →
-                  WethInvFr sstepState.accountMap C := by
+                  StorageSumLeBalance sstepState.accountMap C := by
                 intro hOpSStore
                 rw [hOpSStore] at hFetchOK hStep'
                 exact h_sstore_Reach evmStateZ sstepState f'' cost₂ arg
@@ -10480,7 +10483,8 @@ the IHs are threaded internally.
 
 This is the entry point for the at-C non-zero CALL discharger pattern:
 the consumer derives the slack `v + storageSum ≤ balanceOf` per-state
-from the SSTORE-decrement fact at PC 60 of Weth's withdraw block. -/
+from the SSTORE-decrement fact preceding the outbound CALL in a
+CEI-pattern withdraw block. -/
 theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch
     (OpAllowedSet : Operation .EVM → Prop)
     (C : AccountAddress)
@@ -10505,7 +10509,7 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch
         StateWF s.accountMap →
         C = s.executionEnv.codeOwner →
         (∀ a ∈ s.createdAccounts, a ≠ C) →
-        WethInvFr s.accountMap C →
+        StorageSumLeBalance s.accountMap C →
         fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
         ∀ (μ₀ μ₁ μ₂ μ₃ μ₄ μ₅ μ₆ : UInt256) (tl : Stack UInt256),
           s.stack = μ₀ :: μ₁ :: μ₂ :: μ₃ :: μ₄ :: μ₅ :: μ₆ :: tl →
@@ -10526,10 +10530,10 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch
         Reachable s →
         StateWF s.accountMap →
         C = s.executionEnv.codeOwner →
-        WethInvFr s.accountMap C →
+        StorageSumLeBalance s.accountMap C →
         fetchInstr s.executionEnv s.pc = .ok (.StackMemFlow .SSTORE, arg) →
         EVM.step (f' + 1) cost (some (.StackMemFlow .SSTORE, arg)) s = .ok s' →
-        WethInvFr s'.accountMap C)
+        StorageSumLeBalance s'.accountMap C)
     (hReachInit : ∀ (cA : RBSet AccountAddress compare)
                     (gbh : BlockHeader) (bs : ProcessedBlocks)
                     (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
@@ -10608,7 +10612,7 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch
       have hWFFresh : StateWF freshState.accountMap := hWF
       have hCCFresh : C = freshState.executionEnv.codeOwner := hCO.symm
       have hNCFresh : ∀ a ∈ freshState.createdAccounts, a ≠ C := hNC
-      have hInvFresh : WethInvFr freshState.accountMap C := hInv
+      have hInvFresh : StorageSumLeBalance freshState.accountMap C := hInv
       have hReachFresh : Reachable freshState :=
         hReachInit cA gbh bs σ σ₀ g A I hCO
       have hAtCBddF : ΞInvariantAtCFrame C f := hAtCBdd f (Nat.le_refl _)
@@ -10634,19 +10638,19 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch
 
 The variant below mirrors `X_inv_at_C_invariant_slack_dispatch` /
 `ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch`,
-but exposes `WethInvFr s'.accountMap C` to the `hReach_step` callback
+but exposes `StorageSumLeBalance s'.accountMap C` to the `hReach_step` callback
 as an additional hypothesis. This is what the framework already
 established internally (via `step_bundled_invariant_at_C_invariant_at_C_slack_dispatch`)
 before invoking `hReach_step`, so passing it through breaks the
 chicken-and-egg dependency that otherwise forces the consumer to
 provide a per-step CALL invariant preservation predicate.
 
-For Weth this means `WethReachable` (whose closure includes
-`WethInvFr s'`) can be threaded through CALL steps without needing
-a separate `WethCALLStepInvFr C` structural assumption. -/
+Consumers whose `Reachable` predicate has a closure that includes
+`StorageSumLeBalance s'` can therefore be threaded through CALL steps
+without needing a separate per-step CALL invariant frame assumption. -/
 
 /-- Same as `X_inv_at_C_invariant_slack_dispatch`, but `hReach_step`
-takes an additional `WethInvFr s'.accountMap C` hypothesis. -/
+takes an additional `StorageSumLeBalance s'.accountMap C` hypothesis. -/
 private def X_inv_at_C_invariant_slack_dispatch_inv_aware (OpAllowedSet : Operation .EVM → Prop)
     (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
     (Reachable : EVM.State → Prop)
@@ -10656,7 +10660,7 @@ private def X_inv_at_C_invariant_slack_dispatch_inv_aware (OpAllowedSet : Operat
   (∀ a ∈ evmState.createdAccounts, a ≠ C) →
   ΞInvariantAtCFrame C f →
   ΞInvariantFrameAtC C f →
-  WethInvFr evmState.accountMap C →
+  StorageSumLeBalance evmState.accountMap C →
   Reachable evmState →
   (∀ s : EVM.State, ∀ g : UInt256, Reachable s →
       Reachable { s with gasAvailable := g }) →
@@ -10664,7 +10668,7 @@ private def X_inv_at_C_invariant_slack_dispatch_inv_aware (OpAllowedSet : Operat
       fetchInstr s.executionEnv s.pc = .ok (op, arg) →
       EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
       op ≠ .RETURN → op ≠ .REVERT → op ≠ .STOP → op ≠ .SELFDESTRUCT →
-      WethInvFr s'.accountMap C →
+      StorageSumLeBalance s'.accountMap C →
       Reachable s') →
   (∀ s : EVM.State, Reachable s →
       ∃ pair, decode s.executionEnv.code s.pc = some pair) →
@@ -10680,7 +10684,7 @@ private def X_inv_at_C_invariant_slack_dispatch_inv_aware (OpAllowedSet : Operat
     StateWF s.accountMap →
     C = s.executionEnv.codeOwner →
     (∀ a ∈ s.createdAccounts, a ≠ C) →
-    WethInvFr s.accountMap C →
+    StorageSumLeBalance s.accountMap C →
     fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
     ∀ (μ₀ μ₁ μ₂ μ₃ μ₄ μ₅ μ₆ : UInt256) (tl : Stack UInt256),
       s.stack = μ₀ :: μ₁ :: μ₂ :: μ₃ :: μ₄ :: μ₅ :: μ₆ :: tl →
@@ -10701,20 +10705,20 @@ private def X_inv_at_C_invariant_slack_dispatch_inv_aware (OpAllowedSet : Operat
     Reachable s →
     StateWF s.accountMap →
     C = s.executionEnv.codeOwner →
-    WethInvFr s.accountMap C →
+    StorageSumLeBalance s.accountMap C →
     fetchInstr s.executionEnv s.pc = .ok (.StackMemFlow .SSTORE, arg) →
     EVM.step (f' + 1) cost (some (.StackMemFlow .SSTORE, arg)) s = .ok s' →
-    WethInvFr s'.accountMap C) →
+    StorageSumLeBalance s'.accountMap C) →
   match EVM.X f validJumps evmState with
   | .ok (.success s' _) =>
-      WethInvFr s'.accountMap C ∧
+      StorageSumLeBalance s'.accountMap C ∧
       StateWF s'.accountMap ∧
       (∀ a ∈ s'.createdAccounts, a ≠ C)
   | _ => True
 
 /-- Fuel induction for the invariant-aware variant. Identical to
 `X_inv_at_C_invariant_holds_slack_dispatch` modulo the new
-`WethInvFr s'` hypothesis on `hReach_step`. -/
+`StorageSumLeBalance s'` hypothesis on `hReach_step`. -/
 private theorem X_inv_at_C_invariant_holds_slack_dispatch_inv_aware
     (OpAllowedSet : Operation .EVM → Prop)
     (C : AccountAddress) (f : ℕ) (validJumps : Array UInt256)
@@ -10734,7 +10738,7 @@ private theorem X_inv_at_C_invariant_holds_slack_dispatch_inv_aware
             hOpAllowedReach hDischarge h_call_slack_Reach h_sstore_Reach
     show match EVM.X (f' + 1) validJumps evmState with
       | .ok (.success s' _) =>
-          WethInvFr s'.accountMap C ∧
+          StorageSumLeBalance s'.accountMap C ∧
           StateWF s'.accountMap ∧
           (∀ a ∈ s'.createdAccounts, a ≠ C)
       | _ => True
@@ -10782,7 +10786,7 @@ private theorem X_inv_at_C_invariant_holds_slack_dispatch_inv_aware
             rw [hZ_eEnv]; exact hCC
           have hNCZ : ∀ a ∈ evmStateZ.createdAccounts, a ≠ C := by
             rw [hZ_cA]; exact hNC
-          have hInvZ : WethInvFr evmStateZ.accountMap C := by rw [hZ_accMap]; exact hInv
+          have hInvZ : StorageSumLeBalance evmStateZ.accountMap C := by rw [hZ_accMap]; exact hInv
           have hReachZ : Reachable evmStateZ := by
             rw [hZ_full]
             exact hReach_Z evmState evmStateZ.gasAvailable hReach
@@ -10871,7 +10875,7 @@ private theorem X_inv_at_C_invariant_holds_slack_dispatch_inv_aware
                 exact h_call_slack_Reach evmStateZ arg hReachZ hWFZ hCCZ hNCZ hInvZ hFetchOK
                   μ₀ μ₁ μ₂ μ₃ μ₄ μ₅ μ₆ tl hStk
               have h_sstore_post : op = .StackMemFlow .SSTORE →
-                  WethInvFr sstepState.accountMap C := by
+                  StorageSumLeBalance sstepState.accountMap C := by
                 intro hOpSStore
                 rw [hOpSStore] at hFetchOK hStep'
                 exact h_sstore_Reach evmStateZ sstepState f'' cost₂ arg
@@ -10926,16 +10930,16 @@ private theorem X_inv_at_C_invariant_holds_slack_dispatch_inv_aware
 /-- **Invariant-aware variant of
 `ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch`.**
 
-The `hReach_step` callback receives `WethInvFr s'.accountMap C` as an
+The `hReach_step` callback receives `StorageSumLeBalance s'.accountMap C` as an
 additional hypothesis at every non-halt step. The framework's CALL/SSTORE
 arms have already established this fact internally before invoking
 `hReach_step`, so passing it through eliminates the consumer-side
 chicken-and-egg dependency on a per-step CALL invariant predicate.
 
-For Weth this allows `WethReachable` (whose closure includes
-`WethInvFr s'`) to thread through CALL steps via the framework's slack
-callback alone, without needing a separate `WethCALLStepInvFr C`
-structural assumption. -/
+Consumers whose `Reachable` predicate has a closure that includes
+`StorageSumLeBalance s'` can therefore thread through CALL steps via
+the framework's slack callback alone, without needing a separate
+per-step CALL invariant frame assumption. -/
 theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch_inv_aware
     (OpAllowedSet : Operation .EVM → Prop)
     (C : AccountAddress)
@@ -10946,7 +10950,7 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch_inv_awa
         fetchInstr s.executionEnv s.pc = .ok (op, arg) →
         EVM.step (f' + 1) cost (some (op, arg)) s = .ok s' →
         op ≠ .RETURN → op ≠ .REVERT → op ≠ .STOP → op ≠ .SELFDESTRUCT →
-        WethInvFr s'.accountMap C →
+        StorageSumLeBalance s'.accountMap C →
         Reachable s')
     (hReach_decodeSome : ∀ s : EVM.State, Reachable s →
         ∃ pair, decode s.executionEnv.code s.pc = some pair)
@@ -10961,7 +10965,7 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch_inv_awa
         StateWF s.accountMap →
         C = s.executionEnv.codeOwner →
         (∀ a ∈ s.createdAccounts, a ≠ C) →
-        WethInvFr s.accountMap C →
+        StorageSumLeBalance s.accountMap C →
         fetchInstr s.executionEnv s.pc = .ok (.CALL, arg) →
         ∀ (μ₀ μ₁ μ₂ μ₃ μ₄ μ₅ μ₆ : UInt256) (tl : Stack UInt256),
           s.stack = μ₀ :: μ₁ :: μ₂ :: μ₃ :: μ₄ :: μ₅ :: μ₆ :: tl →
@@ -10982,16 +10986,16 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch_inv_awa
         Reachable s →
         StateWF s.accountMap →
         C = s.executionEnv.codeOwner →
-        WethInvFr s.accountMap C →
+        StorageSumLeBalance s.accountMap C →
         fetchInstr s.executionEnv s.pc = .ok (.StackMemFlow .SSTORE, arg) →
         EVM.step (f' + 1) cost (some (.StackMemFlow .SSTORE, arg)) s = .ok s' →
-        WethInvFr s'.accountMap C)
+        StorageSumLeBalance s'.accountMap C)
     (hReachInit : ∀ (cA : RBSet AccountAddress compare)
                     (gbh : BlockHeader) (bs : ProcessedBlocks)
                     (σ σ₀ : AccountMap .EVM) (g : UInt256) (A : Substate)
                     (I : ExecutionEnv .EVM),
         I.codeOwner = C →
-        WethInvFr σ C →
+        StorageSumLeBalance σ C →
         Reachable
           { (default : EVM.State) with
               accountMap := σ
@@ -11065,7 +11069,7 @@ theorem ΞPreservesInvariantAtC_of_Reachable_general_call_slack_dispatch_inv_awa
       have hWFFresh : StateWF freshState.accountMap := hWF
       have hCCFresh : C = freshState.executionEnv.codeOwner := hCO.symm
       have hNCFresh : ∀ a ∈ freshState.createdAccounts, a ≠ C := hNC
-      have hInvFresh : WethInvFr freshState.accountMap C := hInv
+      have hInvFresh : StorageSumLeBalance freshState.accountMap C := hInv
       have hReachFresh : Reachable freshState :=
         hReachInit cA gbh bs σ σ₀ g A I hCO hInv
       have hAtCBddF : ΞInvariantAtCFrame C f := hAtCBdd f (Nat.le_refl _)
@@ -11243,11 +11247,11 @@ This is the framework's domain-monotonicity result for Θ. The witness
 `ΞPreservesAccountAt a` is dischargeable via the Reachable-style
 mutual closure (Phase J).
 
-For Weth's `WethAccountAtC C` discharge: at PC 72 (outbound CALL), the
-caller invokes `EVM.call → Θ`. With `a := C` (the Weth contract
-address), `h_present` follows from the inductive WethReachable
+For a consumer's account-presence-at-C discharge: at an outbound CALL,
+the caller invokes `EVM.call → Θ`. With `a := C` (the analyzed
+contract address), `h_present` follows from the inductive `Reachable`
 hypothesis, and the output's `accountPresentAt σ' C` is exactly what
-the WethAccountAtC step needs. -/
+the per-step account-presence frame needs. -/
 theorem Θ_preserves_account_at_a
     (a : AccountAddress) (hΞ : ΞPreservesAccountAt a)
     (fuel : ℕ) (blobVersionedHashes : List ByteArray)
@@ -11551,9 +11555,9 @@ theorem Λ_preserves_account_at_a
 `accountMap` unchanged), or (b) invokes `Θ`. Both branches preserve
 presence at `a`.
 
-For Weth's PC 72 outbound CALL: with `a := C` (the Weth contract
-address), if `s.accountMap.find? C = some _` then post-call
-`state'.accountMap.find? C = some _`. -/
+For an outbound CALL at the analyzed contract: with `a := C` (the
+analyzed contract address), if `s.accountMap.find? C = some _` then
+post-call `state'.accountMap.find? C = some _`. -/
 theorem EVM_call_preserves_account_at_a
     (a : AccountAddress) (hΞ : ΞPreservesAccountAt a)
     (fuel gasCost : ℕ)
@@ -13778,8 +13782,8 @@ theorem Ξ_preserves_account_at_a_of_Reachable
 /-! ### §J.6.5 — Op-conditional variant
 
 The standard `hReach_step` requires `Reachable s'` for **every** successful
-step. Some demos (e.g. Weth) have a `Reachable` predicate that excludes
-the post-halt-op state (e.g. PC past the bytecode, where decode = none),
+step. Some consumers have a `Reachable` predicate that excludes the
+post-halt-op state (e.g. PC past the bytecode, where decode = none),
 because including it would break `hReach_decodeSome`.
 
 For those demos, we provide an **op-conditional** variant: `hReach_step`
@@ -14128,8 +14132,8 @@ on other contracts (`I.codeOwner ≠ C`), the proof concludes the
 universal `ΞPreservesAccountAt a`.
 
 This unblocks contract-specific `Reachable` predicates that depend on
-the executing contract's bytecode (e.g. `WethReachable` requires
-`I.codeOwner = C` to even type-check the `WethTrace` disjuncts):
+the executing contract's bytecode (e.g. predicates that require
+`I.codeOwner = C` to even type-check the per-PC trace disjuncts):
 the `hReachInit` closure only needs to be discharged for `I.codeOwner = C`
 states, while the non-C case is delegated to `hΞ_other`.
 
@@ -14251,11 +14255,12 @@ Variant of `X_preserves_account_at_a_bdd_op_conditional` whose
 the pre-step state (`accountPresentAt sZ.accountMap a`) and the
 σ-presence at the post-step state (`accountPresentAt sstep.accountMap a`).
 
-This is the form needed when the demo's `Reachable` predicate already
-embeds σ-presence as a conjunct (e.g. Weth's `WethReachable` includes
-`accountPresentAt s.accountMap C`): without the pres-step parameter, the
-demo's step closure would have to re-derive σ-presence on its own —
-which would require a `ΞPreservesAccountAt a` witness and create
+This is the form needed when the consumer's `Reachable` predicate
+already embeds σ-presence as a conjunct (consumer-side `Reachable`
+predicates that include such a conjunct, e.g.
+`accountPresentAt s.accountMap C`): without the pres-step parameter,
+the consumer's step closure would have to re-derive σ-presence on its
+own — which would require a `ΞPreservesAccountAt a` witness and create
 chicken-and-egg with the very theorem we're discharging.
 
 The X-loop already computes `hPresZ` and `hPresStep` internally; this

@@ -2218,9 +2218,9 @@ all other handled opcodes preserve `accountMap` literally
 SELFDESTRUCT is genuinely excluded: in branch A's case 3 / branch B's
 case 3 it can introduce a fresh default account at the beneficiary `r`,
 which has empty storage but didn't exist beforehand — so
-`((find? r).map storage)` jumps from `none` to `some .empty`. Weth's
-bytecode contains no SELFDESTRUCT, so this exclusion is harmless for
-its solvency proof.
+`((find? r).map storage)` jumps from `none` to `some .empty`. Consumer
+contracts whose own bytecode contains no SELFDESTRUCT can dispatch
+this exclusion as a `decide`-level bytecode check.
 
 The two SSTORE / TSTORE helpers `sstore_storage_unchanged_ne` and
 `tstore_storage_unchanged_ne` are declared earlier in this file. -/

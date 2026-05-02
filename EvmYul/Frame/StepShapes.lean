@@ -1298,9 +1298,9 @@ theorem step_SWAP3_shape
 /-! ## Strong shape lemmas (with `accountMap` preservation)
 
 These mirror the corresponding non-strong shape lemmas but additionally
-expose `s'.accountMap = s.accountMap`. Used by Weth's withdraw-cascade
-threading to propagate the storage equation across non-storage opcodes
-(PCs 49..59 between SLOAD and SSTORE). -/
+expose `s'.accountMap = s.accountMap`. Used by per-PC cascade-threading
+walks to propagate a storage-equation fact across non-storage opcodes
+(e.g. between an SLOAD and a downstream SSTORE in the same block). -/
 
 theorem step_DUP1_shape_strong
     (s s' : EVM.State) (f' cost : ℕ) (arg : Option (UInt256 × Nat))
