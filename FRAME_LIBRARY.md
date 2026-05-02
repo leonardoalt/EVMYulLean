@@ -1,24 +1,26 @@
-# Frame Library: Balance-Frame Reasoning for EVMYulLean
+# Frame Library: cross-transaction invariant reasoning for EVMYulLean
 
 This document describes the Frame library additions carried by
 [`leonardoalt/EVMYulLean@main`](https://github.com/leonardoalt/EVMYulLean) on
 top of the `NethermindEth/EVMYulLean` upstream.
-It is intended for downstream provers who want to reason about per-account
-invariants — most importantly **balance monotonicity at a fixed address `C`** —
-across an entire Ethereum transaction (`Υ`), in the presence of arbitrary
-reentrancy, nested CREATEs, and self-destructs.
+It is intended for downstream provers who want to reason about
+**inductive per-account invariants** of a deployed contract — balance
+monotonicity, solvency / storage-sum bounds, account-presence
+preservation, code-identity preservation, or any other state-shape
+property — across an entire Ethereum transaction (`Υ`), in the
+presence of arbitrary reentrancy, nested CREATEs, and self-destructs.
 
-The branch adds **~8,700 lines** of new proof infrastructure in
-`EvmYul/Frame/`, with no new sorries and only three real-world
-axioms (T2 precompile purity, T5 Keccak collision, and a strengthened
-totalETH-bound that lives inside `StateWF`).
+The library is sorry-free and depends on only two real-world axioms
+(T2 precompile purity, T5 Keccak collision resistance, both declared
+at the top of `MutualFrame.lean`).
 
 ## Why these changes
 
-EVMYulLean ships an executable formal model of the EVM but no facilities
-for proving invariants of a *contract* across the whole call graph
-spawned by a transaction. To prove "Register's balance never decreases
-during a Υ run", a downstream caller needs frame-style preservation
+EVMYulLean ships an executable formal model of the EVM but no
+facilities for proving inductive invariants of a *contract* across
+the whole call graph spawned by a transaction. To carry any
+per-account invariant `I(σ, C)` from the pre-state through to the
+post-Υ state, a downstream caller needs frame-style preservation
 results at every layer of the spec:
 
 ```
@@ -34,8 +36,10 @@ results at every layer of the spec:
 ```
 
 Before this branch, only the operational semantics existed. The frame
-library closes balance-monotonicity at every layer and exposes it as a
-small set of theorems with crisp preconditions.
+library closes preservation at every layer — for both the
+balance-monotonicity shape and the more general state-shape variants
+(`accountPresentAt`, `WethInvFr`, …) — and exposes each as a small
+set of theorems with crisp preconditions.
 
 ## What was added
 
@@ -95,16 +99,21 @@ DELEGATECALL/STATICCALL).
 ### `EvmYul/Frame/UpsilonFrame.lean` (918 LoC)
 The transaction-level frame `Υ`:
 
-* `Υ_balanceOf_ge` — *the consumer-facing entry point*. Given:
+* `Υ_balanceOf_ge` — *the consumer-facing entry point for
+  balance-monotonicity invariants*. Given:
   - `StateWF σ`,
   - `b₀ ≤ balanceOf σ C`,
-  - `C ≠ S_T` (Register isn't the tx sender),
-  - `C ≠ H.beneficiary` (Register isn't the miner),
+  - `C ≠ S_T` (the contract isn't the tx sender),
+  - `C ≠ H.beneficiary` (the contract isn't the miner),
   - `ΞPreservesAtC C` (the bytecode witness),
   - `ΥTailInvariant σ … C` (post-dispatch SD-set / dead-filter excludes C),
   - `ΥBodyFactors σ … C` (Υ's body factors as Θ/Λ-dispatch composed with the tail),
 
   concludes `b₀ ≤ balanceOf σ' C` for the post-Υ state.
+* `Υ_invariant_preserved` — the consumer-facing entry point for
+  general per-account inductive invariants (used by the WETH
+  solvency proof). Same shape as `Υ_balanceOf_ge` but parametric in
+  the invariant.
 * `Υ_output_balance_ge` — uncluttered version returning `≥ balanceOf σ C`.
 * `Υ_tail_balanceOf_ge` — pure post-dispatch tail (gas refund + SD sweep
   + dead-account sweep + tstorage wipe) preserves balance at C.
@@ -113,19 +122,19 @@ The transaction-level frame `Υ`:
   `S_T`, value-fundability, recipient no-wrap). **No longer a global
   axiom** — consumers thread it as a hypothesis.
 
-### `EvmYul/Frame/MutualFrame.lean` (5,117 LoC, the bulk of the work)
+### `EvmYul/Frame/MutualFrame.lean` (the bulk of the work)
 
 This is the joint mutual-recursion closure of `Θ`, `Λ`, and `Ξ`. The EVM
 spec is mutually recursive (Θ calls Ξ, Ξ contains CALL which calls Θ
 again, Λ contains an inner Ξ run for the constructor body). To prove
-balance preservation at one of these layers, you need the result at
-*all* of them simultaneously, with a unified fuel-induction.
+preservation at one of these layers, you need the result at *all* of
+them simultaneously, with a unified fuel-induction.
 
 Highlights:
 
 * **`ΞPreservesAtC C`** — universal-fuel witness that Ξ at codeOwner = C
   preserves balance at C. This is what a smart-contract author proves
-  for their bytecode.
+  for their bytecode (in the balance-monotonicity shape).
 * **`ΞFrameAtC C maxFuel`** — fuel-bounded variant of *the C ≠ codeOwner
   case*. This is the IH form that the strong-fuel induction produces.
 * **`ΞAtCFrame C maxFuel`** — fuel-bounded variant of `ΞPreservesAtC C`,
@@ -144,8 +153,8 @@ Highlights:
 * **The "at_C / v=0" chain**: `step_CALL_arm_at_C_v0`,
   `step_bundled_invariant_at_C_v0`, `X_inv_at_C_v0`, `X_inv_at_C_v0_holds` —
   step-bundle and X-loop invariants for the case `codeOwner = C` and
-  the running CALL has `value = 0` at stack position 2. This is the
-  shape needed for any contract whose own bytecode emits only zero-value
+  the running CALL has `value = 0` at stack position 2. The shape
+  needed for any contract whose own bytecode emits only zero-value
   CALLs out (Register, simple read-only routers, etc.).
 * **`ΞPreservesAtC_of_Reachable`** — the parameterised entry point
   smart-contract authors use. Given a `Reachable : EVM.State → Prop`
@@ -156,7 +165,7 @@ Highlights:
 
 ## Other touches in the EVM model
 
-### `EvmYul/EVM/Semantics.lean` (52 LoC delta)
+### `EvmYul/EVM/Semantics.lean`
 * CREATE/CREATE2 failure semantics fix: when an inner Λ fails, the
   parent's `accountMap` was being wiped to `∅`. Fixed to preserve the
   pre-CREATE state. (Yellow Paper conformance.)
@@ -164,38 +173,54 @@ Highlights:
   match into a linear if-cascade (`applyPrecompile`) to bypass a
   Lean-kernel deep-recursion limit.
 
-### `EvmYul/Semantics.lean` (42 LoC delta)
+### `EvmYul/Semantics.lean`
 * `EvmYul.step` dispatch helpers (`dispatchUnary`, `dispatchBinary`,
   `dispatchTernary`, `dispatchQuartiary`, `dispatchExecutionEnvOp`,
   `dispatchUnaryStateOp`, `dispatchTernaryCopyOp`, etc.) un-privated
   and changed from `def` to `abbrev`, so frame lemmas can `unfold`
   them at proof-time.
 
-## How this enables `evm-smith` proofs
+## How the framework supports a contract proof
 
-The Register balance-monotonicity proof in
-`evm-smith/EvmSmith/Demos/Register/` consumes the framework via:
+The framework is layered so a downstream consumer fills in the
+contract-specific pieces and reuses the rest:
 
-1. **`Υ_balanceOf_ge`** — the top-level `register_balance_mono`
-   theorem invokes this with five preconditions (`StateWF`, `b₀ ≤ …`,
-   `C ≠ S_T`, `C ≠ H.beneficiary`) plus three witnesses
-   (`ΞPreservesAtC C`, `ΥTailInvariant`, `ΥBodyFactors`).
-2. **`ΞPreservesAtC_of_Reachable`** — discharges the `ΞPreservesAtC C`
-   witness from a contract-specific `RegisterTrace` predicate plus six
-   bytecode-walk closure lemmas.
-3. **`Θ_balanceOf_ge` / `Λ_balanceOf_ge`** — used inside the body
-   factorisation helpers to bound `balanceOf σ_P C` at the post-debit
-   state σ₀.
-4. **`StateWF`** + **`tx_validity` (now a hypothesis, not an axiom)** —
-   discharge the no-wrap and funds-strict preconditions of Θ/Λ at σ₀.
+1. **Pick a top-level theorem** matching the invariant shape:
+   - `Υ_balanceOf_ge` — for monotone balance bounds (`b₀ ≤ balanceOf σ' C`).
+   - `Υ_invariant_preserved` — for general inductive invariants
+     (`I σ' C` from `I σ C`, used by relational shapes like
+     `storageSum ≤ balanceOf`).
+2. **Discharge the bytecode witness** via
+   `ΞPreservesAtC_of_Reachable` (or its `_inv_aware` slack-dispatch
+   sibling for invariants that depend on the running σ at the CALL
+   site). The consumer supplies a `Reachable` predicate enumerating
+   their contract's reachable states and the six closure obligations.
+3. **Discharge the boundary hypotheses** (`*SDExclusion`,
+   `*DeadAtσP`) as caller hypotheses on the top-level theorem; the
+   framework's open work below would internalise these but is paused.
+4. **Discharge `StateWF` and `TxValid`** as hypotheses on the
+   top-level theorem (no longer axioms).
+
+Two contracts have been carried through end-to-end against this
+framework:
+
+* **Register** (`evm-smith/EvmSmith/Demos/Register/`) — balance
+  monotonicity (`balanceOf σ' C ≥ balanceOf σ C`) under arbitrary
+  reentrancy. Uses the at-C / v=0 chain.
+* **WETH** (`evm-smith/EvmSmith/Demos/Weth/`) — solvency
+  (`Σ storage[sender] ≤ balanceOf σ' C`) under arbitrary reentrancy
+  and a non-zero outbound CALL. Uses the `_inv_aware` slack-dispatch
+  variant (see "Account-presence preservation and universal Ξ"
+  below).
 
 Because every layer is parameterised by `(C : AccountAddress)` and a
-uniform `ΞPreservesAtC` witness, the same framework supports any
-single-contract balance invariant a downstream prover wants to state.
+uniform `ΞPreservesAtC` / `ΞPreservesInvariantAtC` witness, the same
+framework supports any single-contract invariant a downstream prover
+wants to state.
 
 ## Axiom audit
 
-After this branch, EVMYulLean contains exactly **two** axioms:
+The framework contains exactly **two** axioms:
 
 * `precompile_preserves_accountMap` — T2: precompiles do not modify the
   account map (purity of cryptographic primitives at the contract-state
@@ -209,13 +234,13 @@ declared at the top of `MutualFrame.lean` with full motivation.
 The previously-extant `tx_validity` global axiom was **removed**;
 it is now an explicit hypothesis on consumer theorems.
 
-## Partial Phase A: substate / SD-set tracking (paused)
+## Open work: in-Lean discharge of `*SDExclusion` / `*DeadAtσP`
 
 A follow-up effort to derive the consumer-side `*SDExclusion` and
 `*DeadAtσP` boundary hypotheses inside Lean (eliminating them from
-the API surface of consumer theorems like `register_balance_mono`)
-landed leaf infrastructure but **paused** before the full closure
-rewrite. What's available today:
+the API surface of consumer theorems like `register_balance_mono`
+and `weth_solvency_invariant`) landed leaf infrastructure but stalled
+before the full closure rewrite. What's available today:
 
 * `SubstateSDExclude A C : Prop` — substate-level SD-set exclusion.
 * `ΞPreservesAtCStrong C` — 4-conjunct sibling of `ΞPreservesAtC`
@@ -256,10 +281,7 @@ as caller-supplied hypotheses (not axioms).
 The current framework supports **per-account state-shape invariants**
 (balance lower bounds, relative bounds like `Σ storage ≤ balance`,
 account-presence preservation) for contracts whose `Reachable`
-predicate enumerates a finite set of PCs. Two patterns are exercised
-end-to-end: Register's balance monotonicity (`value = 0` outbound
-CALL) and WETH's solvency (non-zero outbound CALL via the
-`_inv_aware` slack-dispatch variant). Outside this envelope:
+predicate enumerates a finite set of PCs. Outside this envelope:
 
 * **Contracts with conditional control flow** (JUMP, JUMPI on
   dynamic conditions over storage/calldata) can't have a finite
@@ -285,7 +307,7 @@ CALL) and WETH's solvency (non-zero outbound CALL via the
 
 ---
 
-## Phase B: Account-Presence Preservation and Universal Ξ
+## Account-presence preservation and universal Ξ
 
 A second wave of framework additions, motivated by the WETH solvency
 proof, lifts the framework from "balance frame" to a more general
@@ -300,9 +322,8 @@ nested CALL / CREATE recursion). It also closes a substantial chunk of
 the structural-fact assumptions previously exposed at the consumer
 level.
 
-Total added: **~5,000 LoC** of new framework infrastructure across
-`MutualFrame.lean`, `StepShapes.lean`, `PcWalk.lean`, `StorageSum.lean`,
-and `UpsilonFrame.lean`.
+Lives across `MutualFrame.lean`, `StepShapes.lean`, `PcWalk.lean`,
+`StorageSum.lean`, and `UpsilonFrame.lean`.
 
 ### §I — Θ-side preservation
 
@@ -360,7 +381,7 @@ do-block (which has `MonadLift Option (Except _)` complications and a
 | `EVM_step_CREATE2_preserves_present` | Same for CREATE2. |
 | `EVM_step_preserves_present` | Universal EVM.step (no no-create constraint). |
 
-#### §J.5c–J.6: universal closures
+#### §J.5c–§J.6: universal closures
 
 | Theorem | What it says |
 |---|---|
@@ -451,10 +472,10 @@ C through credit) with balance-delta arithmetic
 Θ-pre-credit fact for any consumer that needs it (e.g. WETH's
 `deposit` slack).
 
-### How Phase B enables WETH's solvency proof
+### How these additions enable WETH's solvency proof
 
 The WETH solvency proof in `evm-smith/EvmSmith/Demos/Weth/` discharges
-*every bytecode-derivable assumption* using Phase B:
+*every bytecode-derivable assumption* using the additions above:
 
 * `weth_account_at_C : WethAccountAtC C` — projected from the new
   `accountPresentAt s.accountMap C` conjunct in `WethReachable`,
@@ -470,6 +491,6 @@ bytecode behavior.
 
 ### Axioms unchanged
 
-Phase B introduces zero new axioms. The framework still has exactly
-the two axioms documented in the audit above (`precompile_preserves_accountMap`,
-`lambda_derived_address_ne_C`).
+These additions introduce zero new axioms. The framework still has
+exactly the two axioms documented in the audit above
+(`precompile_preserves_accountMap`, `lambda_derived_address_ne_C`).
